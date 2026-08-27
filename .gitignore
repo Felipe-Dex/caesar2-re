@@ -1,0 +1,29 @@
+# Decoded game graphics (copyrighted Caesar II assets — do not publish)
+*.png
+*.bmp
+*.gif
+
+# String dumps extracted from PS.EXE
+notes/ps_strings_all.txt
+notes/*.bin
+
+# Local game install / copies of original files
+*.PL8
+*.256
+*.RAW
+*.SAV
+*.EXE
+*.SMK
+*.XMI
+*.WAV
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
