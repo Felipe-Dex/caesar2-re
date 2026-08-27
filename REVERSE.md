@@ -1,6 +1,6 @@
 # Caesar II — Fase 1 (exploração)
 
-**Última atualização:** 2026-08-25 (rev. 2 — `PS.EXE` + inventário real via PowerShell)  
+**Última atualização:** 2026-08-27 (rev. 3 — decoder ISO PL8 fechado: types 0–4, `CITYFIXT`/`BUILD1A`)  
 **Fonte:** `C:\Users\Felip\OneDrive\Games\Caesar2` (árvore plana; CD/retail DOS)  
 **Versão:** `README.TXT` = **1.1A** (27 Feb 1996); string em `C2.ENG` = **“Caesar II - Version 1.1”**; `PS.EXE` datado **1995-10-04**.
 
@@ -60,7 +60,9 @@ Lista embutida de `a01.raw`…`a30.raw`, `b01.raw`…`b30.raw`, `c01.raw`…`c44
 
 ## 2. `.PL8` + `.256` — formato gráfico principal (confirmado nestes bins)
 
-Paleta `.256`: **exatamente 768 bytes** = 256 × RGB (3 bytes, sem alpha). Ex. `AHOUSE.256` começa `00 00 00 00 00 2A …` (VGA-ish).
+Paleta `.256`: **exatamente 768 bytes** = 256 × RGB (3 bytes, sem alpha). Em todos os samples desta install, **cada canal está em 0–63** (DAC VGA 6-bit). Expansão para 8-bit: `(c << 2) | (c >> 4)`. Índice 0 → alpha 0 no PNG.
+
+Ex. `AHOUSE.256` começa `00 00 00 00 00 2A …`. `HOUSES1.PL8` **não** tem `.256` próprio; `CITYFIXT.256` é a paleta certa para tiles de cidade (`HOUSES1`, `BUILD1A`, `CITYFIXT`).
 
 ### Header PL8 (medido, little-endian)
 
@@ -106,7 +108,32 @@ Fórmula que bate em todos os samples:
 
 **31** ficheiros têm **307224** → fullscreen 640×480 + header 24 B (tutoriais `TUT_*`, `BACKGRND`, `RAT_FRON`, …).
 
-Pixels a seguir ao header, nestes samples: **1 byte = índice de paleta**, `width×height` bytes (sem RLE). Flags `0x0002` ↔ bitmap simples. RLE/ISO da doc pl8image ainda **não** foram exercitados nestes headers (provável nos packs de batalha `RO2*`, `GM2*`, etc.).
+Pixels a seguir ao header, **tipo 0** (bitmap): **1 byte = índice de paleta**, `width×height` bytes (sem RLE). Flags `0x0002` ↔ bitmap simples. RLE (bit 0 de flags) **ainda não** foi exercitado (provável em packs de batalha `RO2*`, `GM2*`, etc.).
+
+### ISO (tile_type 1–4) — exercitado e fechado nestes bins
+
+Diamante 58×30 = **900 bytes** no disco (não 1740 = 58×30 unpacked). Decoder: `tools/decode_pl8.py`. Algoritmo base da doc [pl8image](https://pl8image.readthedocs.io/en/latest/.pl8.html); tamanhos de campo da doc estavam ligeiramente errados — os records de **16 bytes** medidos aqui são a fonte.
+
+Tamanho packed (58×30):
+
+| tile_type | Payload no disco | Extra rows no canvas |
+|---|---|---|
+| **1** | sempre **900** (só diamante), **mesmo se `extra_rows` > 0** | canvas = 30; `extra_rows` é metadata, não payload |
+| **2** | 900 + extra × **58** | canvas = 30 + extra |
+| **3** / **4** | 900 + extra × **30** | canvas = 30 + extra (faixa esquerda / direita) |
+
+`sprite[0].data_offset == 8 + 16 × n_sprites` — bateu em todos os samples. Cadeia `span == packed_bytes` usada como prova: cada sprite ocupa exatamente o intervalo até o offset do seguinte (último até EOF, ignorando slack de zeros).
+
+| Arquivo | sprites | types | chain | Paleta | Folha local (gitignored) |
+|---|---:|---|---|---|---|
+| `AHOUSE.PL8` | 1 | 0 | 1/1 (bitmap 182×132) | `AHOUSE.256` | casa sobre relva |
+| `HOUSES1.PL8` | 106 | 1–4 | **106/106** | `CITYFIXT.256` | tendas → insulae, muros, reservatórios |
+| `BUILD1A.PL8` | 123 | 1–4 (59/16/24/24) | **123/123** | `CITYFIXT.256` | telhados, praças, muros, props |
+| `CITYFIXT.PL8` | 140 | 1×133 + 0×7 | **140/140** | `CITYFIXT.256` | relva, árvores, rio, aquedutos; 7 bitmaps 2×2 / 2×3 |
+
+`CITYFIXT` foi o caso que forçou a regra do tipo 1: 133 sprites tipo 1 com `extra_rows` 4–30 mas span **900**. Tratar extra como tipo 2 (`900+extra×58`) quebrava a cadeia.
+
+Convenção de nomes (batalha) inalterada abaixo.
 
 ### Convenção de nomes (batalha)
 
@@ -234,15 +261,17 @@ Miles AIL **3.02** (18-Jan-95) em `DIG.INI` / `MDI.INI` / `AILDRVR.LST`.
 
 ## 7. Próximos passos (repriorizados)
 
-1. **Decoder PL8 mínimo** (só leitura, no repo de notas): header + sprite 0 de `AHOUSE.PL8` + `AHOUSE.256` → PNG. Se 182×132 fizer sentido visual, o layout está fechado. Depois `HOUSES1.PL8` (58×30 × 106).
-2. **Diff de saves:** `FELIPE01.SAV` vs `FELIPE02.SAV` (já existem, hashes diferentes, mesmo tamanho). Mapear u16/u32 no header (`32`/`36` vs `21`/`12` — hipótese ano/mês ou mapa).
-3. **`C2MODEL.DAT`:** dump dos 1090 int32 e cruzar com custos do manual (`C2MANUAL.DOC` está na pasta).
-4. **`C2.ENG`:** extrair a tabela de strings completa para um índice de UI (não precisa do EXE).
-5. **RAW:** tentar RLE simples (runs de `7F`) em `A04.RAW` (26 317 B) e ver se descomprime para um retângulo 8-bit. `A01.RAW` como 448×448 + paleta de um `.256` de UI.
-6. **Ghidra em `PS.EXE` (LE/Watcom)** só depois de 1–5: procurar o loader que lê u16 width/height no offset 8 do PL8.
+1. **`C2.ENG`:** extrair a tabela de strings completa (magic `Textfile` + offsets u32) para um índice de UI.
+2. **`C2MODEL.DAT`:** dump dos 1090 int32 e cruzar com custos do manual (`C2MANUAL.DOC` está na pasta).
+3. **Diff de saves:** `FELIPE01.SAV` vs `FELIPE02.SAV` (mesmo tamanho, MD5 distintos). Mapear u16/u32 no header (`32`/`36` vs `21`/`12` — hipótese ano/mês ou mapa).
+4. **RAW:** tentar RLE simples (runs de `7F`) em `A04.RAW` (26 317 B). `A01.RAW` como 448×448 + paleta de um `.256` de UI.
+5. **RLE de PL8** (flags bit 0) se aparecer em `RO2*` / `GM2*` — ainda não exercitado.
+6. **Ghidra em `PS.EXE` (LE/Watcom)** só depois de 1–5: procurar o loader PL8.
 7. CD original ainda útil para o `RESOURCE.CFG` de 283 B e para RAW A10+ se existirem.
 
 Não priorizar Smacker/XMIDI (já há libs). Não priorizar crack/CD check.
+
+Decoder PL8 bitmap + ISO 1–4: **feito** (`tools/decode_pl8.py`). Folhas PNG ficam só na máquina local.
 
 ---
 
@@ -261,6 +290,11 @@ Não priorizar Smacker/XMIDI (já há libs). Não priorizar crack/CD check.
 | E9 | `INTRO.SMK` = `SMK2` 640×480; XMI = `FORM`/`XDIR` | fato |
 | E10 | EXE lista RAW a01–a30 / b01–b30 / c01–c44; disco tem menos | fato |
 | E11 | Índice Cursor omitia EXE/PL8/SMK (OneDrive) | fato (metodologia) |
+| E12 | Paleta `.256`: bytes 0–63; expand VGA 6-bit → 8-bit | fato |
+| E13 | ISO 58×30 diamond = 900 B; type 2 extra×58; type 3/4 extra×30 | fato |
+| E14 | Type 1: `extra_rows` no record, payload continua 900 (`CITYFIXT` 133/133) | fato |
+| E15 | Cadeia span=packed: `HOUSES1` 106/106, `BUILD1A` 123/123, `CITYFIXT` 140/140 | fato |
+| E16 | Folhas visuais: casas/água (`HOUSES1`), rio/aqueduto (`CITYFIXT`), praças/muros (`BUILD1A`) | fato |
 | H1 | Maioria dos RAW comprimida; A01 = 448×448 raw | hipótese |
 | H2 | `C2MODEL.DAT` = tabelas de economia | hipótese |
 | H3 | `REGIONS.DAT` = mapa de províncias | hipótese |

@@ -15,8 +15,8 @@ AHOUSE.PL8 (1 sprite, 182x132, file size 24048):
         4   u32  data_offset           # from start of file
         8   u16  x                     # draw offset; unused for decode
         10  u16  y
-        12  u8   tile_type             # 0 = packed bitmap (this script)
-        13  u8   extra_rows            # ISO extra; unused when type=0
+        12  u8   tile_type             # 0 bitmap; 1-4 isometric
+        13  u8   extra_rows            # ISO extra; type 1 stores it but no extra payload
         14  u16  unknown_14
 
     data_offset of sprite 0 == 8 + 16 * n_sprites   (measured)
@@ -45,7 +45,7 @@ PALETTE_SIZE = 256 * 3
 FLAG_RLE = 0x0001
 
 TILE_BITMAP = 0
-# 1-4 are isometric encodings in pl8image docs; not implemented here.
+# 1-4: isometric diamond + optional extra rows (types 2/3/4 only on disk).
 
 
 @dataclass(frozen=True)
@@ -67,7 +67,8 @@ class SpriteRecord:
 
     @property
     def canvas_height(self) -> int:
-        if self.tile_type in (1, 2, 3, 4):
+        # Type 1 stores extra_rows but CITYFIXT shows no extra payload (span=900).
+        if self.tile_type in (2, 3, 4):
             return self.height + self.extra_rows
         return self.height
 
@@ -218,7 +219,8 @@ def iso_diamond_bytes(width: int, height: int) -> int:
 
 
 def extra_row_bytes(width: int, tile_type: int, extra_rows: int) -> int:
-    if extra_rows <= 0:
+    # Type 1 is diamond-only even when extra_rows > 0 (measured on CITYFIXT.PL8).
+    if extra_rows <= 0 or tile_type in (TILE_BITMAP, 1):
         return 0
     half_w = width // 2
     if tile_type == 3:
@@ -233,9 +235,10 @@ def extra_row_bytes(width: int, tile_type: int, extra_rows: int) -> int:
 def unpack_iso(payload: bytes, spr: SpriteRecord) -> tuple[bytes, int, int]:
     """Unpack ISO encodings 1-4 into a row-major buffer (index 0 = empty).
 
-    Algorithm from pl8image docs, checked against HOUSES1.PL8 payload sizes:
-    type 1 extra=0 -> 900 bytes for 58x30; type 2 extra N -> 900+N*58;
-    type 3/4 extra N -> 900+N*30.
+    Payload sizes measured on HOUSES1.PL8 and CITYFIXT.PL8 (58x30):
+      type 1 (any extra_rows) -> 900  (diamond only; extra is not on disk)
+      type 2 extra N          -> 900 + N*58
+      type 3/4 extra N        -> 900 + N*30
     """
     w, h = spr.width, spr.height
     extra = spr.extra_rows
@@ -256,10 +259,12 @@ def unpack_iso(payload: bytes, spr: SpriteRecord) -> tuple[bytes, int, int]:
     half_h = h // 2
     half_w = w // 2
 
+    shift = extra if spr.tile_type in (2, 3, 4) else 0
+
     for y in range(half_h):
         row_start = (half_h - 1 - y) * 2
         row_stop = row_start + (y * 4) + 2
-        dest_y = y + extra
+        dest_y = y + shift
         for x in range(row_start, row_stop):
             out[dest_y * w + x] = get()
 
@@ -267,24 +272,25 @@ def unpack_iso(payload: bytes, spr: SpriteRecord) -> tuple[bytes, int, int]:
         k = h - y - 1
         row_start = (half_h - 1 - k) * 2
         row_stop = row_start + (k * 4) + 2
-        dest_y = y + extra
+        dest_y = y + shift
         for x in range(row_start, row_stop):
             out[dest_y * w + x] = get()
 
-    for y_ in range(extra, 0, -1):
-        right = half_w + 1 if spr.tile_type == 3 else w
-        left = half_w - 1 if spr.tile_type == 4 else 0
-        for x in range(left, right):
-            if x <= half_w:
-                y = y_ + (half_h - 1) - (x // 2)
-            else:
-                y = y_ + (x // 2) - (half_h - 1)
-            if not (0 <= y < canvas_h and 0 <= x < w):
-                raise ValueError(
-                    f"sprite[{spr.index}] ISO extra write out of bounds x={x} y={y} "
-                    f"canvas={w}x{canvas_h}"
-                )
-            out[y * w + x] = get()
+    if spr.tile_type in (2, 3, 4):
+        for y_ in range(extra, 0, -1):
+            right = half_w + 1 if spr.tile_type == 3 else w
+            left = half_w - 1 if spr.tile_type == 4 else 0
+            for x in range(left, right):
+                if x <= half_w:
+                    y = y_ + (half_h - 1) - (x // 2)
+                else:
+                    y = y_ + (x // 2) - (half_h - 1)
+                if not (0 <= y < canvas_h and 0 <= x < w):
+                    raise ValueError(
+                        f"sprite[{spr.index}] ISO extra write out of bounds "
+                        f"x={x} y={y} canvas={w}x{canvas_h}"
+                    )
+                out[y * w + x] = get()
 
     if pos != len(payload):
         raise ValueError(
