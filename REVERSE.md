@@ -1,6 +1,6 @@
 # Caesar II — Fase 1 (exploração)
 
-**Última atualização:** 2026-08-27 (rev. 3 — decoder ISO PL8 fechado: types 0–4, `CITYFIXT`/`BUILD1A`)  
+**Última atualização:** 2026-08-27 (rev. 4 — `C2.ENG` / `C2MODEL.DAT` / header `.SAV`)  
 **Fonte:** `C:\Users\Felip\OneDrive\Games\Caesar2` (árvore plana; CD/retail DOS)  
 **Versão:** `README.TXT` = **1.1A** (27 Feb 1996); string em `C2.ENG` = **“Caesar II - Version 1.1”**; `PS.EXE` datado **1995-10-04**.
 
@@ -167,22 +167,40 @@ O EXE referencia até `a30` / `b30` / `c44`; no disco: A09, B20, C43. Não trata
 
 ## 4. Dados, texto, saves
 
-### `C2.ENG` (31 876 B) — strings UI
+### `C2.ENG` (31 876 B) — strings UI (formato fechado)
 
 ```
-0000  "Textfile" + 8 zeros
-0010  tabela de u32 offsets (LE) para C-strings
+0000  "Textfile"          # 8 bytes, sem NUL
+0008  u32 0               # não é offset
+000C  u32 offsets[n]      # absolutos, LE; n = (offsets[0] - 12) / 4
+          → pool de C-strings Latin-1 (NUL)
 ```
 
-Amostras (formato, não dump completo): `Options`, `Speed`, `Help`, `Prima Cohors`, `Latium`, `Romans`, `Citizen`, `Caesar II - Version 1.1`, `Reservoir`.
+Medido: **n = 146**, **142 offsets únicos** (4 aliases). Pool em 596…31784, slack 92 B. Offsets **não** são estritamente crescentes — o mesmo pointer pode servir vários IDs (ex. `"To"` nos índices 115–145, fragmentos de frase).
 
-`HELP.ENG` (455 194 B) — help longo; mesmo family **hipótese**.
+Extractor: `tools/extract_eng.py`. Dump completo fica em `notes/c2_eng_strings.txt` (gitignored — texto original do jogo).
+
+Índice 0–23 é o vocabulário de menu + query (amostra, não o ficheiro): `File`, `Options`, `Speed`, `Help`, `Prima Cohors`, `Latium`, `Romans`, `Citizen`, `Caesar II - Version 1.1`, `Reservoir`, `Wall`, `Baths`, `Market`, `Wheat`, `Gems`, `Clay`, `Aventine`, `Grammaticus`, `Shrine`, `Theater`, `Tent`. Calendário: `January`, `BC`, `Week 1`. Dificuldade: `Novice`. Não há neste ficheiro os nomes `Decurion` / `Consul` / `Janiculan` / `Fountain` / `Impossible` — ou estão no EXE / `HELP.ENG`, ou são compostos.
+
+`HELP.ENG` (455 194 B): magic **`Helpfile`**, 58 zeros, primeiro payload em offset 66 (`u32 116008`, depois ASCII `null.p…`). **Não** é a mesma tabela de offsets. Formato ainda opaco.
 
 ### `C2MODEL.DAT` (4360 B = **1090 × int32 LE**)
 
-Início: `20, 15, 10, 5, 2, 20000, 15000, 12000, 7000, 5000, 2000, 500, 250, 150, 100, 10, 16, 24, 35, 8`, …
+Sem magic. Dump: `tools/dump_c2model.py`. Cruzado com o FAQ Falanx / caesar2.com (números de v1.0; esta install é 1.1A).
 
-**Hipótese:** tabelas numéricas de regras (custos, população, velocidade). Não é gráfico. Candidato nº 1 a “economia/edifícios” fora do EXE.
+| Índices | Valores | Identificação |
+|---|---|---|
+| 0–4 | 20, 15, 10, 5, 2 | 5 slots (uma por dificuldade?). **Opaco** |
+| **5–9** | **20000, 15000, 12000, 7000, 5000** | **Fundos iniciais** Novice→Impossible |
+| 10–14 | 2000, 500, 250, 150, 100 | Degraus de dinheiro / custos de província. Hipótese |
+| **115–117** | **80, 200, 600** | **Shrine, Temple, Basilica** |
+| **118–123** | **300, 500, 700, 1000, 1500, 2500** | **Theater…Circus Maximus** |
+| 124–157 | 0, 5, 10, … 160 | Rampa ×5 — o “hit” de ranks em 128 é **coincidência** |
+| **196–205** | **3, 20, 50, 500, 100, 250, 1000, 150, 400, 500** | Gardens, Road, Wall, Fort, Work camp, Farm, Port, Warehouse, Shipyard, Trading post |
+| **215–246** | occupancy 32 graus | **2,4,6,8,10,12,6,7,…300,500** = FAQ de habitações **exato** |
+| 790–989 | blocos de 20 ints, `99` = sentinela | Hipótese **forte:** 5 dificuldades × ~20 slots de rank (individual + average). Normal individual `20…65` em 830; average `30…74` em 930. 1.1A tem slots extra além dos 10 ranks do FAQ v1.0 |
+
+Custos de cidade **não** estão na ordem do FAQ (water→sanitation→…); estão agrupados por família (worship, entertainment, province). `H2` sobe de hipótese pura para **parcialmente confirmado**.
 
 ### `REGIONS.DAT` (158 400 B)
 
@@ -202,13 +220,21 @@ Começa zeros. String no EXE junto de `forumbit.pl8`. **Hipótese:** geometria/o
 
 ### Saves `.SAV` — tamanho **fixo 225 745**
 
-| Ficheiro | MD5 (não são cópias) | Header (primeiros 16 B) |
-|---|---|---|
-| `FELIPE01.SAV` | 9E5548… | `00 04 00 00  00 00 00 00  32 00 00 00  36 00 00 00` |
-| `FELIPE02.SAV` | 67E93A… | (não dumpado neste passo) |
-| `LASTYEAR.SAV` | 1F39CE… | `00 00 01 01  00 00 00 00  21 00 00 00  12 00 00 00` |
+Sem magic ASCII. Header como u32 LE:
 
-EXE pede `caesar2.sav` e `*.sav` / `lastyear.sav`. Sem magic ASCII. Diff de dois saves com uma ação (construir 1 casa) é o próximo passo de mapa de campos.
+| Ficheiro | u32@0 | u32@8 | u32@12 | Notas |
+|---|---:|---:|---:|---|
+| `FELIPE01.SAV` | **1024** | 50 | 54 | |
+| `FELIPE02.SAV` | **1024** | 29 | 56 | |
+| `LASTYEAR.SAV` | 16842752 (`00 00 01 01`) | 33 | 18 | snapshot de virada de ano |
+
+`u32@8` **hipótese:** ano de calendário (o `C2.ENG` tem `January` / `BC` / `Week 1`). `u32@12` continua opaco (não é mês 1–12).
+
+`tools/diff_sav.py` em FELIPE01 vs FELIPE02: **57 957 bytes (25.7%)** diferentes, 35 473 ranges. São **duas campanhas distintas**, não um par controlado (construir 1 casa). Não dá para mapear o struct de tile assim.
+
+Densidade: os três saves ficam densos a partir de ~176 128. Folga até EOF = 49 617 B ≈ **40×40×31 + 17**. **Hipótese:** mapa de cidade 40×40 com ~31 bytes/tile no fim do save. Região ~4 096–48 000 está vazia em `LASTYEAR` e preenchida nos FELIPE — província / batalha / walkers.
+
+Próximo passo de mapa: **um** save, uma ação, gravar outro (`F5`).
 
 ### `CAESAR2.INF` (64 B, 2011)
 
@@ -261,17 +287,16 @@ Miles AIL **3.02** (18-Jan-95) em `DIG.INI` / `MDI.INI` / `AILDRVR.LST`.
 
 ## 7. Próximos passos (repriorizados)
 
-1. **`C2.ENG`:** extrair a tabela de strings completa (magic `Textfile` + offsets u32) para um índice de UI.
-2. **`C2MODEL.DAT`:** dump dos 1090 int32 e cruzar com custos do manual (`C2MANUAL.DOC` está na pasta).
-3. **Diff de saves:** `FELIPE01.SAV` vs `FELIPE02.SAV` (mesmo tamanho, MD5 distintos). Mapear u16/u32 no header (`32`/`36` vs `21`/`12` — hipótese ano/mês ou mapa).
-4. **RAW:** tentar RLE simples (runs de `7F`) em `A04.RAW` (26 317 B). `A01.RAW` como 448×448 + paleta de um `.256` de UI.
-5. **RLE de PL8** (flags bit 0) se aparecer em `RO2*` / `GM2*` — ainda não exercitado.
-6. **Ghidra em `PS.EXE` (LE/Watcom)** só depois de 1–5: procurar o loader PL8.
-7. CD original ainda útil para o `RESOURCE.CFG` de 283 B e para RAW A10+ se existirem.
+1. **Par controlado de `.SAV`:** carregar um save, construir **uma** casa (ou um tile de estrada), gravar outro. Diff com `tools/diff_sav.py`. Confirmar ou matar a hipótese 40×40×31 @ ~176128.
+2. **RAW:** tentar RLE simples (runs de `7F`) em `A04.RAW` (26 317 B). `A01.RAW` como 448×448 + paleta de um `.256` de UI.
+3. **RLE de PL8** (flags bit 0) se aparecer em `RO2*` / `GM2*` — ainda não exercitado.
+4. **`HELP.ENG`:** o magic `Helpfile` + offset 116008 não é a tabela `Textfile`; parsear só se precisarmos do texto de ajuda.
+5. **Ghidra em `PS.EXE` (LE/Watcom)** depois de 1–4: loader PL8 e reader de `C2MODEL.DAT`.
+6. CD original ainda útil para o `RESOURCE.CFG` de 283 B e para RAW A10+ se existirem.
 
 Não priorizar Smacker/XMIDI (já há libs). Não priorizar crack/CD check.
 
-Decoder PL8 bitmap + ISO 1–4: **feito** (`tools/decode_pl8.py`). Folhas PNG ficam só na máquina local.
+Feito nesta fase: decoder PL8 0–4; `C2.ENG` (146 strings); `C2MODEL.DAT` cruzado com FAQ; header `.SAV`. Dumps de texto/números ficam em `notes/` (gitignored).
 
 ---
 
@@ -295,11 +320,19 @@ Decoder PL8 bitmap + ISO 1–4: **feito** (`tools/decode_pl8.py`). Folhas PNG fi
 | E14 | Type 1: `extra_rows` no record, payload continua 900 (`CITYFIXT` 133/133) | fato |
 | E15 | Cadeia span=packed: `HOUSES1` 106/106, `BUILD1A` 123/123, `CITYFIXT` 140/140 | fato |
 | E16 | Folhas visuais: casas/água (`HOUSES1`), rio/aqueduto (`CITYFIXT`), praças/muros (`BUILD1A`) | fato |
+| E17 | `C2.ENG`: 146 strings, pool @ 596, 142 offsets únicos; aliases `"To"` | fato |
+| E18 | `C2MODEL[5:10]` = fundos iniciais 20000…5000 (5 dificuldades) | fato |
+| E19 | `C2MODEL[215:247]` = occupancy 32 graus de habitação (FAQ) | fato |
+| E20 | `C2MODEL[118:124]` entertainment costs; `[115:118]` shrine/temple/basilica | fato |
+| E21 | `C2MODEL[196:206]` custos de província (+ Gardens=3) | fato |
+| E22 | FELIPE01 vs 02: 25.7% bytes diferentes (campanhas distintas) | fato |
 | H1 | Maioria dos RAW comprimida; A01 = 448×448 raw | hipótese |
-| H2 | `C2MODEL.DAT` = tabelas de economia | hipótese |
+| H2 | `C2MODEL` = tabelas de economia — **parcialmente confirmado** (E18–E21) | hipótese |
 | H3 | `REGIONS.DAT` = mapa de províncias | hipótese |
 | H4 | `M` em RESOURCE.CFG = origem HD/CD | hipótese |
 | H5 | Dígito 2/3 nos PL8 de batalha = zoom | hipótese |
+| H6 | `.SAV` u32@8 = ano BC; mapa cidade 40×40×31 B @ ~176128 | hipótese |
+| H7 | `C2MODEL[790:990]` = ranks × dificuldade (`99` = slot vazio) | hipótese |
 
 ---
 

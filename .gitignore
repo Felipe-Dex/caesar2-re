@@ -3,8 +3,13 @@
 *.bmp
 *.gif
 
-# String dumps extracted from PS.EXE
+# Local extracted dumps (original game text / large tables)
+notes/c2_eng_strings.txt
+notes/c2model_ints.txt
+notes/help_eng_strings.txt
 notes/ps_strings_all.txt
+notes/ps_keywords.txt
+notes/ps_filenames.txt
 notes/*.bin
 
 # Local game install / copies of original files
