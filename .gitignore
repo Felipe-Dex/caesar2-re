@@ -1,7 +1,30 @@
 # Decoded game graphics (copyrighted Caesar II assets — do not publish)
 *.png
+*.PNG
 *.bmp
 *.gif
+
+# Local PL8 sprite previews (do not commit / publish)
+images/*.png
+images/*.PNG
+
+# Local RAW audio previews (do not commit / publish)
+sound/*.wav
+sound/*.WAV
+sound/*.png
+sound/*.PNG
+
+# Local SMK video previews (do not commit / publish)
+videos/*.mp4
+videos/*.MP4
+videos/*.webm
+videos/*.WEBM
+videos/*.mkv
+videos/*.MKV
+videos/*.gif
+videos/*.GIF
+videos/*.png
+videos/*.PNG
 
 # Local extracted dumps (original game text / large tables)
 notes/c2_eng_strings.txt
@@ -10,7 +33,7 @@ notes/help_eng_strings.txt
 notes/ps_strings_all.txt
 notes/ps_keywords.txt
 notes/ps_filenames.txt
-notes/*.bin
+notes/sav_occupancy.txt
 
 # Local game install / copies of original files
 *.PL8
@@ -21,6 +44,7 @@ notes/*.bin
 *.SMK
 *.XMI
 *.WAV
+*.wav
 
 # Python
 __pycache__/
