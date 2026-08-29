@@ -33,7 +33,23 @@ notes/help_eng_strings.txt
 notes/ps_strings_all.txt
 notes/ps_keywords.txt
 notes/ps_filenames.txt
+notes/ps_sav_chunks.tsv
+notes/ps_le_image.bin
+findings/dumps/
 notes/sav_occupancy.txt
+notes/sav_header_scan.txt
+notes/sav_dump.txt
+
+# Ghidra (mapped image + project + analysis logs — do not commit)
+ghidra_work/
+*.gpr
+*.rep/
+*.gzf
+*.analyzeLog
+*Analyze*.log
+
+# Local SAV plane previews (copyrighted map dumps — do not publish)
+sav_preview/
 
 # Local game install / copies of original files
 *.PL8
@@ -45,6 +61,16 @@ notes/sav_occupancy.txt
 *.XMI
 *.WAV
 *.wav
+
+# Downloaded GhidraMCP release (plugin JAR + official zip)
+tools/ghidramcp/
+
+# App: local install path (Julius-style — do not commit the user's folder)
+app/config.local.json
+
+# App-generated previews (copyrighted decode output — do not publish)
+app/**/*.png
+app/**/*.PNG
 
 # Python
 __pycache__/

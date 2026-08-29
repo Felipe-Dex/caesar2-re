@@ -16,6 +16,10 @@ from pathlib import Path
 
 DEFAULT_GAME = Path(r"C:\Users\Felip\OneDrive\Games\Caesar2")
 SAV_SIZE = 225745
+HEADER_SIZE = 1745
+PLANE_SIZE = 6400
+N_PLANES = 35
+MAP_W = 80
 
 
 def u16(buf: bytes, off: int) -> int:
@@ -169,6 +173,23 @@ def main(argv: list[str] | None = None) -> int:
         for start, _ in ranges:
             g = math.gcd(g, start)
         print(f"gcd(range starts) = {g}")
+
+    # Plane-aware view of the 80x80 SoA tail.
+    print("\n=== A vs B by 80x80 plane (header 1745 + 35×6400) ===")
+    hdr_diff = sum(1 for x, y in zip(a[:HEADER_SIZE], b[:HEADER_SIZE]) if x != y)
+    print(f"header 0..{HEADER_SIZE} changed bytes: {hdr_diff}")
+    print(f"{'p':>3} {'off':>7} {'ndiff':>6} {'pct':>7}  bbox of changed cells")
+    for i in range(N_PLANES):
+        off = HEADER_SIZE + i * PLANE_SIZE
+        pa, pb = a[off : off + PLANE_SIZE], b[off : off + PLANE_SIZE]
+        nd = sum(1 for x, y in zip(pa, pb) if x != y)
+        xs = [k % MAP_W for k, (x, y) in enumerate(zip(pa, pb)) if x != y]
+        ys = [k // MAP_W for k, (x, y) in enumerate(zip(pa, pb)) if x != y]
+        if xs:
+            bbox = f"({min(xs)},{min(ys)})-({max(xs)},{max(ys)})"
+        else:
+            bbox = "(none)"
+        print(f"{i:3d} {off:7d} {nd:6d} {100.0 * nd / PLANE_SIZE:6.2f}%  {bbox}")
 
     return 0
 
