@@ -44,7 +44,15 @@ python -m app --check --no-audio
 
 Pillow is already required by `tools/decode_pl8.py`. tkinter ships with this Windows Python. No Godot / pygame install.
 
-Keys in the window: **Esc** quit · **1** `backgrnd.pl8` · **2** first `CITYFIXT` tile · **A** play 2 s of `A01.RAW`.
+Keys in the window: **Esc** quit · **1** `backgrnd.pl8` · **2** first `CITYFIXT` tile · **3** 80×80 city map + people (SavChunk 8) · **A** play 2 s of `A01.RAW`.
+
+### Mapa da cidade / City map (tecla **3**)
+
+Boot carrega o primeiro save da pasta do jogo (`FELIPE01.SAV`, senão `FELIPE02` / `LASTYEAR` / qualquer `.SAV`). **Não copia** o ficheiro para o git.
+
+- **3** desenha o mapa isométrico 80×80 (SavChunk 13, 20 bytes/tile) e as pessoas do SavChunk 8 (`LTLMEN1B.PL8`, 16×16). Terreno (`id < 0x78`) usa `CITYFIXT[id + 16]`. Edifícios (`id ≥ 0x78`) usam `tile[+3] & 0x1C` → `HOUSES1` / `BUILD1A`–`D` / `CITYFIXT` e `LUT[tile[+4]]` em zoom 0 (`city_tile_draw_building` `0x3739F`). Casas `0x82–0xA1` e fóruns `0xA2–0xA8` neste save vão para `HOUSES1`. `AHOUSE` / `AFORUM` são ícones 182×132 do menu, não o mapa iso.
+- PNG sem janela (gitignorado): `python -m app --map-preview --no-audio`
+- Save à escolha: `python -m app --sav "C:\Users\Felip\OneDrive\Games\Caesar2\LASTYEAR.SAV"`
 
 ---
 
@@ -72,9 +80,10 @@ No intro video. `INTRO.SMK` is only verified on disk (`smk_play` @ `0x5AB3D` is 
 | `smk_play` `intro.smk` | `0x5AB3D` | file exists? yes/no |
 | `title_screen` | `0x5D37F` | real PL8 blit |
 | `view_frame` / city tick | `0x3CF9A` | **not implemented** |
-| city map SavChunk 13 | `0xE2FBC` | `city_map.py`: 80×80×20 **zeros** |
+| city map SavChunk 13 | `0xE2FBC` | `city_map.py`: 80×80×20 from `.SAV`; tecla **3** |
+| walkers SavChunk 8 | `0x1107A4` | `walkers.py`: 201×58; overlay after `render_iso` (tecla **3**) |
 
-Do not expect houses, walkers, water, or a menu that starts a city.
+No live sim and no menu that starts a city. Houses / forums / industry / people blit from the original PL8s (tecla **3**).
 
 ---
 

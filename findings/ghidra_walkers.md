@@ -2,7 +2,7 @@
 
 Static analysis of the user’s retail `c2_x` image (Ghidra 12.1.3 + GhidraMCP HTTP `127.0.0.1:8080`). No EXE in git. Continues `findings/ghidra_city.md`.
 
-**Result:** each sim tick, `walkers_tick` `0x459D0` walks 201×58 and dispatches **type 1–7** then **state 0–12**. `actors26_tick` `0x45A7A` walks 26×175 on the **province** 60×60×8 map (skipped if `[0x9CE81]`). City tile at `0xE2FBC` is 20 bytes; **byte 0 is terrain/building id**, **byte 1 is path/feature flags (walkability)**, **+7/+8 are the two walker slots**. No separate walk plane.
+**Result:** each sim tick, `walkers_tick` `0x459D0` walks 201×58 and dispatches **type 1–7** then **state 0–12**. `actors26_tick` `0x45A7A` walks 26×175 on the **province** 60×60×8 map (skipped if `[0x9CE81]`). City tile at `0xE2FBC` is 20 bytes; **byte 0 is terrain/building id**, **byte 1 is path/feature flags (walkability)**, **+7/+8 are the two walker slots**. No separate walk plane. City draw uses **`LTLMEN{1,2,3}B.PL8`** (220×16×16), not `RO2*`. Host hook: `from app.walkers import overlay_walkers`.
 
 Type/state stubs at `0x45AFE`+ are **not** Ghidra functions (gap after `actors26_tick` end `0x45AFD`). Listing via Capstone on the mapped image.
 
@@ -43,6 +43,8 @@ Handlers are thin: `walker_state_fn[rec[+0x10]]()`, then `walker_set_sprite(base
 
 C2 names (immigrant / trader / prefect / …) are **not** proven. Types 3 and 7 are the only ones `FUN_00047d1a` hunts in a radius.
 
+Live SAV pairing (FELIPE01/02 / LASTYEAR): type **1→state 3**, **2→4**, **4→7**, **5→8**, **6→10**. Types 3 and 7 were absent on those cities.
+
 ### State table `walker_state_fn` `0x99D68`
 
 | State | VA | What |
@@ -56,15 +58,49 @@ C2 names (immigrant / trader / prefect / …) are **not** proven. Types 3 and 7 
 
 State 3/4 are **service coverage painters**. `city_buildings_evolve_row` `0x42360` later **decays** those same +10 bits (0x0C→8→4, 0xC0→0x80→0x40, 0x30→0x20→0x10).
 
-### Spawn `walker_spawn` `0x2A7EF`
+### Spawn `walker_spawn` `0x2A7EF` (decompiled)
 
-EAX=type, EDX=x, EBX=y, `param_3` = road(0) vs building-pad(≠0). Finds first empty slot 1…200.
+Watcom `__regparm3`: **EAX=type**, **EDX=x**, **EBX=y**, stack `param_3` = road(0) vs building-pad(≠0). Returns 1 on success, 0 on fail. Slot 0 is never filled here (scan **1…200**).
 
-Requires an empty walker slot on the tile **and** tile[+1] bits `0+1+3+7` clear. Road spawn also needs bits `2+4+6` clear (so +1 is **0 or 0x20**). Building-pad spawn **requires** bit `0x20`.
+```
+if x,y not in 0..79: return 0
+off = (y*80 + x)*20
+need empty tile[+7] or tile[+8]
+tile[+1] bits 0+1+3+7 must be 0          ; mask 0x8B
+if param_3==0: tile[+1] bits 2+4+6 == 0  ; 0x54; so +1 is 0 or 0x20
+else:          tile[+1] bit 0x20 set     ; building pad
+for slot = 1 .. 200:
+  if pool[slot].occupied: continue
+  occupied=1, type=EAX, facing=1
+  x/y = dest_x/y = EDX/EBX
+  tile_off = off
+  x_frac = x<<4, y_frac = y<<4
+  +0x1E = 5
+  rng u16 at +0x2E = ([0x1026B0] + clock) & 0x7FFF
+  link tile[+7] if empty else tile[+8]
+  tile[+3] |= 1                          ; dirty
+  +0x23 = (param_3 != 0)                 ; on_road inverted: 0=road, 1=pad
+  +0x32 = rotating 0..15 (type==3 uses a 0..15 counter; else 0..31)
+  return 1
+```
 
-Writes: occupied=1, type, facing=1, x/y, dest=x/y, `tile_off= (y*80+x)*20`, frac `x<<4`/`y<<4`, `+0x1E=5`, rng u16 at +0x2E, links tile +7 or +8, **tile[+3] \|= 1** (dirty).
+Ghidra C at this VA is trustworthy except the `CONCAT11` flag test (it is `tile[+1] & 0x8B == 0`). Comment set in the image.
 
-Wrapper `walker_spawn_retry` `0x42236` retries 4/8/12/16 times. Callers: industry `0x4118B` (types from `0x94FE5` when building id **0xAE…0xB9** and tile[+5] lo-nibble==0), barracks-ish `0x4133E` (building id **0xBF**), plus `0x414A9` / `0x41719` / `0x41DD4`.
+Wrapper `walker_spawn_retry` `0x42236`: EAX=type, EDX=x, EBX=y, stack pad-flag, stack **retry class**. Class **1/4/9/0x10** → 4/8/12/16 attempts; anything else → single `walker_spawn`.
+
+`0x94FE5[building_id]` is that **retry class**, not the walker type. Industry ids **0xAE–0xB1→4**, **0xB2–0xB5→9**, **0xB6–0xB9→0x10**.
+
+| Caller | VA | Building id | EAX type | next_state | Notes |
+|---|---|---:|---:|---:|---|
+| industry | `0x4118B` / call `0x41278` | **0xAE–0xB9** | **1** | 3 (2 if class 9, 1 if class 0x10) | pad; tile[+5] lo-nibble==0 |
+| barracks-ish | `0x4133E` / `0x413F8` | **0xBF** | **4** | 6 | only if `FUN_00047d1a` finds type **3 or 7** in r=6; writes `+0x2C` home_walker |
+| | `0x414A9` / `0x41574` | **0xE3** | **5** | 8 | pad; retry class 1 |
+| | `0x414A9` / `0x4165A` | **0xE4** | **4** | (set) | pad; retry class 9 |
+| | `0x41719` / `0x417F9` | **0xFC–0xFF** | **2** | 4 | pad; `+0x28` = home tile_off |
+| | `0x41719` / `0x4192F` | (same fn, later id) | **6** | (set) | pad; retry class 9 |
+| | `0x41DD4` | tile[+3] bit7 / water `<8` | — | — | no `walker_spawn_retry` in the head; not a type emitter |
+
+No `mov eax, 3` / `mov eax, 7` at these sites. Types 3 and 7 still have **no named spawn** (invasion / fort / other file). `FUN_00047d1a` `0x47D1A` is a radius scan that returns a live type-3-or-7 slot index.
 
 ### Walker record 58 B @ `walker_pool` `0x1107A4` (SavChunk 8)
 
@@ -207,6 +243,8 @@ Index: `off = (y * 80 + x) * 20`. Row step `0x640`. `city_map_generate` clears l
 | `walker_spawn` / `_retry` / `_free` / `_zero_record` | `0x2A7EF` / `0x42236` / `0x2AECB` / `0x2AE42` |
 | `walkers_relink_tiles` | `0x2AFCB` |
 | `walker_step` / `_set_sprite` / `_anim_roam` / `_anim_path` | `0x488DC` / `0x479B8` / `0x47EFA` / `0x48084` |
+| `walker_set_sprite_t7` (type 7 extra frames) | `0x47A95` |
+| `walker_find_type3or7` | `0x47D1A` |
 | `walker_can_step` / `_dest_ok` | `0x48470` / `0x48606` |
 | `facing_from_delta` | `0x2B4DD` |
 | `actor26_spawn` / `_free` / `_zero_record` | `0x2AA02` / `0x2AF12` / `0x2AE55` |
@@ -220,7 +258,49 @@ Type/state stubs were **not** created as functions (rename API needs an existing
 
 ---
 
-## 5. Short VA list (skeleton comments)
+## 5. Type → sprite (LTLMEN, not RO2)
+
+`walker_set_sprite` `0x479B8` writes `rec[+0x34] = base + facing_rel*3 + walk_nibble`.
+`city_tile_draw_walker_sprites` `0x382FB` then does `sprite_id * 0x10 + 8` into **`[0x102410]`**.
+
+That pointer is **`gfx_load_zoom_set` `0x107DB` slot 0**. Zoom table starts at **`0x927D0`** (20-byte `{name[16], size}`):
+
+| Zoom | Slot 0 file | n / size | flags |
+|---:|---|---|---|
+| 0 | `ltlmen1b.pl8` | 220 × 16×16 | `0x0002` |
+| 1 | `ltlmen2b.pl8` | 220 | `0x0102` |
+| 2 | `ltlmen3b.pl8` | 220 | `0x0102` |
+
+`LTLMEN1B` atlas rows (sprite.y): type6=201, type2=226, type1=251, type5=276, type4=301, type7=326, type3=351, leftover row y=376 (indices 193–219, unused by the type table).
+
+**`RO2SLGC` / `RO2SPRB` / `RO2SWDA`** (and `RO3*`) are **battle** packs: 178 bitmaps ~12–18×29–31, loaded by the battle path (`FUN_00010AC9`), palette `BATLFIX2`. **No walker type 1–7 indexes an RO2 file.** Do not blit RO2 onto the city iso.
+
+| Type | Sprite base | LTLMEN index | Typical state (SAV) | Emitter |
+|---:|---:|---|---:|---|
+| 1 | `0x36` | 54–80 | 3 (OR `0x0C` / r=3) | industry `0xAE–0xB9` |
+| 2 | `0x1B` | 27–53 | 4 (OR `0xC0` / r=3) | buildings `0xFC–0xFF` |
+| 3 | `0xA6` | 166–192 | — (none in FELIPE*) | hunted by `0x47D1A`; no spawn site yet |
+| 4 | `0x6E` | 110–136 | 7 | `0xBF` (escort) and `0xE4` |
+| 5 | `0x51` | 81–107 | 8 | building `0xE3` |
+| 6 | 0 | 0–26 | 10 | `0x41719` second site |
+| 7 | `0x89` or 0 if state==12 | 137–163; `FUN_00047a95` may use 164/165 | — | hunted by `0x47D1A` |
+
+Type 7 uses `FUN_00047a95` `0x47A95` (not `walker_set_sprite`) when state ≠ 12: `wait_timer` bands pick `base+0x1B` or `base+0x1C`.
+
+### Host: `app/walkers.py`
+
+Parses SavChunk **8** with the same 500-size stream as `city_map.walk_sav_chunks` (file_off **4566**, 11658 B). Host calls `overlay_walkers` after `render_iso` (tecla **3** / `--map-preview`). Does **not** edit `render_iso` itself.
+
+```
+from app.walkers import overlay_walkers
+img = overlay_walkers(img, walkers, game)   # img = native render_iso canvas
+```
+
+`overlay_walkers` loads `LTLMEN1B.PL8` via `assets.load_pl8_frames` → `decode_pl8` (no PL8 copy). Blit at `tile_iso_xy` (same diamond math as `render_iso`) with the 16×16 feet near the tile bottom-center. Prefers saved `sprite_id`; else `TYPE_LTLMEN_BASE[type] + facing*3 + frame`.
+
+---
+
+## 6. Short VA list (skeleton comments)
 
 ```
 0x459D0  walkers_tick
@@ -234,16 +314,21 @@ Type/state stubs were **not** created as functions (rename API needs an existing
 0xE2FBC  city tile AoS   80 * 80 * 20
 0x99D24  walker_type_fn[8]
 0x99D68  walker_state_fn[16]
+0x479B8  walker_set_sprite
+0x47A95  walker_set_sprite_t7
+0x47D1A  walker_find_type3or7
+0x927D0  zoom PL8 table (slot0 = ltlmen*b)
+0x102410 LTLMEN handle (draw)
 ```
 
 ---
 
-## 6. What to click next in the GUI
+## 7. What to click next in the GUI
 
-1. **G `2A7EF`** — **`walker_spawn`**. Define functions at **`0x45AFE`** (type1) and **`0x45F38`** (state 3 coverage) so the C view exists.
-2. **G `42360`** — **`city_buildings_evolve_row`**. Names +11 / +13 / +15 vs C2MODEL housing grades.
-3. **G `4118B`** — industry emitter; table `0x94FE5` is type-from-building-id.
+1. **G `47D1A`** — `FUN_00047d1a` (type 3/7 radius hunt). Follow xrefs to find who **spawns** type 3 and 7 (`mov eax, 3` / `7` into `walker_spawn` / `_retry`). Define the function.
+2. **G `45AFE`** — define **type1** (and `0x45F38` state 3) so the C view exists. Stubs are still a gap after `actors26_tick`.
+3. **G `42360`** — **`city_buildings_evolve_row`**. Names +11 / +13 / +15 vs C2MODEL housing grades.
 4. **G `56695`** — treasury (still hottest `city_treasury` xref).
-5. Still want a **1-house A/B save** for bytes 12/14/16/17 and to pin type 1–7 to C2.ENG names.
+5. Pin building ids **0xBF / 0xE3 / 0xE4 / 0xFC** to C2.ENG names. Still want a **1-house A/B save** for tile bytes 12/14/16/17.
 
 Do not start a crack session from the drive-letter strings.

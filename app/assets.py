@@ -43,6 +43,16 @@ TITLE_PL8 = "backgrnd.pl8"  # title_screen @ 0x5D37F
 TITLE_PAL = "backgrnd.256"
 SHEET_CAP = 64
 
+# gfx_load_zoom_set 0x107DB city zoom-1 names (AHOUSE/AFORUM are UI, not iso).
+CITY_MAP_PL8S: tuple[tuple[str, str], ...] = (
+    ("CITYFIXT", "CITYFIXT.PL8"),
+    ("HOUSES1", "HOUSES1.PL8"),
+    ("BUILD1A", "BUILD1A.PL8"),
+    ("BUILD1B", "BUILD1B.PL8"),
+    ("BUILD1C", "BUILD1C.PL8"),
+    ("BUILD1D", "BUILD1D.PL8"),
+)
+
 
 @dataclass(frozen=True)
 class FileStatus:
@@ -134,6 +144,29 @@ def load_pl8_image(
         for spr in sprites[:sheet_cap]
     ]
     return decode_pl8.make_sheet(frames), pl8, len(sprites)
+
+
+def load_pl8_frames(game: Path, pl8_name: str) -> tuple[list[Image.Image], Path]:
+    """Decode every sprite in one PL8. Used by the city-map iso blit."""
+    pl8 = find_file(game, pl8_name)
+    if pl8 is None:
+        raise FileNotFoundError(f"{pl8_name} not found in {game}")
+    pal_path, _why = decode_pl8.resolve_palette(pl8, game)
+    palette = decode_pl8.load_palette(pal_path, verbose=False)
+    flags, _unk, sprites, blob = decode_pl8.parse_pl8(pl8, verbose=False)
+    return decode_pl8.decode_frames(blob, sprites, flags, palette), pl8
+
+
+def load_city_map_sheets(game: Path) -> dict[str, list[Image.Image]]:
+    """CITYFIXT + HOUSES1 + BUILD1A–D. Missing files are skipped."""
+    out: dict[str, list[Image.Image]] = {}
+    for key, name in CITY_MAP_PL8S:
+        try:
+            frames, _path = load_pl8_frames(game, name)
+        except (OSError, ValueError):
+            continue
+        out[key] = frames
+    return out
 
 
 def pick_boot_image(game: Path) -> tuple[Image.Image, str, int]:

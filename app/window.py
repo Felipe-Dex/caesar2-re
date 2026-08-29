@@ -39,7 +39,7 @@ def _hud_lines(ctx: BootContext) -> list[str]:
     lines = [
         "Caesar II — v0 skeleton (not a sim)",
         f"install: {ctx.game}  [{ctx.source}]",
-        f"art: {ctx.image_name}   map: {ctx.city.width}x{ctx.city.height} empty",
+        f"art: {ctx.image_name}   map: {ctx.city.width}x{ctx.city.height} {ctx.city.source}",
     ]
     if ctx.eng is not None:
         hit = ctx.eng.find("Caesar II - Version")
@@ -48,7 +48,7 @@ def _hud_lines(ctx: BootContext) -> list[str]:
         if hit is not None:
             shown = hit[1].replace("\r", " ").replace("\n", " ")
             lines.append(f"C2.ENG[{hit[0]}]: {shown[:70]}")
-    lines.append("Esc quit   1 title   2 cityfixt tile   A raw   (Godot later)")
+    lines.append("Esc quit   1 title   2 cityfixt   3 city map (people)   A raw")
     return lines
 
 
@@ -72,7 +72,7 @@ def compose_frame(ctx: BootContext, extra: str | None = None) -> Image.Image:
 
 def show(ctx: BootContext, *, game: Path) -> None:
     """title_input_wait @ 0x2E7B1 stand-in: spin until Esc."""
-    from app import assets, audio
+    from app import assets, audio, city_map
 
     root = tk.Tk()
     root.title("Caesar II — v0")
@@ -83,6 +83,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
     label = tk.Label(root, borderwidth=0)
     label.pack()
     photo: ImageTk.PhotoImage | None = None
+    map_cache: Image.Image | None = None
 
     def blit(extra: str | None = None) -> None:
         nonlocal photo
@@ -90,6 +91,35 @@ def show(ctx: BootContext, *, game: Path) -> None:
         photo = ImageTk.PhotoImage(frame)
         label.configure(image=photo)
         label.image = photo  # type: ignore[attr-defined]
+
+    def show_city_map() -> None:
+        nonlocal map_cache
+        from app.walkers import drawable_walkers, overlay_walkers
+
+        n_walkers = len(drawable_walkers(ctx.walkers))
+        if map_cache is None:
+            blit(f"rendering {ctx.city.source}…")
+            root.update_idletasks()
+            sheets = assets.load_city_map_sheets(game)
+            cityfixt = sheets.get("CITYFIXT") or []
+            map_cache = city_map.render_iso(
+                ctx.city, cityfixt or None, sheets=sheets or None
+            )
+            if ctx.walkers:
+                try:
+                    map_cache = overlay_walkers(map_cache, ctx.walkers, game)
+                except (OSError, ValueError):
+                    n_walkers = 0
+            ctx.n_sprites = sum(len(v) for v in sheets.values())
+            label_name = "+".join(sheets) if sheets else "color"
+        else:
+            label_name = "CITYFIXT+HOUSES1+BUILD1A-D"
+        ctx.image = map_cache
+        ctx.image_name = f"map:{ctx.city.source}"
+        blit(
+            f"city map {ctx.city.source}  walkers={n_walkers}  "
+            f"terrain=CITYFIXT[id+16]  buildings=LUT[+4]  ({label_name})"
+        )
 
     def use_pl8(name: str, first_only: bool) -> None:
         try:
@@ -110,6 +140,8 @@ def show(ctx: BootContext, *, game: Path) -> None:
             use_pl8("backgrnd.pl8", first_only=True)
         elif key in {"2",}:
             use_pl8("CITYFIXT.PL8", first_only=True)
+        elif key in {"3",}:
+            show_city_map()
         elif key in {"a",}:
             blit(audio.play_raw_preview(game))
 

@@ -14,6 +14,7 @@ from PIL import Image
 from app import assets, audio, city_map
 from app.assets import EngTable, FileStatus
 from app.city_map import CityMap
+from app.walkers import Walker, live_walkers, load_walkers_from_sav
 
 # Named VAs (Ghidra, mapped image base 0x10000).
 VA_C2_MAIN = 0x10010
@@ -39,6 +40,7 @@ class BootContext:
     image_name: str
     n_sprites: int
     city: CityMap
+    walkers: list[Walker]
     audio_status: str
     notes: list[str] = field(default_factory=list)
 
@@ -47,7 +49,13 @@ class BootContext:
         return all(f.ok for f in self.key_files)
 
 
-def run_boot(game: Path, source: str, *, play_audio: bool = True) -> BootContext:
+def run_boot(
+    game: Path,
+    source: str,
+    *,
+    play_audio: bool = True,
+    sav: Path | None = None,
+) -> BootContext:
     notes: list[str] = []
 
     # 1. resource.cfg — load_file_cfg @ 0x2456E
@@ -102,12 +110,35 @@ def run_boot(game: Path, source: str, *, play_audio: bool = True) -> BootContext
     except (OSError, ValueError) as exc:
         notes.append(f"PL8 decode failed: {exc}")
 
-    # 7. outer loop / city — empty map only
+    # 7. city — SavChunk 13 from a real .SAV if one is in the install
     city = CityMap()
-    notes.append(
-        f"city_map stub: {city.width}x{city.height}x{city_map.TILE_BYTES} "
-        f"zeros @ SavChunk {city_map.SAV_CHUNK} (VA {city_map.GHIDRA_BSS:#x})"
-    )
+    walkers: list[Walker] = []
+    sav_path = sav if sav is not None else city_map.pick_save(game)
+    if sav_path is None:
+        notes.append(
+            f"city_map: no .SAV — {city.width}x{city.height}x{city_map.TILE_BYTES} "
+            f"zeros @ SavChunk {city_map.SAV_CHUNK} (VA {city_map.GHIDRA_BSS:#x})"
+        )
+    else:
+        try:
+            sizes = city_map.load_chunk_sizes(game)
+            city = city_map.load_city_from_sav(sav_path, sizes, game=game)
+            notes.append(
+                f"city_map: {sav_path.name} chunk {city_map.SAV_CHUNK} "
+                f"{city.width}x{city.height}x{city_map.TILE_BYTES} "
+                f"({len(city.id_counts())} tile ids) "
+                f"via {len(sizes)} sequential sizes"
+            )
+            try:
+                walkers = load_walkers_from_sav(sav_path, sizes, game=game)
+                notes.append(
+                    f"walkers: {sav_path.name} chunk 8 "
+                    f"{len(live_walkers(walkers))} live / {len(walkers)}"
+                )
+            except (OSError, ValueError) as exc:
+                notes.append(f"walkers load failed: {exc}")
+        except (OSError, ValueError) as exc:
+            notes.append(f"city_map load failed: {exc}")
 
     return BootContext(
         game=game,
@@ -120,6 +151,7 @@ def run_boot(game: Path, source: str, *, play_audio: bool = True) -> BootContext
         image_name=image_name,
         n_sprites=n_sprites,
         city=city,
+        walkers=walkers,
         audio_status=audio_status,
         notes=notes,
     )

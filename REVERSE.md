@@ -1,6 +1,6 @@
 # Caesar II — Phase 1 (exploration)
 
-**Last update:** 2026-08-29 (rev. 15 — city tick `view_frame` @ `0x3CF9A`; `findings/ghidra_city.md`)  
+**Last update:** 2026-08-29 (rev. 16 — city buildings LUT + iso blit; `findings/ghidra_buildings.md`)  
 **Source:** `C:\Users\Felip\OneDrive\Games\Caesar2` (flat tree; CD/retail DOS)  
 **Version:** `README.TXT` = **1.1A** (27 Feb 1996); string in `C2.ENG` = **“Caesar II - Version 1.1”**; `PS.EXE` dated **1995-10-04**.
 
@@ -136,7 +136,7 @@ VAs are **linear** after fixups (obj1 base `0x10000`). Full table: `findings/ps_
 
 Headless project is ready. **How to open + what to name next:** `findings/ghidra.md`.
 
-Image `ghidra_work/c2_x.bin` (gitignored) from `tools/ps_le.py --write-image`. Raw **`x86:LE:32:default` / `gcc`**, base **`0x10000`**, entry **`0x72500`**. Known I/O / SAV / Miles / `c2.eng` labels and `SavChunk[500]` are already applied. **`c2_main` @ `0x10010`** and **`view_frame` @ `0x3CF9A`** are named (walks: `findings/ghidra_walk.md`, `findings/ghidra_city.md`). Next GUI click: **G `3CF9A`** (redefine end at `0x3D3E5`) then **G `459D0`**. Default MZ import of `PS.EXE` is still **not useful**.
+Image `ghidra_work/c2_x.bin` (gitignored) from `tools/ps_le.py --write-image`. Raw **`x86:LE:32:default` / `gcc`**, base **`0x10000`**, entry **`0x72500`**. Known I/O / SAV / Miles / `c2.eng` labels and `SavChunk[500]` are already applied. **`c2_main` @ `0x10010`** and **`view_frame` @ `0x3CF9A`** are named (walks: `findings/ghidra_walk.md`, `findings/ghidra_city.md`). Next GUI click: **G `3CF9A`** (redefine end at `0x3D3E5`) then **G `459D0`**. Default MZ import of `PS.EXE` is still **not useful**. City buildings are **not** `AHOUSE`/`AFORUM` (182×132 menu icons): `city_tile_draw_building` `0x3739F` picks a zoom-1 PL8 from `tile[+3] & 0x1C` (`HOUSES1` / `BUILD1A`–`D` / `CITYFIXT`, names at `0x927E0` via `gfx_load_zoom_set` `0x107DB`) and the sprite from `LUT[tile[+4]*4+(zoom>>1)]` (tables `0x97158`, `0x97410`, `0x97600`, `0x97890`, `0x979B0`, `0x96F18` plus `+0x10` on the CITYFIXT sheet). Housing `0x82–0xA1` is sheet 0. Walk: `findings/ghidra_buildings.md`.
 
 ---
 
