@@ -45,7 +45,7 @@ Confidence: **high** = exact sequence in this file (or unique mechanic). **mediu
 | 55-74 | 20 | medium | 5 difficulties x 4 percentages. Novice=Easy=`50,60,80,90`; harder rows drop. Hypothesis: 4-rating leniency / event threshold. |
 | 75-94 | 20 | medium | 5 x `(a,b,c,d)`: `(10,20,60,1)` twice, then `(8,20,48,1)`, `(6,25,36,3)`, `(4,25,24,7)`. Hypothesis: event timing / severity. |
 | 95 | 1 | unknown | Lone `0`. |
-| 96-101 | 6 | medium | `1, 5, 20, 40, 75, 50`. FAQ: gateway=5, city wall=20, tower=75, reservoir=50. `1` and `40` unlabeled. |
+| 96-101 | 6 | medium | `1, 5, 20, 40, 75, 50`. FAQ: gateway=5, city wall=20, tower=75, reservoir=50. `1` and `40` unlabeled. A/B Reservoir debit is **51** (`findings/sav_ab.md`); **51 is absent** from this file. |
 | 102-114 | 13 | medium | City costs, **family order** (not FAQ water→…): Gardens 3, Plaza 12, Well 20, Baths 30, Hospital\|Rhetor 500, Fountain 15, Barracks\|Janiculan 400, Prefecture\|Aventine 100, Market 40, Business 80, Grammaticus 250, Rhetor\|Hospital 500, Library 1000. Ambiguities are shared FAQ prices. |
 | **115-117** | 3 | **high** | **Shrine 80, Temple 200, Basilica 600.** |
 | **118-123** | 6 | **high** | **Theater 300 … Circus Maximus 2500.** |
@@ -123,6 +123,7 @@ FAQ v1.0 names for slots 0–9: Citizen, Decurion, Apparitor, Magistrate, Quaest
 - Goal-shift `-1,-1,0,+1,+1`
 - Walker distances 36 / 28 as a dedicated table
 - Filename `C2MODEL.DAT` as ASCII (unlike `history.dat` / `regions.dat`)
+- Construction debit **51** (A/B Reservoir; treasury + chunk 155). File has **`[101]=50`** (FAQ reservoir), never 51.
 
 ## PS.EXE (light grep only)
 
@@ -142,7 +143,7 @@ The **4360-byte file is not embedded**. The same int32 runs exist as **scattered
 
 ## C2.ENG cross-ref
 
-Used as labels, not as a parallel table: `Novice`, `Theater`, `Shrine`, `Tent`, `Gardens`, `Garden`, `Farm`, `Wall`, `Baths`, `Market`, `Grammaticus`, `Reservoir`, `Aventine`, `Citizen`, `Cost:`, `Treasury`. Missing from C2.ENG (EXE / HELP.ENG): `Decurion`, `Consul`, `Impossible`, `Fountain`, `Circus Maximus`, `Janiculan`, `Palatine`.
+Used as labels, not as a parallel table: `Novice`, `Theater`, `Shrine`, `Tent`, `Gardens`, `Garden`, `Farm`, `Wall`, `Baths`, `Market`, `Grammaticus`, **`Reservoir` = [12]**, `Aventine`, `Citizen`, `Cost:`, `Treasury`. A/B pins building id **`0xBE`** to that Reservoir string (`findings/sav_ab.md`, `findings/ghidra_buildings.md`). Missing from C2.ENG (EXE / HELP.ENG): `Decurion`, `Consul`, `Impossible`, `Fountain`, `Circus Maximus`, `Janiculan`, `Palatine`.
 
 ## How to dump
 

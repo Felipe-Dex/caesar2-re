@@ -93,14 +93,24 @@ Ghidra names applied: `lut_houses_sprite`, `lut_build1a_sprite`, `lut_build1b_sp
 
 | Sheet | PL8 | Building ids on this save |
 |---|---|---|
-| `0x00` | **HOUSES1** | housing **`0x88–0xA1`**; civic **`0xA2–0xA8`** (forum-sized 2×2 / 4-variant clumps); also `0xBE`, `0xE3`, `0xE4` |
+| `0x00` | **HOUSES1** | housing **`0x88–0xA1`**; civic **`0xA2–0xA8`** (forum-sized 2×2 / 4-variant clumps); **`0xBE` Reservoir** (A/B); also `0xE3`, `0xE4` |
 | `0x04` | **BUILD1A** | plazas/walls **`0x78–0x7E`**; industry **`0xAE–0xB5`, `0xB9`** |
 | `0x08` | **BUILD1B** | roads/gardens-ish `0xC1`/`0xC2`; barracks `0xBF`; farms/other `0xDB–0xFF` cluster |
 | `0x0C` | **BUILD1C** | `0xAA`, `0xAC`, `0xE6–0xE8`, `0xFA` |
 | `0x10` | **CITYFIXT** | aqueducts **`0xCF–0xD6`** |
 | `0x14` | **BUILD1D** | `0xED`, `0xEE` |
 
-Housing **`+4` is not the id**: `0x89` → variant 7 → `HOUSES1[7]`; `0xA1` (3×3 palace) uses variants 51–59. Forums **`0xA2–0xA8`** also sit on **HOUSES1** (variants 60–75), not `AFORUM`.
+Housing **`+4` is not the id**: `0x89` → variant 7 → `HOUSES1[7]`; `0xA1` (3×3 palace) uses variants 51–59. Forums **`0xA2–0xA8`** also sit on **HOUSES1** (variants 60–75), not `AFORUM`. Reservoir **`0xBE`** uses variant **`0x6E`** → LUT[110] = **sprite 90**.
+
+### 5.1 Confirmed building ids (A/B)
+
+User-confirmed surgical pair `A.SAV` / `B.SAV` (`findings/sav_ab.md`). No save bodies here.
+
+| Id | Name | Size | Sheet / `+4` | Zoom-0 sprite | Observed cost | C2.ENG |
+|---|---|---|---|---:|---:|---|
+| **`0xBE`** | **Reservoir** | **1×1** | HOUSES1 / **`0x6E`** | **90** | **51** | **[12]** `Reservoir` |
+
+C2MODEL has **no** integer **51**. FAQ list price is **`[101]=50`** (`[96:102]` = `1, 5, 20, 40, 75, 50`). `FUN_00012a8f` maps `0xBE` → advisor type **`0x10`** (presence flag, not a C2.ENG index). Engine table `id → [12]` is still unproven; the name match is the A/B + the string at [12].
 
 ---
 
@@ -114,7 +124,7 @@ Housing **`+4` is not the id**: `0x89` → variant 7 → `HOUSES1[7]`; `0xA1` (3
 
 - Zoom 2/3 columns and `HOUSES2/3` / `BUILD2*` / `BUILD3*` are not in the host (zoom 0 only).
 - `citytop1.pl8` (slot 7) and `city_map_draw_overlays` are unread — roofs / extras may sit there.
-- `FUN_00012a8f` type ids are not yet pinned to C2.ENG names (Forum / Baths / Market / Reservoir strings exist; no id table).
+- `FUN_00012a8f` type ids are not yet pinned to C2.ENG names except **`0xBE` = Reservoir** (A/B; C2.ENG **[12]**). Forum / Baths / Market strings exist; no full id table. `0xBE` → advisor type `0x10`.
 - BUILD1A/C last LUT index is one past `n_sprites − 1`; renderer skips OOB.
 - Tile bytes +12 / +14 / +16 / +17 still want a 1-house A/B save (sibling).
 - Walkers / overlay sprites are a different pass.

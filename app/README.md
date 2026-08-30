@@ -44,13 +44,18 @@ python -m app --check --no-audio
 
 Pillow is already required by `tools/decode_pl8.py`. tkinter ships with this Windows Python. No Godot / pygame install.
 
-Keys in the window: **Esc** quit · **1** `backgrnd.pl8` · **2** first `CITYFIXT` tile · **3** 80×80 city map + people (SavChunk 8) · **A** play 2 s of `A01.RAW`.
+Keys in the window: **Esc** quit · **1** `backgrnd.pl8` · **2** first `CITYFIXT` tile · **3** 80×80 city map + people (SavChunk 8) · **+** / **-** zoom 0/1/2 · arrows or drag to pan · **Home** re-center · **Space** / **T** one fake sim step (walker frame only; not `walkers_tick`) · **A** play 2 s of `A01.RAW`.
 
 ### Mapa da cidade / City map (tecla **3**)
 
 Boot carrega o primeiro save da pasta do jogo (`FELIPE01.SAV`, senão `FELIPE02` / `LASTYEAR` / qualquer `.SAV`). **Não copia** o ficheiro para o git.
 
-- **3** desenha o mapa isométrico 80×80 (SavChunk 13, 20 bytes/tile) e as pessoas do SavChunk 8 (`LTLMEN1B.PL8`, 16×16). Terreno (`id < 0x78`) usa `CITYFIXT[id + 16]`. Edifícios (`id ≥ 0x78`) usam `tile[+3] & 0x1C` → `HOUSES1` / `BUILD1A`–`D` / `CITYFIXT` e `LUT[tile[+4]]` em zoom 0 (`city_tile_draw_building` `0x3739F`). Casas `0x82–0xA1` e fóruns `0xA2–0xA8` neste save vão para `HOUSES1`. `AHOUSE` / `AFORUM` são ícones 182×132 do menu, não o mapa iso.
+A janela **640×480** é uma **viewport** sobre o canvas iso nativo (já não encolhe o mapa inteiro para 960×497).
+
+- **3** desenha o mapa isométrico 80×80 (SavChunk 13, 20 bytes/tile) e as pessoas do SavChunk 8. Terreno (`id < 0x78`) usa `CITYFIXT[id + 16]`. Edifícios (`id ≥ 0x78`) usam `tile[+3] & 0x1C` → `HOUSES1` / `BUILD1A`–`D` / `CITYFIXT` e `LUT[tile[+4]]` (`city_tile_draw_building` `0x3739F`). Casas `0x82–0xA1` e fóruns `0xA2–0xA8` neste save vão para `HOUSES1`. `AHOUSE` / `AFORUM` são ícones 182×132 do menu, não o mapa iso.
+- **Pan:** setas (passo 96/48/24 px conforme o zoom) ou **clique-arrastar**. **Home** centra o canvas.
+- **Zoom:** `+` / `=` / `]` aproxima (set 0 = `HOUSES1` / `BUILD1*` / `LTLMEN1B`, 58×30, flags `0x0002`). `-` / `[` / **Z** afasta. Set 1 = `HOUSES2` / `BUILD2*` / `CITYFIX2` / `LTLMEN2B` (26×14, `0x0102`). Set 2 = `HOUSES3` / `BUILD3*` / `CITYFIX3` / `LTLMEN3B` (10×6, `0x0202`). Roda do rato também muda o zoom. Se o PL8 faltar, o host faz scale nearest do zoom 0.
+- **Space** / **T:** um passo falso (`app.sim.on_sim_step`) — `++walk_frame` (wrap 0…15) e reescreve `sprite_id`. **Não** é `walkers_tick` `0x459D0`. Pan/zoom não mexem.
 - PNG sem janela (gitignorado): `python -m app --map-preview --no-audio`
 - Save à escolha: `python -m app --sav "C:\Users\Felip\OneDrive\Games\Caesar2\LASTYEAR.SAV"`
 
@@ -79,7 +84,7 @@ No intro video. `INTRO.SMK` is only verified on disk (`smk_play` @ `0x5AB3D` is 
 | `miles_init` | `0x11758` | skip / optional RAW |
 | `smk_play` `intro.smk` | `0x5AB3D` | file exists? yes/no |
 | `title_screen` | `0x5D37F` | real PL8 blit |
-| `view_frame` / city tick | `0x3CF9A` | **not implemented** |
+| `view_frame` / city tick | `0x3CF9A` | **Space / T** → `app.sim.on_sim_step` (fake `walk_frame`; **not** `walkers_tick` `0x459D0`) |
 | city map SavChunk 13 | `0xE2FBC` | `city_map.py`: 80×80×20 from `.SAV`; tecla **3** |
 | walkers SavChunk 8 | `0x1107A4` | `walkers.py`: 201×58; overlay after `render_iso` (tecla **3**) |
 

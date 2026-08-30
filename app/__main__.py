@@ -10,6 +10,7 @@ from PIL import Image
 
 from app.boot import run_boot
 from app.config import InstallError, resolve_game_dir
+from app.sim import on_sim_step  # Space / T — camera window binds this
 
 
 def _print_status(ctx) -> None:
@@ -27,11 +28,19 @@ def _print_status(ctx) -> None:
     print("-- boot notes --")
     for note in ctx.notes:
         print(f"  {note}")
+    print(
+        "sim           : Space/T → "
+        f"{on_sim_step.__module__}.on_sim_step "
+        "(fake walk_frame; not walkers_tick 0x459D0)"
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Caesar II v0 — load original files, show one PL8. Not a sim."
+        description=(
+            "Caesar II v0 — load original files, show one PL8. "
+            "Space/T = on_sim_step (fake walker frame; not walkers_tick)."
+        )
     )
     parser.add_argument(
         "--game",

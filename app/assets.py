@@ -43,14 +43,41 @@ TITLE_PL8 = "backgrnd.pl8"  # title_screen @ 0x5D37F
 TITLE_PAL = "backgrnd.256"
 SHEET_CAP = 64
 
-# gfx_load_zoom_set 0x107DB city zoom-1 names (AHOUSE/AFORUM are UI, not iso).
-CITY_MAP_PL8S: tuple[tuple[str, str], ...] = (
-    ("CITYFIXT", "CITYFIXT.PL8"),
-    ("HOUSES1", "HOUSES1.PL8"),
-    ("BUILD1A", "BUILD1A.PL8"),
-    ("BUILD1B", "BUILD1B.PL8"),
-    ("BUILD1C", "BUILD1C.PL8"),
-    ("BUILD1D", "BUILD1D.PL8"),
+# gfx_load_zoom_set 0x107DB. Keys stay HOUSES1/BUILD1* so city_map LUT is unchanged.
+# Host zoom 0/1/2 = PL8 digit 1/2/3 (flags 0x0002 / 0x0102 / 0x0202).
+CITY_MAP_PL8S_BY_ZOOM: tuple[tuple[tuple[str, str], ...], ...] = (
+    (
+        ("CITYFIXT", "CITYFIXT.PL8"),
+        ("HOUSES1", "HOUSES1.PL8"),
+        ("BUILD1A", "BUILD1A.PL8"),
+        ("BUILD1B", "BUILD1B.PL8"),
+        ("BUILD1C", "BUILD1C.PL8"),
+        ("BUILD1D", "BUILD1D.PL8"),
+    ),
+    (
+        ("CITYFIXT", "CITYFIX2.PL8"),
+        ("HOUSES1", "HOUSES2.PL8"),
+        ("BUILD1A", "BUILD2A.PL8"),
+        ("BUILD1B", "BUILD2B.PL8"),
+        ("BUILD1C", "BUILD2C.PL8"),
+        ("BUILD1D", "BUILD2D.PL8"),
+    ),
+    (
+        ("CITYFIXT", "CITYFIX3.PL8"),
+        ("HOUSES1", "HOUSES3.PL8"),
+        ("BUILD1A", "BUILD3A.PL8"),
+        ("BUILD1B", "BUILD3B.PL8"),
+        ("BUILD1C", "BUILD3C.PL8"),
+        ("BUILD1D", "BUILD3D.PL8"),
+    ),
+)
+CITY_MAP_PL8S = CITY_MAP_PL8S_BY_ZOOM[0]
+
+# Probe files that mark a real PL8 zoom set (not integer-scale fallback).
+_ZOOM_PROBE: tuple[tuple[str, ...], ...] = (
+    ("HOUSES1.PL8", "BUILD1A.PL8", "LTLMEN1B.PL8"),
+    ("HOUSES2.PL8", "BUILD2A.PL8", "LTLMEN2B.PL8"),
+    ("HOUSES3.PL8", "BUILD3A.PL8", "LTLMEN3B.PL8"),
 )
 
 
@@ -157,10 +184,33 @@ def load_pl8_frames(game: Path, pl8_name: str) -> tuple[list[Image.Image], Path]
     return decode_pl8.decode_frames(blob, sprites, flags, palette), pl8
 
 
-def load_city_map_sheets(game: Path) -> dict[str, list[Image.Image]]:
-    """CITYFIXT + HOUSES1 + BUILD1A–D. Missing files are skipped."""
+def city_map_pl8s_for_zoom(zoom: int) -> tuple[tuple[str, str], ...]:
+    from app.city_map import clamp_zoom
+
+    return CITY_MAP_PL8S_BY_ZOOM[clamp_zoom(zoom)]
+
+
+def zoom_pl8_available(game: Path, zoom: int) -> bool:
+    """True if HOUSES/BUILD*A/LTLMEN*B for this host zoom exist on disk."""
+    from app.city_map import clamp_zoom
+
+    names = _ZOOM_PROBE[clamp_zoom(zoom)]
+    return all(find_file(game, name) is not None for name in names)
+
+
+def available_map_zooms(game: Path) -> list[int]:
+    return [z for z in range(len(_ZOOM_PROBE)) if zoom_pl8_available(game, z)]
+
+
+def load_city_map_sheets(
+    game: Path, *, zoom: int = 0
+) -> dict[str, list[Image.Image]]:
+    """CITYFIXT + HOUSES1 + BUILD1A–D keys, files for this host zoom.
+
+    Missing files are skipped. Zoom 1/2 load CITYFIX2/3, HOUSES2/3, BUILD2*/3*.
+    """
     out: dict[str, list[Image.Image]] = {}
-    for key, name in CITY_MAP_PL8S:
+    for key, name in city_map_pl8s_for_zoom(zoom):
         try:
             frames, _path = load_pl8_frames(game, name)
         except (OSError, ValueError):

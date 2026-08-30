@@ -28,15 +28,15 @@ from pathlib import Path
 from PIL import Image
 
 from app.city_map import (
-    ISO_H,
-    ISO_HALF_H,
-    ISO_HALF_W,
-    ISO_W,
     MAP_H,
     MAP_W,
+    iso_tile_size,
     load_chunk_sizes,
     walk_sav_chunks,
 )
+
+# LTLMEN{1,2,3}B bitmap size (type-0, not the iso diamond).
+LTLMEN_SIZE_BY_ZOOM: tuple[int, ...] = (16, 8, 4)
 
 WALKER_STRIDE = 0x3A  # 58
 WALKER_COUNT = 201  # 0xC9
@@ -189,27 +189,36 @@ def load_walkers_from_sav(
     return unpack_pool(chunks[SAV_CHUNK])
 
 
-def iso_origin_x(width: int = MAP_W) -> int:
-    return (width - 1) * ISO_HALF_W
+def iso_origin_x(width: int = MAP_W, *, zoom: int = 0) -> int:
+    tile_w, _tile_h = iso_tile_size(zoom)
+    return (width - 1) * (tile_w // 2)
 
 
 def tile_iso_xy(
-    x: int, y: int, *, origin_x: int | None = None
+    x: int,
+    y: int,
+    *,
+    origin_x: int | None = None,
+    zoom: int = 0,
 ) -> tuple[int, int]:
     """Diamond top-left. Same formula as city_map.render_iso."""
+    tile_w, tile_h = iso_tile_size(zoom)
+    half_w, half_h = tile_w // 2, tile_h // 2
     if origin_x is None:
-        origin_x = iso_origin_x()
-    sx = origin_x + (x - y) * ISO_HALF_W
-    sy = (x + y) * ISO_HALF_H
+        origin_x = iso_origin_x(zoom=zoom)
+    sx = origin_x + (x - y) * half_w
+    sy = (x + y) * half_h
     return sx, sy
 
 
 def walker_iso_xy(
-    walker: Walker, *, origin_x: int | None = None
+    walker: Walker, *, origin_x: int | None = None, zoom: int = 0
 ) -> tuple[int, int]:
-    """Blit origin for a 16×16 LTLMEN: feet near the bottom-center of the tile."""
-    sx, sy = tile_iso_xy(walker.x, walker.y, origin_x=origin_x)
-    return sx + ISO_HALF_W - 8, sy + ISO_H - 18
+    """Blit origin for LTLMEN: feet near the bottom-center of the tile."""
+    tile_w, tile_h = iso_tile_size(zoom)
+    men = LTLMEN_SIZE_BY_ZOOM[max(0, min(zoom, 2))]
+    sx, sy = tile_iso_xy(walker.x, walker.y, origin_x=origin_x, zoom=zoom)
+    return sx + tile_w // 2 - men // 2, sy + tile_h - (men + 2)
 
 
 def load_ltlmen_frames(
@@ -234,21 +243,23 @@ def overlay_walkers(
 ) -> Image.Image:
     """Blit live walkers onto an existing iso city image.
 
-    ``img`` must be the native ``render_iso`` canvas (not the 640×480 fit).
-    Does not call ``city_map.render_iso``. Uses ``tools/decode_pl8.py`` via
-    ``assets.load_pl8_frames`` — never copies a PL8 into git.
+    ``img`` must be the native ``render_iso`` canvas at this ``zoom``
+    (not the 640×480 viewport crop). Does not call ``city_map.render_iso``.
+    Uses ``tools/decode_pl8.py`` via ``assets.load_pl8_frames`` — never
+    copies a PL8 into git.
 
         from app.walkers import overlay_walkers
     """
     if sprites is None:
         sprites, _name = load_ltlmen_frames(game, zoom=zoom)
     n = len(sprites)
+    tile_w, _tile_h = iso_tile_size(zoom)
     if origin_x is None:
         # Match render_iso: origin from map width, not image width.
-        origin_x = iso_origin_x(MAP_W)
-        expected_w = origin_x + (MAP_W - 1) * ISO_HALF_W + ISO_W
+        origin_x = iso_origin_x(MAP_W, zoom=zoom)
+        expected_w = origin_x + (MAP_W - 1) * (tile_w // 2) + tile_w
         if img.width != expected_w:
-            origin_x = (img.width - ISO_W) // 2
+            origin_x = (img.width - tile_w) // 2
 
     out = img.convert("RGBA")
     for walker in drawable_walkers(walkers):
@@ -256,6 +267,6 @@ def overlay_walkers(
         if not (0 <= idx < n):
             continue
         spr = sprites[idx]
-        px, py = walker_iso_xy(walker, origin_x=origin_x)
+        px, py = walker_iso_xy(walker, origin_x=origin_x, zoom=zoom)
         out.paste(spr, (px, py), spr)
     return out

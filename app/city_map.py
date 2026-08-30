@@ -161,10 +161,36 @@ _SHEET_LUT: dict[int, tuple[bytes, str, int]] = {
     SHEET_BUILD1D: (_LUT_BUILD1D, PL8_BUILD1D, 0),
 }
 
-ISO_W = 58
-ISO_H = 30
+# Host zoom 0/1/2 = PL8 digit 1/2/3 (flags 0x0002 / 0x0102 / 0x0202).
+ISO_BY_ZOOM: tuple[tuple[int, int], ...] = (
+    (58, 30),  # HOUSES1 / BUILD1* / CITYFIXT
+    (26, 14),  # HOUSES2 / BUILD2* / CITYFIX2
+    (10, 6),  # HOUSES3 / BUILD3* / CITYFIX3
+)
+ISO_W, ISO_H = ISO_BY_ZOOM[0]
 ISO_HALF_W = ISO_W // 2
 ISO_HALF_H = ISO_H // 2
+
+
+def clamp_zoom(zoom: int) -> int:
+    return max(0, min(int(zoom), len(ISO_BY_ZOOM) - 1))
+
+
+def iso_tile_size(zoom: int = 0) -> tuple[int, int]:
+    return ISO_BY_ZOOM[clamp_zoom(zoom)]
+
+
+def iso_canvas_size(
+    zoom: int = 0, width: int = MAP_W, height: int = MAP_H
+) -> tuple[int, int]:
+    """Native render_iso canvas at this zoom (not the 640×480 viewport)."""
+    tile_w, tile_h = iso_tile_size(zoom)
+    half_w, half_h = tile_w // 2, tile_h // 2
+    origin_x = (width - 1) * half_w
+    return (
+        origin_x + (width - 1) * half_w + tile_w,
+        (width - 1 + height - 1) * half_h + tile_h,
+    )
 
 PREFERRED_SAVES = ("FELIPE01.SAV", "FELIPE02.SAV", "LASTYEAR.SAV")
 
@@ -423,15 +449,22 @@ def _fallback_color(tile: Tile) -> tuple[int, int, int]:
 
 
 def _draw_diamond(
-    img: Image.Image, x: int, y: int, color: tuple[int, int, int]
+    img: Image.Image,
+    x: int,
+    y: int,
+    color: tuple[int, int, int],
+    *,
+    tile_w: int = ISO_W,
+    tile_h: int = ISO_H,
 ) -> None:
+    half_w, half_h = tile_w // 2, tile_h // 2
     draw = ImageDraw.Draw(img)
     draw.polygon(
         [
-            (x + ISO_HALF_W, y),
-            (x + ISO_W - 1, y + ISO_HALF_H),
-            (x + ISO_HALF_W, y + ISO_H - 1),
-            (x, y + ISO_HALF_H),
+            (x + half_w, y),
+            (x + tile_w - 1, y + half_h),
+            (x + half_w, y + tile_h - 1),
+            (x, y + half_h),
         ],
         fill=color,
     )
@@ -443,13 +476,15 @@ def _blit_iso(
     index: int | None,
     sx: int,
     sy: int,
+    *,
+    tile_w: int = ISO_W,
 ) -> bool:
     if frames is None or index is None:
         return False
     if not (0 <= index < len(frames)):
         return False
     spr = frames[index]
-    if spr.width < ISO_W // 2:
+    if spr.width < tile_w // 2:
         return False
     img.paste(spr, (sx, sy), spr)
     return True
@@ -461,11 +496,19 @@ def render_iso(
     *,
     sheets: dict[str, Sequence[Image.Image]] | None = None,
     bg: tuple[int, int, int] = (12, 16, 28),
+    zoom: int = 0,
 ) -> Image.Image:
-    """Blit 80×80 iso tiles. Terrain → CITYFIXT[id+16]; buildings → sheet LUT."""
-    origin_x = (MAP_W - 1) * ISO_HALF_W
-    width = origin_x + (MAP_W - 1) * ISO_HALF_W + ISO_W
-    height = (MAP_W - 1 + MAP_H - 1) * ISO_HALF_H + ISO_H
+    """Blit 80×80 iso tiles. Terrain → CITYFIXT[id+16]; buildings → sheet LUT.
+
+    ``zoom`` 0/1/2 picks diamond 58×30 / 26×14 / 10×6. Sheet keys stay
+    HOUSES1 / BUILD1A–D / CITYFIXT; the caller loads the matching PL8 digit.
+    Does not change Tile.unpack.
+    """
+    tile_w, tile_h = iso_tile_size(zoom)
+    half_w, half_h = tile_w // 2, tile_h // 2
+    origin_x = (MAP_W - 1) * half_w
+    width = origin_x + (MAP_W - 1) * half_w + tile_w
+    height = (MAP_W - 1 + MAP_H - 1) * half_h + tile_h
     img = Image.new("RGBA", (width, height), (*bg, 255))
     cityfixt: Sequence[Image.Image] | None = None
     if sheets is not None:
@@ -476,10 +519,12 @@ def render_iso(
     for y in range(city.height):
         for x in range(city.width):
             tile = city.tile(x, y)
-            sx = origin_x + (x - y) * ISO_HALF_W
-            sy = (x + y) * ISO_HALF_H
+            sx = origin_x + (x - y) * half_w
+            sy = (x + y) * half_h
             if tile.is_terrain:
-                if _blit_iso(img, cityfixt, tile.cityfixt_index(), sx, sy):
+                if _blit_iso(
+                    img, cityfixt, tile.cityfixt_index(), sx, sy, tile_w=tile_w
+                ):
                     continue
             else:
                 spec = tile.building_sprite()
@@ -488,7 +533,9 @@ def render_iso(
                     frames = sheets.get(name) if sheets is not None else None
                     if name == PL8_CITYFIXT and frames is None:
                         frames = cityfixt
-                    if _blit_iso(img, frames, idx, sx, sy):
+                    if _blit_iso(img, frames, idx, sx, sy, tile_w=tile_w):
                         continue
-            _draw_diamond(img, sx, sy, _fallback_color(tile))
+            _draw_diamond(
+                img, sx, sy, _fallback_color(tile), tile_w=tile_w, tile_h=tile_h
+            )
     return img
