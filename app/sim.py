@@ -1,12 +1,20 @@
 """Host stand-in for one city sim pulse. Not walkers_tick.
 
-Ghidra (findings/ghidra_sim.md):
+Ghidra (findings/ghidra_sim.md, findings/ghidra_walkers_tick.md):
 
     view_frame       0x3CF9A   display frame (draw + optional sim)
     sim_tick_due     0x3E4B9   speed / pause gate
     city_sim_phase   0x3F60C   one [0x1026A8] slot (evolve / paint / flood)
-    walkers_tick     0x459D0   201 × 58 dispatch type → state → step
+    walkers_tick     0x459D0   201 × 58: type 1-7 → state 0-12 → roam/path/step
     actors26_tick    0x45A7A   province pool (skipped here)
+
+A **real** walkers_tick (do not invent here): ++sim_tick_mod64 wrap 64,
+clamp type7/type3 latches, then per live slot walker_state_fn then
+walker_set_sprite then life_phase++ every 64 ticks (cap → state 2/free).
+Movement is walker_anim_roam / walker_anim_path → walker_step, which
+relinks tile[+7]/[+8]. Type 3 barbarian / type 7 rioter. State 9 seek
+and path-fail helpers are still unread — do **not** replace this stub
+with guessed AI.
 
 This module only advances walk_frame / sprite_id in the 58-byte records
 so the iso map can animate. It does **not** call walker_type_fn,
@@ -137,7 +145,8 @@ def on_sim_step(map, walkers) -> int:
     After this returns, re-run overlay_walkers on a **terrain-only** image.
     Do not blit onto a cache that already has people.
 
-    This is **not** walkers_tick (no type/state/step). Optional later:
+    This is **not** walkers_tick (no type/state/step/tile +7/+8).
+    Real pulse: findings/ghidra_walkers_tick.md. Optional later:
     decrement tile[+16] while +3 bit7 — see _TILE_OFF_FIRE. No +17 flood.
     """
     _ = map  # reserved: --tile[+16] fire timer (FUN_00041dd4), not +17 flood

@@ -80,7 +80,7 @@ Overlay filter `[0x117A59]` (SavChunk 1) also dispatches `PTR_LAB_00099b3c[overl
 | `0x56–0x5D` | `FUN_0003fdd0` | `tile_or_radius` onto **+13** and **+14** from `0xBE` / `0xFA` / `0xFC–0xFF` |
 | `0x5E–0x65` | `FUN_000401e7` | paint **+14** (+ some +10) from `0xE3`/`0xE4`/`0xC0`/`0xBF–0xCA` / industry / `0xFC–0xFF` |
 | `0x66–0x6D` | `FUN_0004034b` | paint **+12** from `0xE5–0xF0`; also +13 from `0xF3`/`0xF4` |
-| `0x6E–0x75` | `FUN_0003fef7` | more `tile_or_radius` (messy decompile; farms `0xD7–0xDA` / `0xBE`) |
+| `0x6E–0x75` | `FUN_0003fef7` | more `tile_or_radius` (messy decompile; Well `0xD7–0xDA` +13 `0x02` r=2 / `0xBE`) |
 | `0x76–0x7D` | `FUN_00040695` | accumulate **+15** land value (`FUN_0006da0e`) |
 | `0x7E–0x8D` | `FUN_00040d08` | housing-target grade → **+15**; reads **+17** (`> 15`) |
 | `0x9E–0xA1` | `FUN_00041dd4` | housing immigrant score; reads **+14 & 3**; decrements **+16** on flag80 tiles |
