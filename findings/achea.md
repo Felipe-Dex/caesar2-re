@@ -50,11 +50,12 @@ Visible city (developed, not a Novice stamp):
 |---:|---|---:|---|
 | **28** | `city_treasury` | **28561** | **28561 Dn** |
 | **25** | signed i32 | **−187** | **187 BC** |
+| **26** | month 0–11 | **0** | **January** |
 | 5 | old “year-BC” hypothesis | **65** | does **not** match 187 |
 | 16 | difficulty | **2** | not on HUD |
 | 0 | view kind | 0 | city view |
 
-**Year is chunk 25 as a signed BC year, not chunk 5.** FELIPE / A–C notes that treated chunk 5 as year-BC do not survive this save. Month (January) was not pinned this pass.
+**Year is chunk 25 as a signed BC year, not chunk 5.** Month is chunk **26** = **0** (January). Full note: `findings/sav_date.md`.
 
 No ASCII `"Achea"` in the file. The city name lives in the filename / career slot, not as a readable string in the 500-chunk stream.
 

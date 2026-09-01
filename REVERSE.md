@@ -649,7 +649,7 @@ Done this phase: PL8 decoder 0–4 (incl. zoom 2/3); export `images/`; `C2.ENG`;
 | E34 | `CITYFIXT.256 == PROVFIXT.256`; `CITY1 == CITY2 == VIEW1 == PROV1`; `BATT1 == BATT2` | fact |
 | E35 | Sheets: `RO2SWDA` legionary + *scutum*; `GM2SWDA` brown tunic + round shield; `HOUSES1` tents→aqueducts; `TUT_01A` 640×480 panel | fact |
 | H5 | Digit 2/3 on battle PL8 = zoom | confirmed (E33; exception `MY_STDS3`) |
-| H6 | `.SAV` u32@8 (chunk 5, VA `0x102BA4`) = year BC | hypothesis |
+| H6 | `.SAV` u32@8 (chunk 5, VA `0x102BA4`) = year BC | **rejected** — year is chunk **25** (`0x102AA0`, signed); month chunk **26**. `findings/sav_date.md` |
 | H7 | `C2MODEL[790:990]` = ranks × difficulty (`99` = empty slot) | confirmed as table shape (E40); FAQ names hypothesized |
 | E36 | 14/14 `.SMK` = `SMK2`; 13× 320×152 @ 12 fps + `INTRO` 640×480 @ 12 + `MESSAGE` @ 14.08; audio `smackaud` 22050 Hz mono u8; 0 AVI/FLC/FLI; ffmpeg 14/14 | fact |
 | E37 | `PS.EXE` = MZ stub + BW `VMM.EXP` + BW `4GWPRO.EXP` + tiny MZ + Watcom LE `c2_x` at `0x037D4C`; CS:EIP `0x72500`; 2 objects; 28451 fixups | fact |

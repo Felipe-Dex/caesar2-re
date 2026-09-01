@@ -80,11 +80,11 @@ def _hud_lines(ctx: BootContext, *, map_mode: bool = False) -> list[str]:
             lines.append(f"C2.ENG[{hit[0]}]: {shown[:70]}")
     if map_mode:
         lines.append(
-            "Esc sair   3 mapa   Space/T passo   +/- zoom   setas/arrastar pan   Home   A raw"
+            "Esc sair   3 mapa   Space/T tick   +/- zoom   setas/arrastar pan   Home   A raw"
         )
     else:
         lines.append(
-            "Esc quit   1 title   2 cityfixt   3 map   Space/T step   A raw"
+            "Esc quit   1 title   2 cityfixt   3 map   Space/T tick   A raw"
         )
     return lines
 
@@ -254,7 +254,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
         blit(map_status(n_walkers, None if zoom in map_cache else None))
 
     def sim_step() -> None:
-        """Space / T — fake walker frame. Pan/zoom stay with the camera keys."""
+        """Space / T — one walkers_tick 0x459D0. Pan/zoom stay with the camera keys."""
         from app.sim import on_sim_step
         from app.walkers import drawable_walkers
 
@@ -266,8 +266,9 @@ def show(ctx: BootContext, *, game: Path) -> None:
             canvas = ensure_map(zoom)
             ctx.image = canvas
         blit(
-            f"sim step  advanced={n}  drawn={len(drawable_walkers(ctx.walkers))}  "
-            f"(++walk_frame, not walkers_tick 0x459D0)"
+            f"sim tick  moved={n.stepped}  frames={n.animated}  "
+            f"live={n.live}  freed={n.freed}  drawn={len(drawable_walkers(ctx.walkers))}  "
+            f"(walkers_tick 0x459D0)"
         )
 
     def set_zoom(new_zoom: int) -> None:

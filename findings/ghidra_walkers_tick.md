@@ -1,6 +1,6 @@
 # Ghidra walk — real `walkers_tick` `0x459D0`
 
-Static analysis of the user’s retail `c2_x` image (Ghidra 12.1.3 + GhidraMCP HTTP `127.0.0.1:8080`, plus Capstone on `ghidra_work/c2_x.bin`). No EXE in git. Continues `findings/ghidra_walkers.md` / `ghidra_sim.md`. **Did not wait for Palatine A/B or Query screenshots.** Host `app/sim.py` Space/T is still a **fake `walk_frame` bump**, not this function.
+Static analysis of the user’s retail `c2_x` image (Ghidra 12.1.3 + GhidraMCP HTTP `127.0.0.1:8080`, plus Capstone on `ghidra_work/c2_x.bin`). No EXE in git. Continues `findings/ghidra_walkers.md` / `ghidra_sim.md`. **Did not wait for Palatine A/B or Query screenshots.** Host Space/T now calls `app.walker_tick.walkers_tick` (see `findings/app_tick.md`). Not `city_sim_phase`.
 
 **Result:** one real tick increments a 64-phase clock, latches “type 7 / type 3 were alive”, then for each of 201 records dispatches **type 1–7 → state 0–12**. Movement is `walker_anim_roam` / `walker_anim_path` → `walker_step`, which unlinks/relinks **tile[+7]/[+8]**. Types **3 and 7** are the only hunted pair (`walker_find_type3or7` `0x47D1A`). Spawn is now found: **type 3 = barbarian** from a province actor26 hitting tile id `0x92`; **type 7 = rioter** from a housing score overflow in `FUN_00041dd4`. Type stubs at `0x45AFE`+ are still **not** Ghidra functions (gap after `actors26_tick`).
 
@@ -8,7 +8,7 @@ Static analysis of the user’s retail `c2_x` image (Ghidra 12.1.3 + GhidraMCP H
 
 ## 1. What one real tick does
 
-Called from `view_frame` `0x3CF9A` after `city_sim_phase`, once per sim pulse (1 or 4 catch-up). Body `0x459D0`–`0x45A79` (decompiled).
+Called from `view_frame` `0x3CF9A` after `city_sim_phase`, once per sim pulse (1 or 4 catch-up) — **city and province share this pulse** (`findings/view_modes.md`). Body `0x459D0`–`0x45A79` (decompiled).
 
 ```
 ++sim_tick_mod64 [0x117B1C]; if > 0x3F → 0          ; 64-tick life clock
@@ -38,7 +38,7 @@ if sim_tick_mod64 == 0:
 
 Type 3 also writes `[0x102CB4]=[0x102674]=2`. Type 7 writes `[0x102CB4]=[0x10266C]=2`. The next tick’s clamp turns those **2 → 1**, so states 7/8 see “a barbarian/rioter existed last pulse” (same-pulse if the threat slot is processed first).
 
-**Host Space/T does none of this.** It only `++rec[+0x1F]` and rewrites `sprite_id`.
+Host Space/T now runs this pulse (`app/walker_tick.py`). Gaps in §9 are still stubbed — see `findings/app_tick.md`.
 
 ---
 
@@ -253,7 +253,7 @@ Comments set on `walkers_tick` and `walker_find_type3or7`. Type/state stubs stil
 - `FUN_00058C87` message ids `0x53` / `0x57` not mapped to C2.ENG lines.
 - `walker_pick_pad_facing` C is messy (Watcom); listing is the source of truth.
 - No Palatine 1-house A/B, so tile[+12]/[+14]/[+16]/[+17] vs walker scores still want a save pair.
-- Host must **not** grow a fake `walker_step` from this note — dest_ok / path helpers are incomplete.
+- Host `walker_step` is in `app/walker_tick.py`; dest_ok / path-fail / state-9 helpers are still incomplete (see `app_tick.md`).
 
 ---
 

@@ -86,11 +86,11 @@ Outer loop (`c2_main`):
 | `[0x117A8D]` | Meaning (from immediates + callees) |
 |---|---|
 | **0** | **City.** 80×80 (`0x50`), 480-high view. `gfx_load_zoom_set`, **`city_sfx_bind_wavs` `0x12F2A`** (`gardenb.wav` … `temple1.wav`), `FUN_0005AC1E`. |
-| **1** | **Province.** 60-ish metrics (`0x3C`). `FUN_00013187`, `FUN_0005AD67`. |
+| **1** | **Province.** 60-ish metrics (`0x3C`). `province_sfx_bind_wavs` `0x13187`, `province_view_enter_gfx` `0x5AD67`. |
 | **2** | **Battle.** `FUN_00010AC9` (not the city zoom set), `FUN_00013351`, `FUN_0005AE68`. |
 
 4. Inner loop: `FUN_0003CF9A` (input/UI; large — not fully read) then **`FUN_00010409`** (if `[0x102AA4]==4`, writes into chunk-14 BSS `0xD94FC` — combat / special).
-5. If `[0x102AA4]==1` → `FUN_00059A15` (not decompiled this pass; forum / empire candidate).
+5. If `[0x102AA4]==1` → **`forum_view` `0x59A15`** (`findings/forum.md`). Mapa das 3 views: **`findings/view_modes.md`**.
 6. `music_load_xmi` again if not quitting.
 
 **New city path:** `start_city_assignment` → `city_view_reset` `0x106BB` → **`init_new_city` `0x10565`**.

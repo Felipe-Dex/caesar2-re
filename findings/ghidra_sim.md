@@ -2,7 +2,7 @@
 
 Static analysis of the user’s retail `c2_x` image (Ghidra 12.1.3 + GhidraMCP HTTP `127.0.0.1:8080`). No EXE in git. Continues `findings/ghidra_city.md`, `ghidra_walkers.md`, `ghidra_tile.md`.
 
-**Result:** a live city frame is `view_frame` `0x3CF9A` (real body ends at the first `RET` `0x3D3E5`; Ghidra still merges to `0x10CF67`). Each display frame always runs the timer + draw. **Sim work** runs only when `sim_tick_due` `0x3E4B9` returns 1, then **1 or 4** catch-up pulses. One pulse is: unnamed `0x27F31` → `rng_clock` `0x2804C` → **`city_sim_phase` `0x3F60C`** (one `[0x1026A8]` slot, wrap `0xD6`) → **`walkers_tick` `0x459D0`** → **`actors26_tick` `0x45A7A`**. Host `app/sim.py` is a **fake frame increment**, not `walkers_tick`.
+**Result:** a live city **or province** frame is `view_frame` `0x3CF9A` (real body ends at the first `RET` `0x3D3E5`; Ghidra still merges to `0x10CF67`). Who runs in city vs province vs forum: **`findings/view_modes.md`**. Each display frame always runs the timer + draw. **Sim work** runs only when `sim_tick_due` `0x3E4B9` returns 1, then **1 or 4** catch-up pulses. One pulse is: **`anim_phase_clocks` `0x27F31`** → `rng_clock` `0x2804C` → **`city_sim_phase` `0x3F60C`** (one `[0x1026A8]` slot, wrap `0xD6`) → **`walkers_tick` `0x459D0`** → **`actors26_tick` `0x45A7A`**. Host `app/sim.py` is a **fake frame increment**, not `walkers_tick`.
 
 GhidraMCP this pass: decompiled `sim_tick_due`, `walkers_tick`, `actors26_tick`, `FUN_0003f60c` (renamed **`city_sim_phase`**). `view_frame` decompile timed out (bad bounds). CALL list below is the listing in `ghidra_city.md` plus the phase switch confirmed in C.
 
@@ -31,10 +31,10 @@ Ghidra function bounds are wrong. Stop at **`0x3D3E5`**.
 | 2 | `0x27372` | `timer_delta_ms` | always; `dt` → `[0xC4CD0]` |
 | 3 | `0x3E4B9` | **`sim_tick_due`** | always; 0 = skip the pulse block |
 | 4… | (table §3) | **one sim pulse × 1 or 4** | only if due |
-| 5 | `0x25F26` | `FUN_00025f26` | always (input) |
-| 6 | `0x25C13` | `FUN_00025c13` | always (input) |
+| 5 | `0x25F26` | `input_poll_cursor` | always (input) |
+| 6 | `0x25C13` | `input_poll_buttons` | always (input) |
 | 7 | `0x360F7` | `city_map_draw` | city (`[0x117A8D]==0`) |
-| 8 | `0x39013` | `FUN_00039013` | province && `[0xCCB09]!=5` |
+| 8 | `0x39013` | `province_map_draw` | province && `[0xCCB09]!=5` |
 | 9 | `0x6189D` / `0x61A67` / `0x589B5` / … | UI / money panels | always (not stubbed) |
 | 10 | `0x25D7A` | `FUN_00025d7a` | always |
 | 11 | `0x28DCE` | `FUN_00028dce` | always |
@@ -48,7 +48,7 @@ Do **not** treat draw as a sim tick. `city_map_draw` only bumps anim counters an
 
 ```
 loop catch-up (1 if [0xC45A0]==0 else 4):
-  CALL 0x27F31              ; FUN_00027f31 — unnamed pre-rng (not opened)
+  CALL anim_phase_clocks 0x27F31   ; mod 4/8/16/32/64/128/256 (not AI)
   CALL rng_clock  0x2804C   ; [0xC2070] = rand & 0x7F
   CALL city_sim_phase 0x3F60C
   if view_submode ∈ {2, 3}: RET   ; abort the rest of view_frame
@@ -106,7 +106,7 @@ Row cursor `[0x10265C]` is written from the phase (SavChunk 23). **Host does not
 | `0xD1` | `FUN_00043B2E` | unnamed |
 | `0xD2` | `walkers_relink_tiles` `0x2AFCB`, `FUN_0002B0A2` | rebuild tile +7/+8 |
 | `0xD3` | `FUN_0003E5E3` | overlay dispatch |
-| wrap `> 0xD6` | `FUN_0003FBCF`, `FUN_000293EC` | cycle bookkeeping |
+| wrap `> 0xD6` | **`calendar_advance` `0x3FBCF`**, `FUN_000293EC` | month/year (`sav_date.md`) |
 
 Placement / water flood are **out of scope** for the v0 host stub.
 
@@ -131,7 +131,7 @@ for walker_iter [0x1156F8] = 0 .. 200:
 
 Type handlers (not this stub): `walker_state_fn[rec[+0x10]]`, `walker_set_sprite`, life `rec[+0x24]++` every 64 ticks. State 2 → free. State 3/4 roam + paint +10. `walker_step` `0x488DC` actually moves the record.
 
-**Host `step_walkers` does none of that.** It only `++rec[+0x1F]` (wrap 0…15) and rewrites `rec[+0x34]` so `overlay_walkers` shows a new LTLMEN frame.
+Host Space/T now runs `walkers_tick` (`app/walker_tick.py`). See `findings/app_tick.md`.
 
 ### Record bytes the stub touches
 

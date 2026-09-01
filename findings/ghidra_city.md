@@ -2,6 +2,8 @@
 
 Static analysis of the user’s retail `c2_x` image (Ghidra 12.1.3 + GhidraMCP HTTP `127.0.0.1:8080`). No EXE in git. Continues `findings/ghidra_walk.md`.
 
+Mapa cidade vs província vs forum: **`findings/view_modes.md`**.
+
 **Result:** the per-frame function while a view is live is **`view_frame` @ `0x3CF9A`** (real body **`0x3CF9A`–`0x3D3E5`**). Ghidra’s function bounds are wrong (`0x3CF9A`–`0x10CF67`); redefine the function at the first `RET`. City sim ticks are **`walkers_tick` `0x459D0`** and **`actors26_tick` `0x45A7A`**. Starting money is **`city_treasury` @ `0x102AAC`** from a **15-int** C2MODEL header embed at `0x96F1B` (not a 1090-int copy). The 128 000-byte block at `0xE2FBC` is **80×80 tiles × 20 bytes (AoS)**, not 20 SoA planes.
 
 ---
@@ -13,7 +15,7 @@ One-shot. Reads view kind **`[0x117A8D]`** (SavChunk 0).
 | `[0x117A8D]` | Mode | Metrics set | After zoom / SFX |
 |---|---|---|---|
 | **0** | **City** | 80×80 (`0x50`), 480-high (`0x1E0`) | `city_sfx_bind_wavs` `0x12F2A`, **`city_view_enter_gfx` `0x5AC1E`** |
-| **1** | **Province** | `0x3C` (60) | `FUN_00013187`, `FUN_0005AD67` |
+| **1** | **Province** | `0x3C` (60) | `province_sfx_bind_wavs` `0x13187`, `province_view_enter_gfx` `0x5AD67` |
 | **2** | **Battle** | `0x34` | `FUN_00010AC9`, `FUN_00013351`, `FUN_0005AE68` |
 
 Also: `zoom_set_params` / `gfx_load_zoom_set` (city+province), battle uses `FUN_0002974F` + `FUN_00010AC9`. Then `FUN_0001107C`, `FUN_0002FA70`, return. No frame loop here.
@@ -32,7 +34,7 @@ while (!session && !quit && (already || (view_frame(), !session)))
     if ([0x102AA4] != 0) session = 1;
 ```
 
-`[0xC45A0]` is game speed / catch-up (0 → 1 sim step; ≠0 → 4). `[0x102AA4]` **`view_submode`**: 0 = play, 1 = forum/empire (jumps out; `c2_main` then `FUN_00059A15`), 2/3 = early return, 4 = combat post-step.
+`[0xC45A0]` is game speed / catch-up (0 → 1 sim step; ≠0 → 4). `[0x102AA4]` **`view_submode`**: 0 = play, 1 = forum/empire (jumps out; `c2_main` then **`forum_view` `0x59A15`**), 2/3 = early return, 4 = combat post-step.
 
 ### Real body (listing)
 
@@ -44,15 +46,15 @@ CALL timer_delta_ms  0x27372   ; DOS clock; dt → [0xC4CD0]
 CALL sim_tick_due    0x3E4B9   ; speed gate from dt + [0x9CE50]
   if due:
     loop 1 or 4 times:
-      CALL 0x27F31
+      CALL anim_phase_clocks 0x27F31
       CALL rng_clock 0x2804C   ; [0xC2070] = rand & 0x7F
-      CALL 0x3F60C
+      CALL city_sim_phase 0x3F60C
       if view_submode is 2 or 3: RET
       CALL walkers_tick  0x459D0
       CALL actors26_tick 0x45A7A
-CALL 0x25F26, 0x25C13          ; input
+CALL input_poll_cursor 0x25F26, input_poll_buttons 0x25C13
 if city  ([0x117A8D]==0): CALL city_map_draw 0x360F7
-if province && [0xCCB09]!=5:  CALL 0x39013
+if province && [0xCCB09]!=5:  CALL province_map_draw 0x39013
 … UI / panels (0x6189D money read, 0x61A67, 0x589B5, …)
 CALL 0x25D7A
 CALL 0x28DCE
@@ -168,7 +170,7 @@ Cross-check: `notes/ps_sav_chunks.tsv`. Trailer is **not** a table slot: after 5
 | 1 | `0x117A59` | 1 | overlay / filter; tested in `city_map_draw` |
 | 2–3 | `0x117A8B` | 1+1 | flags; `c2_main` zeros |
 | 4 | `0x102BE0` | 4 | camera-ish; `apply_regions_map` zeros; `view_frame` uses for a blit |
-| **5** | `0x102BA4` | 4 | `city_view_reset` = **40**; save u32@8 year-BC **hypothesis** (50/29/33) |
+| **5** | `0x102BA4` | 4 | `city_view_reset` = **40**; **not** the HUD year (see `findings/sav_date.md`) |
 | **6** | `0x102BA0` | 4 | `city_view_reset` = **80** |
 | **7** | `0x114500` | 4550 | **`actor26_pool`** 26×175; `actors26_tick` |
 | **8** | `0x1107A4` | 11658 | **`walker_pool`** 201×58; `walkers_tick` |
@@ -180,7 +182,9 @@ Cross-check: `notes/ps_sav_chunks.tsv`. Trailer is **not** a table slot: after 5
 | **14** | `0xD94FC` | 28800 | **province tiles 60×60×8** (`prov_tiles_60x60x8`) |
 | 15 | `0x103B68` | 100 | unknown |
 | **16** | `0x9CE80` | 1 | **`difficulty`** 0–4 (indexes C2MODEL header) |
-| **25** | `0x102AA0` | 4 | new assignment **−300** |
+| **25** | `0x102AA0` | 4 | **`city_year`** signed i32; HUD year (**−187** = 187 BC). New assignment **−300** |
+| **26** | `0x102A88` | 4 | **`city_month`** 0–11 (0=January). HUD `C2.ENG` packed months |
+| 27 | `0x102A74` | 4 | calendar gate; **0** on all sampled saves (see `sav_date.md`) |
 | **28** | `0x102AAC` | 4 | **`city_treasury`** |
 | 29 | `0x102A7C` | 4 | init = 5 |
 | 30 | `0x102AA8` | 4 | init = 5 |
@@ -215,6 +219,8 @@ Slots 9–11 size-factor names are **hypotheses** until a loop with those stride
 | `province_goods_setup` / `climate_lookup_init` | `0x577E4` / `0x53B83` |
 | `city_view_enter_gfx` / `combat_mode4_step` | `0x5AC1E` / `0x10409` |
 | `city_treasury` / `difficulty` / `view_submode` | `0x102AAC` / `0x9CE80` / `0x102AA4` |
+| `forum_view` / `calendar_advance` | `0x59A15` / `0x3FBCF` |
+| `city_year` / `city_month` | `0x102AA0` / `0x102A88` |
 | `c2model_i0_diff_scalars` / `_i5_start_money` / `_i10_money_deduct` | `0x96F1B` / `0x96F2F` / `0x96F43` |
 | `walker_pool` / `actor26_pool` / `prov_tiles_60x60x8` | `0x1107A4` / `0x114500` / `0xD94FC` |
 | `walker_spawn` / `walker_free` / `walker_step` | `0x2A7EF` / `0x2AECB` / `0x488DC` |

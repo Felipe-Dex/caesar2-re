@@ -29,9 +29,9 @@ def _print_status(ctx) -> None:
     for note in ctx.notes:
         print(f"  {note}")
     print(
-        "sim           : Space/T → "
+        "sim           : Space/T -> "
         f"{on_sim_step.__module__}.on_sim_step "
-        "(fake walk_frame; not walkers_tick 0x459D0)"
+        "(walkers_tick 0x459D0; not city_sim_phase)"
     )
 
 
@@ -39,7 +39,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Caesar II v0 — load original files, show one PL8. "
-            "Space/T = on_sim_step (fake walker frame; not walkers_tick)."
+            "Space/T = walkers_tick 0x459D0 (not city_sim_phase)."
         )
     )
     parser.add_argument(
