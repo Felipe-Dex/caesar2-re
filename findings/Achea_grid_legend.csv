@@ -1,22 +1,22 @@
 N,id_hex,w,h,x0,y0,x1,y1,count,nome,nota
-98,0xE9,3,3,35,38,37,40,9,Desconhecido 98,olha no jogo
-110,0xEA,3,3,35,41,37,43,9,Desconhecido 110,olha no jogo
-59,0xA3,3,2,44,21,46,22,4,Desconhecido 59,olha no jogo
+98,0xE9,3,3,35,38,37,40,9,Desconhecido 98,irmão de 0xEA Circus (§11); walker não nomeou
+110,0xEA,3,3,35,41,37,43,9,Circus,walker perto HIGH; peça do par 0xE9+0xEA
+59,0xA3,3,2,44,21,46,22,4,Shrine 2,walker perto HIGH (§11 Shrine 2)
 92,0xB0,2,2,61,35,62,36,4,Desconhecido 92,olha no jogo
 140,0xAE,2,2,56,44,57,45,4,Desconhecido 140,olha no jogo
 171,0xB0,2,2,12,70,13,71,4,Desconhecido 171,olha no jogo
-60,0xA3,2,2,52,21,53,22,3,Desconhecido 60,olha no jogo
-33,0xA3,2,1,49,17,50,17,2,Desconhecido 33,olha no jogo
-139,0xA3,2,1,51,44,52,44,2,Desconhecido 139,olha no jogo
-21,0xA3,1,1,50,10,50,10,1,Desconhecido 21,olha no jogo
-23,0xA3,1,1,46,11,46,11,1,Desconhecido 23,olha no jogo
-29,0xA3,1,1,48,14,48,14,1,Desconhecido 29,olha no jogo
-65,0xA3,1,1,49,22,49,22,1,Desconhecido 65,olha no jogo
-76,0xA3,1,1,58,25,58,25,1,Desconhecido 76,olha no jogo
-90,0xA3,1,1,62,34,62,34,1,Desconhecido 90,olha no jogo
-93,0xA3,1,1,53,36,53,36,1,Desconhecido 93,olha no jogo
-101,0xA3,1,1,42,39,42,39,1,Desconhecido 101,olha no jogo
-108,0xA3,1,1,53,40,53,40,1,Desconhecido 108,olha no jogo
-128,0xA3,1,1,61,42,61,42,1,Desconhecido 128,olha no jogo
-129,0xA3,1,1,63,42,63,42,1,Desconhecido 129,olha no jogo
+60,0xA3,2,2,52,21,53,22,3,Shrine 2,walker perto HIGH (§11 Shrine 2)
+33,0xA3,2,1,49,17,50,17,2,Shrine 2,walker perto HIGH (§11 Shrine 2)
+139,0xA3,2,1,51,44,52,44,2,Shrine 2,walker perto HIGH (§11 Shrine 2)
+21,0xA3,1,1,50,10,50,10,1,Shrine 2,walker perto HIGH (§11 Shrine 2)
+23,0xA3,1,1,46,11,46,11,1,Shrine 2,walker perto HIGH (§11 Shrine 2)
+29,0xA3,1,1,48,14,48,14,1,Shrine 2,walker perto HIGH (§11 Shrine 2)
+65,0xA3,1,1,49,22,49,22,1,Shrine 2,walker perto HIGH (§11 Shrine 2)
+76,0xA3,1,1,58,25,58,25,1,Shrine 2,walker perto HIGH (§11 Shrine 2)
+90,0xA3,1,1,62,34,62,34,1,Shrine 2,walker perto HIGH (§11 Shrine 2)
+93,0xA3,1,1,53,36,53,36,1,Shrine 2,walker perto HIGH (§11 Shrine 2)
+101,0xA3,1,1,42,39,42,39,1,Shrine 2,walker perto HIGH (§11 Shrine 2)
+108,0xA3,1,1,53,40,53,40,1,Shrine 2,walker perto HIGH (§11 Shrine 2)
+128,0xA3,1,1,61,42,61,42,1,Shrine 2,walker perto HIGH (§11 Shrine 2)
+129,0xA3,1,1,63,42,63,42,1,Shrine 2,walker perto HIGH (§11 Shrine 2)
 138,0xA2,1,1,45,44,45,44,1,Desconhecido 138,olha no jogo

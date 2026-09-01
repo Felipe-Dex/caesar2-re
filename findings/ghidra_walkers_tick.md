@@ -48,15 +48,15 @@ Confirmed bytes: `[0]=0x45AFD` (unused), then 1…7 as below. Sprite via `walker
 
 | Type | VA | Sprite base | Life cap | Typical state (SAV / spawn) | Role (confidence) |
 |---:|---|---:|---:|---|---|
-| 1 | `0x45AFE` | `0x36` | 18 | 3 | Industry coverage. Emit `0x4118B` ids **0xAE–0xB9**. OR **0x0C** into tile[+10] r=3 |
-| 2 | `0x45B53` | `0x1B` | 30 | 4 | Market-ish. Emit `0x41719` ids **0xFC–0xFF**. OR **0xC0**; writes home tile[+9] from scores |
+| 1 | `0x45AFE` | `0x36` | 18 | 3 | **Forum Clerk.** Industry/forum emit `0x4118B` ids **0xAE–0xB9**. OR **0x0C** into tile[+10] r=3 |
+| 2 | `0x45B53` | `0x1B` | 30 | 4 | **Market Trader.** Emit `0x41719` ids **0xFC–0xFF**. OR **0xC0**; writes home tile[+9] from scores |
 | **3** | `0x45BA8` | `0xA6` | **72** | 5 (after wait) | **Barbarian.** Sets threat latch. Spawn §5. Longest life |
-| 4 | `0x45C0E` | `0x6E` | 35 | 6 or 7 | Soldier / escort. `0xBF` if a 3/7 is nearby; also `0xE4` |
-| 5 | `0x45C63` | `0x51` | 20 | 8 → 9 | Prefect-ish. Building `0xE3`. Hunts 3/7 or seeks (state 9) |
-| 6 | `0x45CB8` | 0 | 30 | 10 | Second emit in `0x41719`. Roam + home **0xFA** goods nibble |
+| 4 | `0x45C0E` | `0x6E` | 35 | 6 or 7 | **Soldier** / escort. `0xBF` if a 3/7 is nearby; also `0xE4` |
+| 5 | `0x45C63` | `0x51` | 20 | 8 → 9 | **Vigile** (Prefecture walker). Building `0xE3`. Hunts 3/7 or seeks (state 9) |
+| 6 | `0x45CB8` | 0 | 30 | 10 | **Worker.** Second emit in `0x41719`. Roam + home **0xFA** goods nibble |
 | **7** | `0x45D0A` | `0x89` or **0 if state==12** | 20 | 11 ↔ 12 | **Rioter.** Sets threat latch. Spawn §5. `walker_set_sprite_t7` `0x47A95` unless leaving (state 12) |
 
-C2 menu names for 1/2/4/5/6 are **still not from strings**. 3 = barbarian and 7 = rioter are the user’s labels **plus** spawn sites (province invasion / housing overflow) and `rioters.smk` on disk.
+Query titles for **1 / 2 / 4 / 5 / 6** are from Achea Q&A (`findings/achea_walkers.md`). 3 = barbarian and 7 = rioter are spawn-backed (province invasion / housing overflow) plus `rioters.smk`; none on ACHEA23.
 
 Speed tables (index = type). `walker_anim_*` uses `0x9673E[type]` when `rec[+0x23]==0` (road spawn) and `0x96735[type]` when `+0x23!=0` (building pad). Types 1–7 are **all 2** on road and **all 1** on pad — per-type columns do not differ. Higher value = more ticks per `walk_frame`.
 
@@ -244,9 +244,27 @@ Comments set on `walkers_tick` and `walker_find_type3or7`. Type/state stubs stil
 
 ---
 
+## 8b. Achea Q&A
+
+User Query'd the first Achea walkers a bit **left** of the suggested cells (Plaza 1 around (47,7)…(52,9), not the x≈70 civic column). Same types.
+
+| Type | Query title | Notes |
+|---:|---|---|
+| 1 | Forum Clerk | C2.ENG [66] ` - Forum Clerk`. Casa annotated Forum |
+| 2 | Market Trader | Home Market 3 |
+| 4 | Soldier | Casa annotated Barracks |
+| 5 | Vigile | Casa annotated Praefecture |
+| 6 | Worker | Home Winery (Gaius Pernix / Iunius Maior) |
+| 3, 7 | — | Still missing; not in this save |
+
+Latin person names and truncated quotes: `findings/achea_walkers.md`.
+
+---
+
 ## 9. Honest gaps
 
-- Type 1/2/4/5/6 C2.ENG names — not proven. 3/7 are spawn-backed, not string-backed (only `rioters.smk`).
+- Type 3 / 7 Query titles — no live slots on ACHEA23. 3/7 remain spawn-backed (`rioters.smk`), not Query-backed.
+- Full Query quotes for 1/2/4/5/6 — print is cropped.
 - State 9 callees `0x4A716` / `0x4A76D` / `0x4A397` / `0x4A57F` — fire vs building vs water not opened.
 - `walker_anim_path` fail path (`0x2B54A`, `0x2BA63`, `0x48A49`, `0x483D6`) unread.
 - Who writes `[0x102628]` / `[0x10262C]` (forum? map edge? invasion rally?).

@@ -41,7 +41,7 @@ Handlers are thin: `walker_state_fn[rec[+0x10]]()`, then `walker_set_sprite(base
 | 6 | `0x45CB8` | 0 | 30 | |
 | 7 | `0x45D0A` | `0x89` or 0 if state==12 | 20 | `[0x102CB4]=[0x10266C]=2`. Prefects/engineers/soldiers candidate with type 3 |
 
-C2 names (immigrant / trader / prefect / …) are **not** proven. Types 3 and 7 are the only ones `FUN_00047d1a` hunts in a radius.
+C2 Query titles for 1/2/4/5/6 are now from **Achea Q&A** (below). Types 3 and 7 are the only ones `FUN_00047d1a` hunts in a radius.
 
 Live SAV pairing (FELIPE01/02 / LASTYEAR): type **1→state 3**, **2→4**, **4→7**, **5→8**, **6→10**. Types 3 and 7 were absent on those cities.
 
@@ -255,6 +255,24 @@ Index: `off = (y * 80 + x) * 20`. Row step `0x640`. `city_map_generate` clears l
 | `city_buildings_evolve_row` | `0x42360` |
 
 Type/state stubs were **not** created as functions (rename API needs an existing fn). Comments set at `0x45AFE` / `0x45BA8`.
+
+---
+
+## 4b. Achea Q&A — Query titles
+
+User Query on **ACHEA23**, plaza a bit **left** of the suggested civic-column tiles (same types on Plaza 1). Official title = Query heading, not the Latin person name.
+
+| Type | Query title | Home / emit (Ghidra) | Achea check |
+|---:|---|---|---|
+| 1 | **Forum Clerk** | `0xAE–0xB9`; C2.ENG [66] ` - Forum Clerk` | casa annotated Forum; no `home_off` in this save |
+| 2 | **Market Trader** | `0xFC–0xFF` | home Market 3 |
+| 3 | **Enemy** (C2.ENG; no Achea slot) | barbarian spawn | title from [66]+2 |
+| 4 | **Soldier** | `0xE4` / `0xBF` escort | casa annotated Barracks |
+| 5 | **Vigile** | `0xE3` | casa annotated Praefecture (Query is Vigile, not Prefect) |
+| 6 | **Worker** | factory `0xFA` | home Winery (two slots) |
+| 7 | **Rioter** (C2.ENG; no Achea slot) | rioter spawn | title from [66]+6 |
+
+Full quotes + skip table + picker: `findings/walker_quotes.md`. Person names = official **[64]** + `rec[+0x32]`. Type 3 title in C2.ENG is **Enemy**.
 
 ---
 

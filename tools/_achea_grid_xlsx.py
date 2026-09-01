@@ -57,6 +57,8 @@ KNOWN[0x7E] = "Plaza est"
 KNOWN[0x82] = "Tent"
 for _i in range(0x83, 0xA2):
     KNOWN[_i] = "Casa"
+KNOWN[0xA2] = "Shrine 1"
+KNOWN[0xA3] = "Shrine 2"
 KNOWN[0xA4] = "Shrine 3"
 KNOWN[0xA5] = "Shrine 4"
 KNOWN[0xA6] = "Temple"
@@ -89,6 +91,8 @@ KNOWN[0xD7] = "Well"
 KNOWN[0xE5] = "Theater"
 KNOWN[0xE6] = "Odeum"
 KNOWN[0xE8] = "Colosseum"
+KNOWN[0xE9] = "Circus"
+KNOWN[0xEA] = "Circus"
 KNOWN[0xEB] = "Circus"
 KNOWN[0xEC] = "Circus"
 KNOWN[0xED] = "C.Maximus"
@@ -105,11 +109,11 @@ KNOWN[0xFF] = "Market 4"
 # Had a Desconhecido N, then named — stay in the N sequence.
 PROMOTED = {
     0x78, 0x79, 0x7A, 0x7B,
-    0xA4, 0xA5,
+    0xA2, 0xA3, 0xA4, 0xA5,
     0xAF, 0xB2, 0xB3, 0xB4, 0xB7,
     0xDC, 0xDD, 0xDE, 0xDF,
     0xE0, 0xE2, 0xE3, 0xE4, 0xE6,
-    0xEB, 0xEC,
+    0xE9, 0xEA, 0xEB, 0xEC,
     0xF3, 0xF4, 0xF5, 0xFA, 0xFB,
     0xFD, 0xFE, 0xFF,
 }
@@ -148,6 +152,8 @@ CLASS_OF_NAME = {
     "Tent": "house",
     "Casa": "house",
     "Temple": "worship",
+    "Shrine 1": "worship",
+    "Shrine 2": "worship",
     "Shrine 3": "worship",
     "Shrine 4": "worship",
     "Basilica": "worship",
@@ -553,7 +559,7 @@ def main() -> None:
         "Números nas bordas são tile x=0..79 e y=0..79 do chunk 13 (mesmo sistema do host).",
         "Célula vazia = terreno sem prédio. Rio = tile[+1] & 0x10. Road = terreno com tile[+1] & 0x20 (BT4:BT7 / BT7:BZ7).",
         "Palatine = 0xB7 4×4 FECHADO (D56). Aventine = 0xAF. Janiculan 1/2/4 = 0xB2/0xB3/0xB4 (3º ausente nesta save).",
-        "Basilica = 0xAB; Basilica 4 (mais evoluída) = 0xAC. Temple = 0xA6–0xA8. Shrine 3/4 = 0xA4/0xA5.",
+        "Basilica = 0xAB; Basilica 4 (mais evoluída) = 0xAC. Temple = 0xA6–0xA8. Shrine 1–4 = 0xA2–0xA5 (2º = walker).",
         "Plaza: 0x7C = nível 1 (BT47); 0x7E = com estátua (BT46); 0x7D = junta. Garden = 0x78–0x7B (era hyp Plaza).",
         "Market 2/3/4 = 0xFD pouco / 0xFE frequente / 0xFF thriving. Fountain 1/2/4 = 0xDD/0xDC/0xDE. Baths 1/4 = 0xDF/0xE2; 0xE0 sem estágio.",
         "Factory 0xFA: Winery (+19=1) / Lead Works (+19=5) / resto Factory. Grammaticus 0xF3, Rhetor 0xF4, Odeum 0xE6.",
@@ -615,6 +621,8 @@ def main() -> None:
         ("terreno +0x20", "Road (BT4:BT7 e BT7:BZ7; era vazio)", "v3 HIGH"),
         ("0x82", "Tent", "A/B"),
         ("0x83–0xA1", "Casa (graus de habitação)", "range"),
+        ("0xA2", "Shrine 1 (D138)", "§11"),
+        ("0xA3", "Shrine 2 (walker perto + §11)", "walker HIGH"),
         ("0xA4", "Shrine 3 (D14, D95)", "v3 HIGH"),
         ("0xA5", "Shrine 4 (D94)", "v3 HIGH"),
         ("0xA6–0xA8", "Temple 2×2", "Q&A HIGH"),
@@ -641,7 +649,8 @@ def main() -> None:
         ("0xE4", "Barracks 3×3", "Q&A HIGH"),
         ("0xE6", "Odeum (D41)", "v3 HIGH"),
         ("0xE8", "Colosseum", "Q&A HIGH"),
-        ("0xEB + 0xEC", "Circus 3×6", "Q&A HIGH"),
+        ("0xE9 + 0xEA", "Circus 3×6 (35,38); walker 0xEA", "§11 + walker"),
+        ("0xEB + 0xEC", "Circus 3×6 (62,2)", "Q&A HIGH"),
         ("0xED + 0xEE", "C.Maximus 4×8", "Q&A HIGH"),
         ("0xF3", "Grammaticus (D5, D125, D147)", "v3 HIGH"),
         ("0xF4", "Rhetor (D84)", "v3 HIGH"),

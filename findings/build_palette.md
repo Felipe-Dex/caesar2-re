@@ -112,9 +112,9 @@ Advisor type = `FUN_00012a8f` presence slot (`[0xA3FBC + type*0x46] = 1`). Not a
 | Theater | **`0xE5`** | **D.SAV** | **2×2** BUILD1C, type **`0x13`**. (3,0)–(4,1). Pair-1 small. C2.ENG **[22]**. See §4 |
 | Odeum | **`0xE6`** | **Achea v3** | 2×2 BUILD1C. D41. Pair-1 large. |
 | Coliseum | **`0xE8`** | **Achea Q&A** | 3×3 BUILD1C. Achea stack (71,13) named **Colosseum**. Pair-2 large (`§4`) |
-| Circus | **`0xEB`+`0xEC`** | **Achea Q&A** | 3×6 = two 3×3 halves. BUILD1D. Achea (62,2)–(67,4). **Not** C.Maximus |
+| Circus | **`0xEB`+`0xEC`** · **`0xEA`** (piece) | **Achea Q&A + walkers** | 3×6 = two 3×3 halves. BUILD1D. First pair **(62,2)–(67,4)** = `0xEB`+`0xEC` (§9 HIGH). Second pair **(35,38)–(37,43)** = `0xE9`+`0xEA` (`achea.md` §11); walker perto **HIGH** on **`0xEA`** only. **`0xE9`** stays the abutting sibling (already named Circus in §11). **Not** C.Maximus. |
 | C.Maximus | **`0xED`+`0xEE`** | **Achea Q&A** | 4×8 = two 4×4 halves. BUILD1D. **Not** Circus |
-| Shrine | **`0xA4`** 3rd · **`0xA5`** 4th | **Achea v3** | 1-tile HOUSES1. D14/D95 and D94. `0xA2`/`0xA3` leftover — **hyp** 1st/2nd, not named. C2.ENG **[21]**. |
+| Shrine | **`0xA2`** 1st · **`0xA3`** 2nd · **`0xA4`** 3rd · **`0xA5`** 4th | **Achea v3 + §11 + walkers** | 1-tile HOUSES1. 3rd/4th = D14/D95 and D94 (v3). 1st/2nd named leftover N in `achea.md` §11. Walker perto **HIGH** on **`0xA3` = 2nd** (was `id0xA3` next to type-5 Vigile). C2.ENG **[21]**. |
 | Temple | **`0xA6`** 1st · **`0xA7`** 2nd · **`0xA8`** 3rd (`0xA9` unseen) | **Achea + 20230610** | **2×2** HOUSES1. `0xA7` = 20230610 D4/D5/D7. |
 | Basilica | **`0xAB`** · **`0xAC`** most evolved | **Achea v3** | **3×3** BUILD1C. `0xAC` = 4th (user). `0xAA` unseen. |
 | Grammaticus | **`0xF3`** | **Achea v3** | 2×2 BUILD1B. D5, D125, D147. C2.ENG **[20]**. Paints +13 `0x10`. |
@@ -141,7 +141,7 @@ User sizes (2026-08-29): **Aventine 2×2**, **Janiculan 3×3**, **Palatine 4×4*
 
 Type-7 leftovers: `0xAE`/`0xB0` 2×2 (hyp Aventine other states — **not named**). Walker retry classes (`ghidra_walkers.md`): `0xAE–0xB1→4`, `0xB2–0xB5→9`, `0xB6–0xB9→0x10` — packing story only until those leftover ids get a user name.
 
-The old “12 ids = 3 forums × 4 grades” line in `0xA2–0xAD` was a count coincidence. Worship packing: Shrine `0xA4`/`0xA5` (3rd/4th) + leftover `0xA2`/`0xA3` + Temple `0xA6–0xA8` + Basilica `0xAB`/`0xAC`.
+The old “12 ids = 3 forums × 4 grades” line in `0xA2–0xAD` was a count coincidence. Worship packing: Shrine **`0xA2`–`0xA5`** (1st–4th) + Temple `0xA6–0xA8` + Basilica `0xAB`/`0xAC`.
 
 ---
 
@@ -154,7 +154,7 @@ The old “12 ids = 3 forums × 4 grades” line in `0xA2–0xAD` was a count co
 | `0x78–0x7B` | 1 | **Garden** (v3; was Plaza hyp) |
 | `0x7C–0x81` | `0x0E` | **Plaza** on Achea (`0x7C`/`0x7D`/`0x7E`); was Road / Wall hyp |
 | `0x82–0xA1` | — | Housing (Tent…palace) |
-| `0xA2–0xAD` | `0x12` | **Worship:** Shrine **`0xA4`/`0xA5`**, Temple **`0xA6–0xA8`**, Basilica **`0xAB`/`0xAC`**. `0xA2`/`0xA3`/`0xA9`/`0xAA`/`0xAD` open |
+| `0xA2–0xAD` | `0x12` | **Worship:** Shrine **`0xA2`–`0xA5`**, Temple **`0xA6–0xA8`**, Basilica **`0xAB`/`0xAC`**. `0xA9`/`0xAA`/`0xAD` open |
 | `0xAE–0xBB` | 7 | **Forums:** Aventine **`0xAF`**, Janiculan **`0xB2–0xB4`**, Palatine **`0xB7`**. Leftover `0xAE`/`0xB0` |
 | `0xBC–0xBD` | `0x11` | Water leftover (not Well) |
 | **`0xBE`** | **`0x10`** | **Reservoir (A/B)** |
@@ -192,7 +192,7 @@ FAQ entertainment rings **`5,7,9` / `7,9,11`** are **absent** from C2MODEL (EXE-
 - Pairs 3–6 are **one** advisor type (`2`) and **one** channel — names **inside** the 4+4 are unordered. The table’s pairing is only “nth small ↔ nth large”.
 - **`0xF1–0xF2`** share type `2` but do **not** paint +12. Baths is **`0xE0`**, Hospital is **`0xFB`** (Achea).
 
-**`0xEB`+`0xEC` = Circus** (two 3×3, same pattern as C.Maximus `0xED`+`0xEE`). Pair 5–6 smalls are one building, not two education buttons.
+**`0xEB`+`0xEC` = Circus** (two 3×3, same pattern as C.Maximus `0xED`+`0xEE`). Achea also has a second 3×6 **`0xE9`+`0xEA`** (`achea.md` §11); walker perto confirmed **`0xEA`** as Circus (piece). Pair 5–6 smalls are one building, not two education buttons. Do not collapse the two pairs into one id.
 
 **Gardens / Plaza are not `0xE5–0xF0`.** They do not call `FUN_0006ce67`. Garden is the type-`1` BUILD1A block (`0x78–0x7B`). Plaza is type `0x0E` (`0x7C–0x7E`). +17 is the road/plaza **access flood**, not +12.
 
@@ -221,7 +221,7 @@ Already done: empty→**Reservoir** (`0xBE`), empty→**Tent** (`0x82`), D.SAV�
 - Palatine **`0xB7` closed**. Other Palatine grades (`0xB6`/`0xB8`/`0xB9`) unseen.
 - Type-7 leftovers: `0xAE`/`0xB0` (hyp Aventine stages).
 - Well **`0xD7` closed** (D.SAV). `0xD8–0xDA` unseen. `0xBC–0xBD` still leftover type `0x11`. Fountain 3rd unseen (`0xDB` hyp). `0xCB` = aqueduct stub (20230610 D1).
-- Leftover `0xE7` / `0xE9` / `0xEA` (Arena / other +12). Theater **`0xE5` closed**.
+- Leftover `0xE7` (Arena / pair-2 small). **`0xE9`/`0xEA`** are the second Circus 3×6 (`achea.md` §11; walker **`0xEA`**). Theater **`0xE5` closed**.
 - `0xF1–0xF2` leftover. Zoom / Query are UI only. Clear area stamps **`0x1C`**. Rubble is terrain **`0x05`**.
 
 Do not start a crack session from the drive-letter strings.

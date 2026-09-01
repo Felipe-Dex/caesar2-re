@@ -93,12 +93,12 @@ Ghidra names applied: `lut_houses_sprite`, `lut_build1a_sprite`, `lut_build1b_sp
 
 | Sheet | PL8 | Building ids on this save |
 |---|---|---|
-| `0x00` | **HOUSES1** | housing **`0x88–0xA1`**; **Temple `0xA6–0xA8`** (2×2, variants 64–75); 1-tile civic **`0xA2–0xA5`**; **`0xBE` Reservoir** (A/B); **Praefecture `0xE3`**; **Barracks `0xE4`** |
+| `0x00` | **HOUSES1** | housing **`0x88–0xA1`**; **Temple `0xA6–0xA8`** (2×2, variants 64–75); **Shrine `0xA2`–`0xA5`** (1-tile; 2nd = `0xA3`); **`0xBE` Reservoir** (A/B); **Praefecture `0xE3`**; **Barracks `0xE4`** |
 | `0x04` | **BUILD1A** | plaza hyp **`0x78–0x7B`**; **Road `0x7C`/`0x7E`**; **Aventine `0xAF`**; **Janiculan `0xB3`**; leftover `0xAE–0xB5` |
 | `0x08` | **BUILD1B** | **Tower `0xBF`**; **Wall `0xC2`** / N–S `0xC1`; **Gate `0xC0`**; **Well `0xD7`** (D.SAV 1×1); **Baths `0xE0`**; **Library `0xF5`**; **Hospital `0xFB`**; **Market `0xFD`** |
 | `0x0C` | **BUILD1C** | **Basilica `0xAA–0xAC`** (3×3; `0xAB` Basilica **only**); **Colosseum `0xE8`**; **Theater `0xE5`** (D.SAV 2×2); `0xE6`, `0xFA` |
 | `0x10` | **CITYFIXT** | aqueduct run **`0xCF–0xD6`** + stub **`0xCB`** |
-| `0x14` | **BUILD1D** | **Circus `0xEB`+`0xEC`** (two 3×3); **C.Maximus `0xED`+`0xEE`** (two 4×4) |
+| `0x14` | **BUILD1D** | **Circus `0xEB`+`0xEC`** and **`0xE9`+`0xEA`** (two 3×3 each); **C.Maximus `0xED`+`0xEE`** (two 4×4) |
 
 Housing **`+4` is not the id**: `0x89` → variant 7 → `HOUSES1[7]`; `0xA1` (3×3 palace) uses variants 51–59. **Temple `0xA6–0xA8`** sits on **HOUSES1** (variants 64–75), not `AFORUM`. **Aventine is `0xAF`** (BUILD1A). **Janiculan is `0xB3`**. **Basilica is `0xAA–0xAC`**. Reservoir **`0xBE`** uses variant **`0x6E`** → LUT[110] = **sprite 90**. Achea names: `findings/achea.md` §8–§9.
 
@@ -125,7 +125,9 @@ C2MODEL has **no** integer **51**. FAQ list price is **`[101]=50`** (`[96:102]` 
 | **`0x7C`/`0x7E`** | **Road** | 1-wide | BUILD1A | **HIGH** beside circus. Old Wall hyp retracted for perimeter |
 | **`0xED`+`0xEE`** | **C.Maximus** | **4×8** | BUILD1D | **HIGH** — (71,25)–(74,32) |
 | **`0xEB`+`0xEC`** | **Circus** | **3×6** | BUILD1D | **HIGH** — (62,2)–(67,4); two 3×3. **Not** C.Maximus |
+| **`0xEA`** | **Circus** (piece) | **3×3** half | BUILD1D | **HIGH** walker perto. Sibling **`0xE9`** is the other 3×3 (`achea.md` §11 pair at (35,38)–(37,43)). Does **not** retract `0xEB`+`0xEC` |
 | **`0xE8`** | **Colosseum** | 3×3 | BUILD1C | **HIGH** this cluster — (71,13) |
+| **`0xA3`** | **Shrine 2** | 1×1 | HOUSES1 | **HIGH** walker perto (was `id0xA3` by Vigile). `0xA2`/`0xA4`/`0xA5` = 1st/3rd/4th from `achea.md` §11, not this Q&A |
 | **`0xA6–0xA8`** | **Temple** | **2×2** | HOUSES1 | **HIGH** — worship, not Aventine |
 | **`0xAA–0xAC`** | **Basilica** | **3×3** | BUILD1C | **HIGH** — `0xAB` Basilica **only**. Janiculan dropped |
 | **`0xAF`** | **Aventine** | **2×2** | BUILD1A | **HIGH** — real forum. Grid N=170 |
@@ -149,7 +151,7 @@ Aventine **2×2**, Janiculan **3×3**, Palatine **4×4** (2026-08-29) — sizes 
 | **Janiculan** | **`0xB3`** | **3×3** | BUILD1A | 0x19–0x21 | **Achea HIGH** (grid N=8). Type 7. **Not** `0xAA–0xAC` |
 | **Basilica** | **`0xAA` `0xAB` `0xAC`** | **3×3** filled, same id | BUILD1C | 0–8 / 9–17 / 18–26 | **Achea HIGH**. `0xAB` Basilica **only** |
 | **Palatine** | **UNKNOWN** | leftover **`0xB7` 4×4** | BUILD1A | — | Type 7. Grid N=56. Not closed |
-| *(unnamed)* | **`0xA2–0xA5`** | 1×1 / 1-wide only | HOUSES1 | 60 / 61 / 62 / 63 | not a square forum |
+| **Shrine** | **`0xA2`** 1st · **`0xA3`** 2nd · **`0xA4`** 3rd · **`0xA5`** 4th | 1×1 / 1-wide only | HOUSES1 | 60 / 61 / 62 / 63 | not a square forum. 1st–4th from `achea.md` §10–§11. Walker perto **HIGH** on **`0xA3` = 2nd** |
 | *(unseen)* | **`0xA9` `0xAD`** | — | — | — | 4th-grade hyp of Temple / Basilica |
 
 No mixed-id 2×2 / 3×3 / 4×4 in the forum range. Career-city 4×4s are **`0xB7`/`0xB9`** (BUILD1A industry) and **`0xED`/`0xEE`** (now C.Maximus), not type `0x12`.
@@ -166,7 +168,7 @@ No mixed-id 2×2 / 3×3 / 4×4 in the forum range. Career-city 4×4s are **`0xB7
 
 - Zoom 2/3 columns and `HOUSES2/3` / `BUILD2*` / `BUILD3*` are not in the host (zoom 0 only).
 - `citytop1.pl8` (slot 7) and `city_map_draw_overlays` are unread — roofs / extras may sit there.
-- `FUN_00012a8f` type ids are not yet pinned to C2.ENG names except **`0xBE` = Reservoir** (A/B; C2.ENG **[12]**). Forum **sizes** pin Janiculan (`build_palette.md` §2.1); **Aventine is UNKNOWN** (old 2×2 is Temple). Palatine 3×3 vs 4×4 is an open A/B; Achea `0xAB` is also Basilica. `0xBE` → advisor type `0x10`. Screenshot / grid Q&A (not A/B): Tower `0xBF`, Wall `0xC2`, Gate `0xC0`, C.Maximus `0xED`+`0xEE`, Circus `0xEB`+`0xEC`, Colosseum `0xE8`, Temple `0xA6–0xA8`, Market `0xFD`, Baths `0xE0`, Praefecture `0xE3`.
+- `FUN_00012a8f` type ids are not yet pinned to C2.ENG names except **`0xBE` = Reservoir** (A/B; C2.ENG **[12]**). Forum **sizes** pin Janiculan (`build_palette.md` §2.1); **Aventine is UNKNOWN** (old 2×2 is Temple). Palatine 3×3 vs 4×4 is an open A/B; Achea `0xAB` is also Basilica. `0xBE` → advisor type `0x10`. Screenshot / grid Q&A (not A/B): Tower `0xBF`, Wall `0xC2`, Gate `0xC0`, C.Maximus `0xED`+`0xEE`, Circus `0xEB`+`0xEC` and piece **`0xEA`** (sibling `0xE9`), Colosseum `0xE8`, Temple `0xA6–0xA8`, Shrine **`0xA3`** 2nd (`0xA2`/`0xA4`/`0xA5` from `achea.md` §11), Market `0xFD`, Baths `0xE0`, Praefecture `0xE3`.
 - BUILD1A/C last LUT index is one past `n_sprites − 1`; renderer skips OOB.
 - Tile bytes +12 / +14 / +16 / +17 still want a 1-house A/B save (sibling).
 - Walkers / overlay sprites are a different pass.

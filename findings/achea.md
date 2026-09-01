@@ -71,7 +71,7 @@ No ASCII `"Achea"` in the file. The city name lives in the filename / career slo
 |---|---:|---|
 | Housing **`0x82–0xA1`** | **324** | **yes** — dense evolved city |
 | First housing **`0x82` Tent** | **0** | prints show insulae, not tents |
-| Forums **`0xA2–0xA8`** (HOUSES1 civic) | **48** | **split** — `0xA6–0xA8` is **Temple** (`§9`). Aventine is **`0xAF`** (type 7, not this range). `0xA2–0xA5` still unnamed 1-tile |
+| Forums **`0xA2–0xA8`** (HOUSES1 civic) | **48** | **split** — `0xA6–0xA8` is **Temple** (`§9`). Aventine is **`0xAF`** (type 7, not this range). `0xA2–0xA5` = **Shrine** 1–4 (`§11`; walker re-confirmed `0xA3` = 2nd) |
 | **`0xBE` Reservoir** | **9** | **yes** — several basins; see §3 |
 | Water ids **`< 8`** | **0** | **no** as raw `+0` |
 | River **flag `+1 & 0x10`** | **212** | **yes** — winding river, bbox x=50…72, full height |
@@ -99,10 +99,10 @@ Housing **starts at `0x86`**, not `0x82`. Top housing ids: **`0xA1` 90** (3×3 p
 | **`0xB3`** | 27 | BUILD1A | **Janiculan** (grid N=8). Three 3×3. Type 7, not the old `0xAA–0xAC` size-split |
 | **`0xB2`** | 27 | BUILD1A | 3×3 pair next to Janiculan — still unnamed |
 | **`0xD0`** | 22 | CITYFIXT | aqueduct run |
-| **`0xA3`** | 22 | HOUSES1 | forum-family, many 1-tile stamps (grades / corners) |
+| **`0xA3`** | 22 | HOUSES1 | **Shrine 2** (`§11` + walker perto). 1-tile; adjacent blobs look 2×n |
 | **`0xED` / `0xEE`** | 16 / 16 | BUILD1D | one **4×8** C.Maximus at (71,25)–(74,32) (two 4×4 halves). Screenshot Q&A **HIGH** |
 | **`0xBE`** | 9 | HOUSES1 | Reservoir (A/B closed) |
-| **`0xE9` / `0xEA`** | 9 each | BUILD1D | leftover +12 3×3 (still unnamed) |
+| **`0xE9` / `0xEA`** | 9 each | BUILD1D | second **3×6 Circus** at (35,38)–(37,43) (`§11`). Walker perto **HIGH** on **`0xEA`**; `0xE9` is the sibling half |
 | **`0xEB` / `0xEC`** | 9 / 9 | BUILD1D | one **3×6 Circus** at (62,2)–(67,4) (two 3×3 halves). Grid Q&A **HIGH** — **not** C.Maximus |
 
 `0xBF` is **Tower** (screenshot Q&A **HIGH**), not Barracks. Four 1×1 rim cells: **(78,1)**, **(55,1)** (by the river), **(72,52)**, **(78,52)**. **Barracks is `0xE4`** (grid N=9). The print’s walled square may be that 3×3 plus Wall, not a separate id.
@@ -133,7 +133,7 @@ Hex still wins on: exact id, sheet, variant, river-as-flag (the river is **not**
 
 1. **Water ids `< 8` are empty.** The river is `tile[+1] & 0x10` on grass-family terrain (`0x08–0x17` dominate the histogram). Do not hunt `0x00–0x07` on this map.
 2. **`0x82` Tent is absent.** The range `0x82–0xA1` is full; the *first* id is not. Naming from a developed city will miss vacant-tent art.
-3. **Coliseum / C.Maximus / Circus closed on this save.** `0xE8` = Colosseum (3× 3×3). `0xED`+`0xEE` = one 4×8 C.Maximus. `0xEB`+`0xEC` = one 3×6 Circus (grid Q&A). The old “too square” note was two halves of the oval.
+3. **Coliseum / C.Maximus / Circus closed on this save.** `0xE8` = Colosseum (3× 3×3). `0xED`+`0xEE` = one 4×8 C.Maximus. Two 3×6 Circuses: `0xEB`+`0xEC` at (62,2) (grid Q&A) and `0xE9`+`0xEA` at (35,38) (`§11`; walker **`0xEA`**). The old “too square” note was two halves of the oval.
 4. **Fort in the print ≠ `0xBF`.** `0xBF` is **Tower**. **Barracks is `0xE4`** (grid N=9). The print’s walled square may be that 3×3 plus Wall.
 5. **Well `0xD7` closed** on D.SAV (`findings/sav_d.md`). Fountain / Plaza / Gardens / Road-as-terrain named in §10. **`0xCB` = aqueduct stub** (20230610), not Well. `0xC1` (N–S rim) is geometry-only.
 6. **Host iso** is the full 80×80 (thumb 960×497). It matches the *minimap shape* (four clusters + river) but is too small to read individual buildings the way the DosBox pans do.
@@ -154,8 +154,8 @@ It does **not** replace a surgical empty→one-building pair for UNKNOWN palette
 
 ### Ask the user next (if still ambiguous)
 
-1. Optional leftover civic: **D98 `0xE9`** / **D110 `0xEA`** (3×3 +12) — Theater is **`0xE5`** (D.SAV); these may be Arena / other.
-2. Optional: **D138 `0xA2`** / **`0xA3`** blobs — hyp Shrine 1/2 (later named in §11).
+1. ~~D98 `0xE9` / D110 `0xEA`~~ — **Circus** pair (`§11`). Walker perto confirmed **`0xEA`**.
+2. ~~D138 `0xA2` / `0xA3`~~ — **Shrine 1 / Shrine 2** (`§11`). Walker perto confirmed **`0xA3` = 2nd**.
 3. Optional: Fountain 3rd (`0xDB` leftover in type 8) or Well siblings `0xD8–0xDA`.
 
 Do not commit `ACHEA23.SAV`, the JPGs, or `sav_preview/`.
@@ -343,7 +343,7 @@ Workbook: `findings/Achea_grid_v3.xlsx` (mapa + legenda + nomes + progress). Reg
 | **Market** | *unseen* (`0xFC`?) | **`0xFD`** pouco | **`0xFE`** D10 frequente | **`0xFF`** D46 thriving | 2×2. Not LV |
 | **Fountain** | **`0xDD`** D18 | **`0xDC`** D52 | *unseen* (3rd still unnamed) | **`0xDE`** D83 | 1×1. Ids **not** sequential |
 | **Baths** | **`0xDF`** D51 | **`0xE0`** (estágio não dito) | *unseen* (`0xE1`?) | **`0xE2`** D82 | 2×2 |
-| **Shrine** | *hyp `0xA2`* | *hyp `0xA3`* | **`0xA4`** D14/D95 | **`0xA5`** D94 | 1-tile. 1st/2nd **not named** |
+| **Shrine** | **`0xA2`** §11 | **`0xA3`** §11 + walker | **`0xA4`** D14/D95 | **`0xA5`** D94 | 1-tile. 1st/2nd named in §11; **2nd** re-confirmed walker perto |
 | **Basilica** | — | **`0xAB`** | — | **`0xAC`** most evolved | 3×3 |
 | **Plaza** | **`0x7C`** BT47 | **`0x7D`** junta | **`0x7E`** BT46 estátua | *(só 3 no directory)* | Old Road name **retracted** |
 
@@ -363,7 +363,7 @@ Workbook: `findings/Achea_grid_v3.xlsx` (mapa + legenda + nomes + progress). Reg
 
 Building tiles `id≥0x78`: **1432**. Named **1379** (96.3%). Unique ids **79** → named **73**, unknown **6**. Unknown blobs **21** (N stable).
 
-Unknown ids: **`0xA2`**, **`0xA3`**, **`0xAE`**, **`0xB0`**, **`0xE9`**, **`0xEA`**.
+Unknown ids at v3 close: **`0xA2`**, **`0xA3`**, **`0xAE`**, **`0xB0`**, **`0xE9`**, **`0xEA`**. Named in **§11**. Walker perto (`§12`) re-confirmed **`0xA3`** and **`0xEA`**.
 
 ---
 
@@ -373,11 +373,11 @@ User named leftover N (spreadsheet **not** regenerated). Same id → same name o
 
 | Nome | N | Id | Notes |
 |---|---|---|---|
-| **Shrine 1** | 138 | **`0xA2`** | only 1-tile blob |
-| **Shrine 2** | 101, 139, 128, 129 | **`0xA3`** | also N=21, 23, 29, 33, 59, 60, 65, 76, 90, 93, 108 |
+| **Shrine 1** | 138 | **`0xA2`** | only 1-tile blob. **Not** re-confirmed by walker Q&A |
+| **Shrine 2** | 101, 139, 128, 129 | **`0xA3`** | also N=21, 23, 29, 33, 59, 60, 65, 76, 90, 93, 108. Walker perto **HIGH** (`§12`) |
 | **Aventine 1** | 140 | **`0xAE`** | 2×2 at (56,44) |
 | **Aventine 3** | 171 | **`0xB0`** | also N=92 at (61,35) |
-| **Circus** | 98 + 110 | **`0xE9` + `0xEA`** | 3×3+3×3 = 3×6 at (35,38)–(37,43) |
+| **Circus** | 98 + 110 | **`0xE9` + `0xEA`** | 3×3+3×3 = 3×6 at (35,38)–(37,43). Walker **`0xEA`** only (`§12`); `0xE9` stays sibling. Does **not** retract §9 **`0xEB`+`0xEC`** |
 
 **Desconhecido leftover: none.** No extra unknown N with a different id.
 
@@ -392,4 +392,15 @@ Temple tiles (user wrote `(y,x)`; map is `(x,y)`): **(73,3) = `0xA6`** lowest / 
 | **Temple** | **`0xA6`** (73,3) | **`0xA7`** (20230610 D4/D5/D7) | **`0xA8`** (61,39) | *unseen* (`0xA9`) | Achea: 1º + 3º |
 
 Factory scheme (all `0xFA` + origin `+19`): `findings/factory.md`.
+
+---
+
+## 12. Walker perto 2026-09-01 (HIGH)
+
+User named leftover tiles from the walker sheet `perto` column (`findings/achea_walkers.md`). Those cells printed as `id0x..` because `KNOWN` in `tools/_achea_grid_xlsx.py` did not yet have §11 leftovers.
+
+| Id | User name | Notes |
+|---|---|---|
+| **`0xEA`** | **Circus** | Piece / one 3×3 of the §11 pair. **`0xE9`** not named in this Q&A — keep as sibling already mapped Circus in §11. Second 3×6 on this save; first Circus remains **`0xEB`+`0xEC`** (§9). |
+| **`0xA3`** | **Shrine 2nd** | Same id that showed as `id0xA3` next to type **5 Vigile**. Matches §11 Shrine 2. Does **not** newly name 1st/3rd/4th (`0xA2`/`0xA4`/`0xA5` stay as §10–§11). |
 
