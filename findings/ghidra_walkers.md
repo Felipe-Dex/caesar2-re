@@ -197,10 +197,18 @@ Province x/y in 0…59. Requires `prov[+7]==0`. `param_3==1` needs prov[+1] bit 
 | +0x2C | i32 | tile_off copy |
 | +0x32 | u16 | rng |
 | +0x36 / +0x38 | u16 | **zeroed every tick** |
-| +0x93 | u8 | timer (type 1) |
-| +0x94 | u8 | spawn=2 |
+| +0x3A | i32 | formed / spawn `city_year` (signed BC). Cohort panel |
+| +0x7A / +0x7E / +0x82 / +0x86 | i32 | Sling / Light / Heavy / Aux counts |
+| +0x8A | i32 | battle-ready (also barbarian spawn count) |
+| +0x93 | u8 | timer (type 1); “Confined to fort” if set and readiness 0 |
+| +0x94 | u8 | **morale 0–4** (spawn default 2) |
+| +0x95 | u8 | **readiness 0–4** |
+| +0x99 | u8 | ship **cargo** goods 0–15 |
+| +0xA0 | u8 | rank 0=Normal 1=Minor 2=Major |
 | +0xA1 | u16 | timer (type 1) |
 | +0xA3 | i32 | tile_off copy |
+
+Query / painel: `findings/province_actors.md`. `actor26_cohort_panel` `0x5BABF` / `actor26_query_tooltip` `0x5BE03`.
 
 ---
 
@@ -248,6 +256,8 @@ Index: `off = (y * 80 + x) * 20`. Row step `0x640`. `city_map_generate` clears l
 | `walker_can_step` / `_dest_ok` | `0x48470` / `0x48606` |
 | `facing_from_delta` | `0x2B4DD` |
 | `actor26_spawn` / `_free` / `_zero_record` | `0x2AA02` / `0x2AF12` / `0x2AE55` |
+| `actor26_cohort_panel` / `_query_tooltip` / `_cohort_report_body` | `0x5BABF` / `0x5BE03` / `0x5C036` |
+| `format_year_bc_ad` | `0x62118` |
 | `actor26_set_sprite_t1` / `_t2` | `0x47C4B` / `0x47B94` |
 | `tile_or_radius` / `tile_neighbor_flags` | `0x6CD7E` / `0x6B0D1` |
 | `city_map_draw_terrain` / `_walkers` / `_overlays` | `0x361DC` / `0x364A0` / `0x365CC` |

@@ -196,7 +196,7 @@ The user found the **Sea Lane** *portals* (`0x9D`/`0x9E`/`0x9F`). Those are 1-ti
 
 **How they are drawn:** province frame `FUN_00039013` `0x39013` → tiles `FUN_00039032` then overlay `FUN_000392c7` `0x392C7`. Per tile, `FUN_0003ab6d` `0x3AB6D` reads **`tile[+7]`** as the actor26 slot and blits **`MY_STDS.PL8`** via handle `[0x102410]` (zoom-set slot 0). Ship frames `0x4E`… are **64×40** (zoom-1); cohort frames around `0x12`/`0x19` are **32×18** / **32×36**. They are sprites on top of whatever terrain they occupy — they never become byte0.
 
-**ACHEA23 live actors (chunk 7):**
+**ACHEA23 live actors (chunk 7):** planilha + Query em `findings/Achea_province_walkers.xlsx` / `achea_province_walkers.md`.
 
 | Slot | Type | Tile | Dest | Note |
 |---:|---:|---|---|---|

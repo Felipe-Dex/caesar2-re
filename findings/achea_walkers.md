@@ -8,6 +8,7 @@ Snapshot de **ACHEA23.SAV** (SavChunk 8, 201 × 58). Não copia o save.
 | Regenerar | `tools/_achea_walkers_xlsx.py` |
 | Grade da cidade (prédios) | `findings/Achea_grid_v3.xlsx` — **não** foi mexida |
 | Save | `C:\Users\Felip\OneDrive\Games\Caesar2\Achea.sav\ACHEA23.SAV` |
+| Província (não estes) | `findings/achea_province_walkers.md` — chunk 7, 4 actors |
 
 ## Como abrir
 
