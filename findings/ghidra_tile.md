@@ -40,11 +40,11 @@ Index: `off = (y * 80 + x) * 20`. Row step `0x640`. First-tile VAs: +N → `0xE2
 ## 2. `city_map_draw` `0x360F7`
 
 ```
-[0x117AC8] = ([0x117AC8]+1) % 4   ; water LUT column (4 CITYFIXT extras)
+[0x117AC8] = ([0x117AC8]+1) % 4   ; incremented only — no other xref
 [0x117AB4]++  ; wrap at 0x80     ; every display frame, even if sim paused
-derive >>1 / >>2 / >>3 / >>4 anim phases
+derive >>1 / >>2 / >>3 / >>4 anim phases (flag80 uses >>1 / >>3)
 if overlay [0x117A59] ∈ {0,1,4,8}: [0x117AC4]=1 else 0
-city_map_draw_terrain()     ; +0 id, LUT 0x96F58[id*4+col]+0x10; river +1&0x10 uses col=[0x117AC8]
+city_map_draw_terrain()     ; +0 id, LUT 0x96F58[id*4+(zoom>>1)]+0x10; col is zoom, not water
 if [0x102BE4] != 1: city_map_draw_walkers()
 city_map_draw_overlays()    ; +3 bit7 → city_tile_draw_flag80 (uses +9, +19 for 0xFA)
 ```

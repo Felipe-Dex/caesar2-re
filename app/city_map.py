@@ -11,9 +11,9 @@ Ghidra (findings/ghidra_city.md, ghidra_walkers.md):
         [0x117AC8] = ([0x117AC8]+1) ; wrap after 3   ; every city_map_draw
         [0x117AB4]++ ; wrap 0x80                     ; same cadence
         then terrain / walkers / overlays            ; NOT a sim pulse
-        Capstone: 117AC8 is write-only (no divider). view_frame calls
-        draw when city && speed<=1. No EXE ms constant — host uses
-        WATER_FRAME_MS (not 70 Hz).
+        Capstone: 117AC8 xrefs are only this increment (never read).
+        0x361DC does not use it. view_frame calls draw when city &&
+        speed<=1. No EXE ms constant — host uses WATER_FRAME_MS.
 
     city_map_draw_terrain  0x361DC
         id < 0x78  → CITYFIXT[LUT_0x96F58[id*4 + (zoom>>1)] + 0x10]
@@ -23,9 +23,11 @@ Ghidra (findings/ghidra_city.md, ghidra_walkers.md):
                      sheet = tile[+3] & 0x1C
                      sprite = LUT[tile[+4]*4 + (zoom>>1)]  (+0x10 if sheet==0x10)
 
-    River shimmer: city_map_bank_remap writes base+variant (period 4).
-    Same-orientation CITYFIXT frames are 0x1E+4k .. +3. Host cycles the
-    low 2 bits of (id-0x1E) with [0x117AC8]. Grass stays on column 0.
+    EXE river is static +0 (no CPU id cycle, no overlay blit, VGA DAC
+    is a full palette load). Host must not cycle 0x1E–0x21: alpha matches
+    (xor 0) but the water/bank outline crawls (0x1E vs 0x1F water_xor=60
+    of 142; ~735/900 indices differ). Lock tile[+0]; cintilar só o
+    interior azul, máscara e margens iguais em todos os frames.
 
 Do not invent walkers or economy. Remaining tile bytes
 (+12, +14, +16, +17; +19 low confidence) still want a 1-house SAV pair.
@@ -84,13 +86,10 @@ ID_WATER_MAX = 8
 FLAG_RIVER = 0x10
 FLAG_PAD = 0x20
 # city_map_draw_terrain: LUT[id*4 + (zoom>>1)] + 0x10. Host zoom col = 0.
-# River shimmer is id-group + [0x117AC8], not the LUT column.
+# [0x117AC8] is incremented 0..3 and never consumed. Do not remap +0.
 CITYFIXT_TERRAIN_BIAS = 0x10
 WATER_FRAMES = 4
-# One knob for river shimmer. EXE increments [0x117AC8] every
-# city_map_draw / view_frame (0..3, no divider, never read). A 70 Hz
-# blit would be ~14 ms/step — faster than this host already felt.
-# No EXE millisecond constant; 250 ms/step ≈ 1 s for the 0x1E–0x21 cycle.
+# Host-only interior cycle. EXE has no ms constant; 250 ms ≈ old cadence.
 WATER_FRAME_MS = 250
 # city_map_bank_remap bases (0x1E, 0x22, … 0x4A) and period-4 variants.
 ID_RIVER_LO = 0x1E
@@ -350,16 +349,13 @@ class Tile:
     def cityfixt_index(self, water_frame: int = 0) -> int | None:
         """CITYFIXT sprite for terrain, or None (buildings use other PL8s).
 
-        Zoom-0: ``LUT[id*4] + 0x10`` (column 0 is identity). River ids
-        ``0x1E–0x51`` with ``+1 & 0x10`` cycle the generate variant
-        ``(id-0x1E) % 4`` so the bank stays put. Grass is never remapped.
+        Zoom-0: ``LUT[id*4] + 0x10`` (column 0 is identity). ``water_frame``
+        does not change +0 — margens ficam no tile gerado. Grass and
+        river share this path; only the blit remaps interior water pixels.
         """
         if not self.is_terrain:
             return None
         tid = self.terrain_id
-        if self.is_river and ID_RIVER_LO <= tid <= ID_RIVER_HI:
-            rel = tid - ID_RIVER_LO
-            tid = ID_RIVER_LO + (rel & ~3) + ((rel + int(water_frame)) & 3)
         off = tid * 4
         if 0 <= off < len(_LUT_TERRAIN):
             return _LUT_TERRAIN[off] + CITYFIXT_TERRAIN_BIAS
@@ -563,6 +559,61 @@ def _draw_diamond(
 # Used only to bound which tiles can overlap a river AABB.
 _MAX_SPRITE_H = (96, 48, 24)
 ISO_BG = (12, 16, 28)
+# CITYFIXT.256 blues used as river fill (not grass 90 / bank browns).
+_WATER_B_OVER_R = 20
+_WATER_B_OVER_G = 8
+_water_anim_cache: dict[int, tuple[Image.Image, ...]] = {}
+
+
+def _is_water_rgba(px: tuple[int, ...]) -> bool:
+    r, g, b = px[0], px[1], px[2]
+    a = px[3] if len(px) > 3 else 255
+    return a > 0 and b >= r + _WATER_B_OVER_R and b >= g + _WATER_B_OVER_G
+
+
+def _water_interior_frames(spr: Image.Image) -> tuple[Image.Image, ...]:
+    """4 copies: same alpha / bank pixels; only interior blues rotate.
+
+    Host stand-in — EXE 0x361DC blits one locked CITYFIXT id.
+    """
+    key = id(spr)
+    hit = _water_anim_cache.get(key)
+    if hit is not None:
+        return hit
+    src = spr.convert("RGBA")
+    pixels = list(src.getdata())
+    colors: list[tuple[int, int, int]] = []
+    seen: set[tuple[int, int, int]] = set()
+    for px in pixels:
+        if not _is_water_rgba(px):
+            continue
+        rgb = (px[0], px[1], px[2])
+        if rgb in seen:
+            continue
+        seen.add(rgb)
+        colors.append(rgb)
+    colors.sort(key=lambda c: (c[2], c[1], c[0]))
+    frames: list[Image.Image] = [src]
+    n = len(colors)
+    if n >= 2:
+        cmap = {c: i for i, c in enumerate(colors)}
+        for step in range(1, WATER_FRAMES):
+            out_px = []
+            for px in pixels:
+                if not _is_water_rgba(px):
+                    out_px.append(px)
+                    continue
+                i = cmap[(px[0], px[1], px[2])]
+                nr, ng, nb = colors[(i + step) % n]
+                out_px.append((nr, ng, nb, px[3]))
+            frame = Image.new("RGBA", src.size)
+            frame.putdata(out_px)
+            frames.append(frame)
+    else:
+        frames = [src] * WATER_FRAMES
+    packed = tuple(frames)
+    _water_anim_cache[key] = packed
+    return packed
 
 
 def _blit_iso(
@@ -592,7 +643,16 @@ def _tile_frames(
     sheets: dict[str, Sequence[Image.Image]] | None,
 ) -> tuple[Sequence[Image.Image] | None, int | None]:
     if tile.is_terrain:
-        return cityfixt, tile.cityfixt_index(water_frame)
+        idx = tile.cityfixt_index()
+        if (
+            tile.is_river
+            and ID_RIVER_LO <= tile.terrain_id <= ID_RIVER_HI
+            and cityfixt is not None
+            and idx is not None
+            and 0 <= idx < len(cityfixt)
+        ):
+            return _water_interior_frames(cityfixt[idx]), int(water_frame) % WATER_FRAMES
+        return cityfixt, idx
     spec = tile.building_sprite()
     if spec is None:
         return None, None
@@ -654,8 +714,8 @@ def render_iso(
 
     ``zoom`` 0/1/2 picks diamond 58×30 / 26×14 / 10×6. Sheet keys stay
     HOUSES1 / BUILD1A–D / CITYFIXT; the caller loads the matching PL8 digit.
-    ``water_frame`` is ``[0x117AC8] % 4`` (only river 0x1E–0x51). Does not
-    change Tile.unpack.
+    ``water_frame`` rotates interior water pixels on river tiles. +0 and
+    the bank silhouette stay locked. Does not change Tile.unpack.
     """
     tile_w, tile_h = iso_tile_size(zoom)
     half_w, half_h = tile_w // 2, tile_h // 2
@@ -700,9 +760,10 @@ def blit_water_tiles(
 ) -> int:
     """Re-blit river tiles onto an existing canvas (not a full 80×80 pass).
 
-    Alpha paste is not a replace, so each river AABB (union of the 4
-    same-orientation frames) is rebuilt on a small crop (bg + overlapping
-    tiles, iso order) and pasted back. Returns tiles blitted.
+    Alpha paste is not a replace, so each river AABB is rebuilt on a
+    small crop (bg + overlapping tiles, iso order) and pasted back.
+    Sprite size is the locked +0 diamond (interior cycle keeps the mask).
+    Returns tiles blitted.
     """
     if cityfixt is None and sheets is not None:
         cityfixt = sheets.get(PL8_CITYFIXT)
@@ -723,15 +784,9 @@ def blit_water_tiles(
         tile = city.tile(x, y)
         sx = origin_x + (x - y) * half_w
         sy = (x + y) * half_h
-        bw, bh = tile_w, tile_h
-        for frame in range(WATER_FRAMES):
-            frames, idx = _tile_frames(tile, frame, cityfixt, sheets)
-            sw, sh = _sprite_size(frames, idx, tile_w, tile_h)
-            if sw > bw:
-                bw = sw
-            if sh > bh:
-                bh = sh
-        box = (sx, sy, sx + bw, sy + bh)
+        frames, idx = _tile_frames(tile, water_frame, cityfixt, sheets)
+        sw, sh = _sprite_size(frames, idx, tile_w, tile_h)
+        box = (sx, sy, sx + sw, sy + sh)
         clear_rects.append(box)
 
     box_cache: dict[tuple[int, int], tuple[int, int, int, int]] = {}
@@ -790,7 +845,7 @@ def blit_water_tiles(
 
 
 def selftest() -> list[str]:
-    """Grass static; river 0x1E stays in-orientation; LUT cols are not frames."""
+    """Grass and river +0 locked; LUT cols are not frames; mask holds."""
     lines: list[str] = []
     grass = Tile.unpack(bytes([8, 0]) + bytes(18))
     flag18 = Tile.unpack(bytes([0x18, FLAG_RIVER]) + bytes(18))
@@ -807,34 +862,52 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  0x18 flag tile {f18}, want static grass")
     else:
         lines.append("ok    0x18 grass+flag ignore water_frame")
-    want_1e = [0x1E + CITYFIXT_TERRAIN_BIAS + f for f in range(WATER_FRAMES)]
+    want_1e = [0x1E + CITYFIXT_TERRAIN_BIAS] * WATER_FRAMES
     got_1e = [river.cityfixt_index(f) for f in range(WATER_FRAMES)]
     lut_cols = [
         _LUT_TERRAIN[0x1E * 4 + f] + CITYFIXT_TERRAIN_BIAS for f in range(WATER_FRAMES)
     ]
     if got_1e != want_1e:
-        lines.append(f"FAIL  river 0x1E frames {got_1e}, want {want_1e}")
+        lines.append(f"FAIL  river 0x1E locked {got_1e}, want {want_1e}")
     elif got_1e == lut_cols:
         lines.append(f"FAIL  river still uses LUT columns {lut_cols}")
     else:
-        lines.append(f"ok    river 0x1E same-dir frames {got_1e}")
-    want_36 = [0x36 + CITYFIXT_TERRAIN_BIAS + f for f in range(WATER_FRAMES)]
+        lines.append("ok    river 0x1E locked +0 (not LUT, not 0x1E–0x21 cycle)")
+    want_36 = [0x36 + CITYFIXT_TERRAIN_BIAS] * WATER_FRAMES
     got_36 = [corner.cityfixt_index(f) for f in range(WATER_FRAMES)]
     if got_36 != want_36:
-        lines.append(f"FAIL  corner 0x36 frames {got_36}, want {want_36}")
+        lines.append(f"FAIL  corner 0x36 locked {got_36}, want {want_36}")
     else:
-        lines.append(f"ok    corner 0x36 same-dir frames {got_36}")
+        lines.append("ok    corner 0x36 locked +0")
     mid = Tile.unpack(bytes([0x20, FLAG_RIVER]) + bytes(18))
-    if mid.cityfixt_index(0) != 0x20 + CITYFIXT_TERRAIN_BIAS:
-        lines.append(f"FAIL  variant 0x20 lost phase {mid.cityfixt_index(0)}")
-    elif mid.cityfixt_index(2) != 0x1E + CITYFIXT_TERRAIN_BIAS:
-        lines.append(f"FAIL  variant 0x20 wrap {mid.cityfixt_index(2)}")
+    locked_20 = 0x20 + CITYFIXT_TERRAIN_BIAS
+    if mid.cityfixt_index(0) != locked_20:
+        lines.append(f"FAIL  variant 0x20 lost +0 {mid.cityfixt_index(0)}")
+    elif mid.cityfixt_index(2) != locked_20:
+        lines.append(f"FAIL  variant 0x20 remapped {mid.cityfixt_index(2)}")
     else:
-        lines.append("ok    generate variant keeps phase")
+        lines.append("ok    generate variant keeps its own +0")
     if river.cityfixt_index(0) == grass.cityfixt_index(0):
         lines.append("FAIL  river sprite equals grass")
-    if WATER_FRAMES != 4 or WATER_FRAME_MS < 1:
+    if WATER_FRAMES != 4 or WATER_FRAME_MS != 250:
         lines.append("FAIL  WATER_FRAMES / WATER_FRAME_MS")
     else:
         lines.append(f"ok    {WATER_FRAMES} frames, host {WATER_FRAME_MS} ms")
+    spr = Image.new("RGBA", (6, 6), (0, 0, 0, 0))
+    pix = spr.load()
+    pix[1, 1] = (40, 80, 180, 255)
+    pix[2, 1] = (50, 90, 200, 255)
+    pix[3, 1] = (90, 140, 70, 255)
+    pix[1, 2] = (40, 80, 180, 0)
+    anim = _water_interior_frames(spr)
+    a0 = list(anim[0].getdata())
+    a1 = list(anim[1].getdata())
+    if [p[3] for p in a0] != [p[3] for p in a1]:
+        lines.append("FAIL  interior cycle changed alpha")
+    elif a0[1 * 6 + 3][0:3] != (90, 140, 70) or a1[1 * 6 + 3][0:3] != (90, 140, 70):
+        lines.append("FAIL  bank pixel moved")
+    elif a0[1 * 6 + 1][0:3] == a1[1 * 6 + 1][0:3]:
+        lines.append("FAIL  water interior did not cycle")
+    else:
+        lines.append("ok    interior cycle keeps mask + bank")
     return lines

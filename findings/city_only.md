@@ -43,7 +43,7 @@ python -m app --new --city-only --map-preview sav_preview/city_only.png --no-aud
 
 ### O que se vê
 
-A janela **abre já no mapa iso** (o mesmo `render_iso` / tecla **3** do load SAV — não o título `backgrnd.pl8`). Relva aleatória + um rio **animado** (4 frames da **mesma** orientação, `WATER_FRAME_MS` = 250 ms no host); **sem** casas, walkers, HISTORY. HUD: `City Only · Normal · treasury 12000 · 300 BC January`. Deixa a janela aberta — o rio cintila sem Space. Calibrar: um número no topo de `app/city_map.py`.
+A janela **abre já no mapa iso** (o mesmo `render_iso` / tecla **3** do load SAV — não o título `backgrnd.pl8`). Relva aleatória + um rio: **`+0` locked** (o EXE não cicla 0x1E–0x21); só o azul **interior** muda (`WATER_FRAME_MS` = 250 ms). Margens iguais em todos os frames. **sem** casas, walkers, HISTORY. HUD: `City Only · Normal · treasury 12000 · 300 BC January`. Deixa a janela aberta — o rio cintila sem Space.
 
 Load de `.SAV` **não mudou**: ainda começa no título; **3** entra no mapa.
 

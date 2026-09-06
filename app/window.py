@@ -329,7 +329,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
         return True
 
     def on_water() -> None:
-        """city_map_draw 0x360F7: ++[0x117AC8] % 4, independent of Space/T."""
+        """Host interior water cycle (250 ms). +0 / banks stay locked."""
         nonlocal water_frame, water_after
         water_after = root.after(WATER_FRAME_MS, on_water)
         if not map_mode or not river_xy:
