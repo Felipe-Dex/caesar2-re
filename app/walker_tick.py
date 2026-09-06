@@ -5,7 +5,8 @@ SavChunk-8 slot (201 × 58) runs walker_type_fn → walker_state_fn →
 walker_set_sprite → life_phase. Movement is walker_anim_roam 0x47EFA /
 walker_anim_path 0x48084 → walker_step 0x488DC (tile[+7]/[+8]).
 
-Not implemented here: city_sim_phase 0x3F60C, actors26_tick 0x45A7A,
+city_sim_phase 0x3F60C lives in app/city_sim.py (called before this).
+Not implemented here: actors26_tick 0x45A7A,
 state-9 seek helpers, path-fail helpers. See findings/app_tick.md.
 """
 

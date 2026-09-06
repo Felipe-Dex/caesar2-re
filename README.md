@@ -55,9 +55,10 @@ Disposable Python host you can launch **now** (Godot was not installed). It read
 ```text
 python -m app
 python -m app --check --no-audio
+python -m app --new --city-only --no-audio
 ```
 
-Set `CAESAR2_PATH`, or copy `app/config.example.json` → `app/config.local.json` (gitignored). Shows a 640×480 window with a decoded title `backgrnd.pl8` and C2.ENG text. City sim is **not** here — see `app/README.md`.
+Set `CAESAR2_PATH`, or copy `app/config.example.json` → `app/config.local.json` (gitignored). Shows a 640×480 window with a decoded title `backgrnd.pl8` and C2.ENG text. **City Only** (`--new --city-only`) opens the iso map (grass + river). Keys / city map: `app/README.md`. Host layers: `findings/app_structure.md`. Roadmap: `findings/city_only.md`.
 
 ## Status
 

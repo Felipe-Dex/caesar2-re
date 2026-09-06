@@ -9,7 +9,7 @@ Space/T no `python -m app` corre um pulso de `walkers_tick` `0x459D0`, não o `+
 3. **Space** ou **T** — um tick. Segura Space: o repeat do Windows avança vários.
 4. HUD: `moved=` (mudou x/y) · `frames=` (só `walk_frame`) · `live=` · `freed=`.
 5. Um passo de tile costuma levar **16–32** ticks (timer `0x9673E`/`0x96735` + frame 0…15).
-6. Sem `city_sim_phase`: casas/fogo/economia/batalha não evoluem.
+6. `city_sim_phase` agora corre **um** slot por Space (depois walkers). Casas só mudam nos slots `1…0x50`. Como testar: `findings/app_sim_phase.md`.
 7. Sem `actors26_tick`: ninguém spawna do mapa de província.
 8. Cidade e província partilham `view_frame`; forum não faz este tick — `findings/view_modes.md`.
 

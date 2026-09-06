@@ -1,6 +1,6 @@
 """City HUD date from SavChunks (FUN_0003fbcf / FUN_0006189d).
 
-Does not tick the calendar. Walkers / sim stay elsewhere.
+city_sim_phase wrap calls SimState month++ (economy_recompute still stubbed).
 """
 
 from __future__ import annotations

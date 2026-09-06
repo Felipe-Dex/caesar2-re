@@ -14,6 +14,7 @@ from PIL import Image
 from app import assets, audio, city_map
 from app.assets import EngTable, FileStatus
 from app.city_map import CityMap
+from app.city_sim import SimState, load_sim_from_sav
 from app.walkers import Walker, live_walkers, load_walkers_from_sav
 
 # Named VAs (Ghidra, mapped image base 0x10000).
@@ -41,8 +42,10 @@ class BootContext:
     n_sprites: int
     city: CityMap
     walkers: list[Walker]
+    sim: SimState
     audio_status: str
     notes: list[str] = field(default_factory=list)
+    start_in_map: bool = False
 
     @property
     def key_ok(self) -> bool:
@@ -55,6 +58,8 @@ def run_boot(
     *,
     play_audio: bool = True,
     sav: Path | None = None,
+    city_only: bool = False,
+    skill: int = 2,
 ) -> BootContext:
     notes: list[str] = []
 
@@ -110,35 +115,55 @@ def run_boot(
     except (OSError, ValueError) as exc:
         notes.append(f"PL8 decode failed: {exc}")
 
-    # 7. city — SavChunk 13 from a real .SAV if one is in the install
+    # 7. city — New Game (City Only) or SavChunk 13 from a .SAV
     city = CityMap()
     walkers: list[Walker] = []
-    sav_path = sav if sav is not None else city_map.pick_save(game)
-    if sav_path is None:
-        notes.append(
-            f"city_map: no .SAV — {city.width}x{city.height}x{city_map.TILE_BYTES} "
-            f"zeros @ SavChunk {city_map.SAV_CHUNK} (VA {city_map.GHIDRA_BSS:#x})"
-        )
+    sim = SimState()
+    start_in_map = False
+    if city_only:
+        from app.new_game import start_city_assignment
+
+        fresh = start_city_assignment(skill=skill, game=game)
+        city = fresh.city
+        walkers = fresh.walkers
+        sim = fresh.sim
+        notes.extend(fresh.notes)
+        start_in_map = True
     else:
-        try:
-            sizes = city_map.load_chunk_sizes(game)
-            city = city_map.load_city_from_sav(sav_path, sizes, game=game)
+        sav_path = sav if sav is not None else city_map.pick_save(game)
+        if sav_path is None:
             notes.append(
-                f"city_map: {sav_path.name} chunk {city_map.SAV_CHUNK} "
-                f"{city.width}x{city.height}x{city_map.TILE_BYTES} "
-                f"({len(city.id_counts())} tile ids) "
-                f"via {len(sizes)} sequential sizes"
+                f"city_map: no .SAV — {city.width}x{city.height}x{city_map.TILE_BYTES} "
+                f"zeros @ SavChunk {city_map.SAV_CHUNK} (VA {city_map.GHIDRA_BSS:#x})"
             )
+        else:
             try:
-                walkers = load_walkers_from_sav(sav_path, sizes, game=game)
+                sizes = city_map.load_chunk_sizes(game)
+                city = city_map.load_city_from_sav(sav_path, sizes, game=game)
                 notes.append(
-                    f"walkers: {sav_path.name} chunk 8 "
-                    f"{len(live_walkers(walkers))} live / {len(walkers)}"
+                    f"city_map: {sav_path.name} chunk {city_map.SAV_CHUNK} "
+                    f"{city.width}x{city.height}x{city_map.TILE_BYTES} "
+                    f"({len(city.id_counts())} tile ids) "
+                    f"via {len(sizes)} sequential sizes"
                 )
+                try:
+                    walkers = load_walkers_from_sav(sav_path, sizes, game=game)
+                    notes.append(
+                        f"walkers: {sav_path.name} chunk 8 "
+                        f"{len(live_walkers(walkers))} live / {len(walkers)}"
+                    )
+                except (OSError, ValueError) as exc:
+                    notes.append(f"walkers load failed: {exc}")
+                try:
+                    sim = load_sim_from_sav(sav_path, sizes, game=game)
+                    notes.append(
+                        f"city_sim: {sav_path.name} phase={sim.phase:#x} "
+                        f"({sim.date_label}) - Space = one slot then walkers"
+                    )
+                except (OSError, ValueError) as exc:
+                    notes.append(f"city_sim load failed: {exc}")
             except (OSError, ValueError) as exc:
-                notes.append(f"walkers load failed: {exc}")
-        except (OSError, ValueError) as exc:
-            notes.append(f"city_map load failed: {exc}")
+                notes.append(f"city_map load failed: {exc}")
 
     return BootContext(
         game=game,
@@ -152,6 +177,8 @@ def run_boot(
         n_sprites=n_sprites,
         city=city,
         walkers=walkers,
+        sim=sim,
         audio_status=audio_status,
         notes=notes,
+        start_in_map=start_in_map,
     )

@@ -2,7 +2,7 @@
 
 Static analysis of the user’s retail `c2_x` image (Ghidra 12.1.3 + GhidraMCP HTTP `127.0.0.1:8080`). No EXE in git. Continues `findings/ghidra_city.md`, `ghidra_walkers.md`, `ghidra_tile.md`.
 
-**Result:** a live city **or province** frame is `view_frame` `0x3CF9A` (real body ends at the first `RET` `0x3D3E5`; Ghidra still merges to `0x10CF67`). Who runs in city vs province vs forum: **`findings/view_modes.md`**. Each display frame always runs the timer + draw. **Sim work** runs only when `sim_tick_due` `0x3E4B9` returns 1, then **1 or 4** catch-up pulses. One pulse is: **`anim_phase_clocks` `0x27F31`** → `rng_clock` `0x2804C` → **`city_sim_phase` `0x3F60C`** (one `[0x1026A8]` slot, wrap `0xD6`) → **`walkers_tick` `0x459D0`** → **`actors26_tick` `0x45A7A`**. Host `app/sim.py` is a **fake frame increment**, not `walkers_tick`.
+**Result:** a live city **or province** frame is `view_frame` `0x3CF9A` (real body ends at the first `RET` `0x3D3E5`; Ghidra still merges to `0x10CF67`). Who runs in city vs province vs forum: **`findings/view_modes.md`**. Each display frame always runs the timer + draw. **Sim work** runs only when `sim_tick_due` `0x3E4B9` returns 1, then **1 or 4** catch-up pulses. One pulse is: **`anim_phase_clocks` `0x27F31`** → `rng_clock` `0x2804C` → **`city_sim_phase` `0x3F60C`** (one `[0x1026A8]` slot, wrap `0xD6`) → **`walkers_tick` `0x459D0`** → **`actors26_tick` `0x45A7A`**. Host Space/T is **one** pulse: `city_sim_phase` (one slot) then `walkers_tick`. Not a full `0xD6` dump.
 
 GhidraMCP this pass: decompiled `sim_tick_due`, `walkers_tick`, `actors26_tick`, `FUN_0003f60c` (renamed **`city_sim_phase`**). `view_frame` decompile timed out (bad bounds). CALL list below is the listing in `ghidra_city.md` plus the phase switch confirmed in C.
 
@@ -56,7 +56,7 @@ loop catch-up (1 if [0xC45A0]==0 else 4):
   CALL actors26_tick  0x45A7A
 ```
 
-That is the whole city AI / coverage / fire / flood / walker dispatch for **one** tick. Enough to stub: **phase++ then walkers then actors**. Host v0 only fakes walker `walk_frame`.
+That is the whole city AI / coverage / fire / flood / walker dispatch for **one** tick. Host Space/T: **phase (one slot) then walkers**. `actors26_tick` still skipped. Extra key **E** = host-only all 80 evolve rows.
 
 ---
 
@@ -76,39 +76,43 @@ Returns **1** → run the pulse(s). Host Space/T **ignores** this gate (manual s
 
 Body `0x3F60C`–`0x3FB37`. Every pulse: `FUN_000128ea()`, then **one** slot of `[0x1026A8]`, then `++` and wrap after **`0xD6`** (`FUN_0003fbcf`, `FUN_000293ec`, `[0x117A8E]=1`).
 
-Row cursor `[0x10265C]` is written from the phase (SavChunk 23). **Host does not run this switch.**
+Row cursor `[0x10265C]` is written from the phase (SavChunk 23). Host `app/city_sim.py` runs **one** slot per Space (not the full `0xD6` dump). Ghidra HTTP was down this pass; switch re-read from `c2_x.bin` (Capstone). **Y** = host does the work; **N** = named stub (no crash, no wipe).
 
-| Phase | CALL | What (from this + `ghidra_tile.md`) |
+| Id | One-line | Impl |
 |---|---|---|
-| always | `FUN_000128ea` | unnamed |
-| `0` | `FUN_0004308b` | once per cycle |
-| `1`…`0x50` | `city_buildings_evolve_row` `0x42360` | 80 rows; decays +10; housing grades |
-| `0x51`…`0x54` | `city_map_clear_byte8` | wipe **+13 / +15 / +14 / +12** |
-| `0x55` | — | nop |
-| `0x56`…`0x5D` | `FUN_0003fdd0` | paint +13/+14 |
-| `0x5E`…`0x65` | `FUN_000401e7` | paint +14 (+ some +10) |
-| `0x66`…`0x6D` | `FUN_0004034b` | paint **+12** amenities |
-| `0x6E`…`0x75` | `FUN_0003fef7` | more `tile_or_radius` |
-| `0x76`…`0x7D` | `FUN_00040695` | **+15** land value |
-| `0x7E`…`0x8D` | `FUN_00040d08` | housing target; reads **+17** |
-| `0x8E`…`0x91` | `FUN_0004118B` | industry walker emit (type 1) |
-| `0x92`…`0x95` | `FUN_0004133E` | barracks-ish emit |
-| `0x96`…`0x99` | `FUN_000414A9` | emit types 5 / 4 |
-| `0x9A`…`0x9D` | `FUN_00041719` | emit types 2 / 6 |
-| `0x9E`…`0xA1` | `FUN_00041DD4` | immigrant score; **`--tile[+16]`** if +3 bit7 |
-| `0xA2`…`0xC1` | `FUN_000430DA` | rebuild **+17** road flood (**do not stub yet**) |
-| `0xC2`…`0xC9` | `FUN_000445AF` | unnamed |
-| `0xCA` | `FUN_00043F88` | unnamed |
-| `0xCB` | `FUN_00053C67`, `FUN_0006CA74` | unnamed |
-| `0xCC` | `FUN_00029A19` | unnamed |
-| `0xCD` | `FUN_000456F6` | unnamed |
-| `0xCE`…`0xD0` | `FUN_0004327B` | rows 0 / `0x14` / `0x28` |
-| `0xD1` | `FUN_00043B2E` | unnamed |
-| `0xD2` | `walkers_relink_tiles` `0x2AFCB`, `FUN_0002B0A2` | rebuild tile +7/+8 |
-| `0xD3` | `FUN_0003E5E3` | overlay dispatch |
-| wrap `> 0xD6` | **`calendar_advance` `0x3FBCF`**, `FUN_000293EC` | month/year (`sav_date.md`) |
+| always | `FUN_000128ea` unnamed | N |
+| `0` | `FUN_0004308b` once per cycle | N |
+| `1`…`0x50` | housing evolve + villa/palace merge (`0x42360`); +10 decay | **Y** |
+| `0x51` | wipe +13 | N (keep saved) |
+| `0x52` | wipe +15 | N (keep saved — Achea is already 0) |
+| `0x53` | wipe +14 | N |
+| `0x54` | wipe +12 | N |
+| `0x55` | nop | Y |
+| `0x56`…`0x5D` | paint +13/+14 `0x3FDD0` | N |
+| `0x5E`…`0x65` | paint +14 `0x401E7` | N |
+| `0x66`…`0x6D` | paint +12 amenities `0x4034B` | N |
+| `0x6E`…`0x75` | `tile_or_radius` `0x3FEF7` | N |
+| `0x76`…`0x7D` | land-value +15 `0x40695` | N |
+| `0x7E`…`0x8D` | housing target cap +15 `0x40D08` | N |
+| `0x8E`…`0x91` | industry emit type 1 | N |
+| `0x92`…`0x95` | barracks emit | N |
+| `0x96`…`0x99` | emit types 5 / 4 | N |
+| `0x9A`…`0x9D` | emit types 2 / 6 | N |
+| `0x9E`…`0xA1` | immigrant / rioter `0x41DD4` | N |
+| `0xA2`…`0xC1` | road flood +17 `0x430DA` | N |
+| `0xC2`…`0xC9` | `0x445AF` | N |
+| `0xCA` | `0x43F88` | N |
+| `0xCB` | `0x53C67` / `0x6CA74` | N |
+| `0xCC` | `0x29A19` | N |
+| `0xCD` | `0x456F6` | N |
+| `0xCE`…`0xD0` | `0x4327B` rows 0 / `0x14` / `0x28` | N |
+| `0xD1` | `0x43B2E` | N |
+| `0xD2` | `walkers_relink_tiles` | N |
+| `0xD3` | overlay dispatch | N |
+| `0xD4`…`0xD6` | empty (fall through to ++) | Y |
+| wrap `> 0xD6` | `calendar_advance` month; `economy_recompute` stub | **Y** (month only) |
 
-Placement / water flood are **out of scope** for the v0 host stub.
+Host how-to: `findings/app_sim_phase.md`. Do **not** implement the `0x51`–`0x54` wipes until the paint slots exist — they would destroy live `+15`.
 
 ---
 
@@ -152,20 +156,21 @@ Skipped if `[0x9CE81]`. Else 26 × 175 @ `0x114500`; type 1–8 → `0x99D44`. *
 
 ---
 
-## 8. Host hook — `app/sim.py`
+## 8. Host hook — `app/sim.py` + `app/city_sim.py`
 
 ```
-from app.sim import on_sim_step, step_walkers
-n = on_sim_step(city, walkers)    # Space or T
+from app.sim import on_sim_step
+n = on_sim_step(city, walkers, sim)    # Space or T
 ```
 
 | Key | Who binds it | What |
 |---|---|---|
-| **Space** or **T** | `app/window.py` `sim_step` | `on_sim_step` then drop `map_cache` and re-overlay from `terrain_cache` |
+| **Space** or **T** | `app/window.py` `sim_step` | one `city_sim_phase` slot **then** `walkers_tick` (EXE order) |
+| **E** | `app/window.py` `evolve_pass` | host-only: all 80 evolve rows; does **not** advance phase |
 
-`__main__.py` re-exports `on_sim_step`. Pan / zoom stay on arrows / `+/-` (camera). Space/T does not move the camera.
+Phase / date load from SavChunks 23–27. Keys / Achea `+15` caveat: `findings/app_sim_phase.md`.
 
-Optional later (comment only in `sim.py`): `--tile[+16]` while `tile[+3] & 0x80` (`FUN_00041dd4`). **Not** `FUN_000430da` (+17 flood). **Not** building placement.
+`economy_recompute` `0x3FCA0` is stubbed. Wipes `0x51`–`0x54` are stubbed on purpose.
 
 ---
 

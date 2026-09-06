@@ -12,6 +12,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont, ImageTk
 
 from app.boot import BootContext
+from app.city_map import WATER_FRAME_MS, WATER_FRAMES
 
 SCREEN_W = 640
 SCREEN_H = 480
@@ -66,12 +67,24 @@ def crop_viewport(
 
 
 def _hud_lines(ctx: BootContext, *, map_mode: bool = False) -> list[str]:
-    lines = [
-        "Caesar II — v0 skeleton (not a sim)",
-        f"install: {ctx.game}  [{ctx.source}]",
-        f"art: {ctx.image_name}   map: {ctx.city.width}x{ctx.city.height} {ctx.city.source}",
-    ]
-    if ctx.eng is not None:
+    sim = ctx.sim
+    if getattr(sim, "city_only", 0):
+        from app.new_game import skill_name
+
+        lines = [
+            f"Caesar II — City Only  {skill_name(sim.skill)}  "
+            f"treasury {sim.treasury}  {sim.date_label}",
+            f"install: {ctx.game}  [{ctx.source}]",
+            f"map: {ctx.city.width}x{ctx.city.height} {ctx.city.source}  "
+            f"walkers=0  HISTORY=0  pid=0",
+        ]
+    else:
+        lines = [
+            "Caesar II — v0 skeleton (not a sim)",
+            f"install: {ctx.game}  [{ctx.source}]",
+            f"art: {ctx.image_name}   map: {ctx.city.width}x{ctx.city.height} {ctx.city.source}",
+        ]
+    if ctx.eng is not None and not getattr(sim, "city_only", 0):
         hit = ctx.eng.find("Caesar II - Version")
         if hit is None:
             hit = ctx.eng.find("Caesar II")
@@ -80,11 +93,11 @@ def _hud_lines(ctx: BootContext, *, map_mode: bool = False) -> list[str]:
             lines.append(f"C2.ENG[{hit[0]}]: {shown[:70]}")
     if map_mode:
         lines.append(
-            "Esc sair   3 mapa   Space/T tick   +/- zoom   setas/arrastar pan   Home   A raw"
+            "Esc sair   1 titulo   3 mapa   Space/T pulso   E evolve80   +/- zoom   setas pan   Home"
         )
     else:
         lines.append(
-            "Esc quit   1 title   2 cityfixt   3 map   Space/T tick   A raw"
+            "Esc quit   1 title   2 cityfixt   3 map   Space/T pulse   E evolve80   A raw"
         )
     return lines
 
@@ -151,7 +164,13 @@ def show(ctx: BootContext, *, game: Path) -> None:
     cam_x = 0
     cam_y = 0
     zoom = 0
+    water_frame = 0
+    river_xy: list[tuple[int, int]] = []
+    pl8_sheets: dict[int, dict] = {}
+    last_extra: str | None = None
+    water_after: str | None = None
     terrain_cache: dict[int, Image.Image] = {}
+    water_cache: dict[tuple[int, int], Image.Image] = {}
     map_cache: dict[int, Image.Image] = {}
     zoom_used_pl8: dict[int, bool] = {}
     drag: tuple[int, int, int, int] | None = None
@@ -161,7 +180,9 @@ def show(ctx: BootContext, *, game: Path) -> None:
         return map_cache.get(zoom)
 
     def blit(extra: str | None = None) -> None:
-        nonlocal photo, cam_x, cam_y
+        nonlocal photo, cam_x, cam_y, last_extra
+        if extra is not None:
+            last_extra = extra
         view = None
         canvas = current_canvas() if map_mode else None
         if canvas is not None:
@@ -181,7 +202,8 @@ def show(ctx: BootContext, *, game: Path) -> None:
         tw, th = city_map.iso_tile_size(zoom)
         return (
             f"mapa {ctx.city.source}  zoom={zoom} ({tw}x{th} {how})  "
-            f"pan={cam_x},{cam_y}  walkers={n_walkers}  ({names})"
+            f"pan={cam_x},{cam_y}  walkers={n_walkers}  "
+            f"água {water_frame}/{WATER_FRAMES} {WATER_FRAME_MS}ms  ({names})"
         )
 
     def paint_walkers(terrain: Image.Image, at_zoom: int) -> Image.Image:
@@ -194,6 +216,10 @@ def show(ctx: BootContext, *, game: Path) -> None:
         except (OSError, ValueError):
             return terrain
 
+    def remember_rivers() -> None:
+        nonlocal river_xy
+        river_xy = city_map.river_tile_xy(ctx.city)
+
     def ensure_map(at_zoom: int) -> Image.Image:
         if at_zoom in map_cache:
             return map_cache[at_zoom]
@@ -201,20 +227,27 @@ def show(ctx: BootContext, *, game: Path) -> None:
         zoom_used_pl8[at_zoom] = use_pl8
         blit(f"rendering zoom {at_zoom}…")
         root.update_idletasks()
+        remember_rivers()
         if use_pl8:
             if at_zoom not in terrain_cache:
                 sheets = assets.load_city_map_sheets(game, zoom=at_zoom)
+                pl8_sheets[at_zoom] = sheets
                 terrain_cache[at_zoom] = city_map.render_iso(
                     ctx.city,
                     sheets.get("CITYFIXT"),
                     sheets=sheets or None,
                     zoom=at_zoom,
+                    water_frame=water_frame,
                 )
+                water_cache[(at_zoom, water_frame)] = terrain_cache[at_zoom]
                 ctx.n_sprites = sum(len(v) for v in sheets.values())
             terrain = terrain_cache[at_zoom]
             painted = paint_walkers(terrain, at_zoom)
         elif at_zoom == 0:
-            terrain_cache[0] = city_map.render_iso(ctx.city, zoom=0)
+            terrain_cache[0] = city_map.render_iso(
+                ctx.city, zoom=0, water_frame=water_frame
+            )
+            water_cache[(0, water_frame)] = terrain_cache[0]
             painted = paint_walkers(terrain_cache[0], 0)
             zoom_used_pl8[0] = False
         else:
@@ -253,22 +286,88 @@ def show(ctx: BootContext, *, game: Path) -> None:
             center_camera(canvas)
         blit(map_status(n_walkers, None if zoom in map_cache else None))
 
-    def sim_step() -> None:
-        """Space / T — one walkers_tick 0x459D0. Pan/zoom stay with the camera keys."""
-        from app.sim import on_sim_step
-        from app.walkers import drawable_walkers
-
-        n = on_sim_step(ctx.city, ctx.walkers)
+    def _refresh_after_sim(*, houses_changed: bool) -> None:
         map_cache.clear()
+        if houses_changed:
+            terrain_cache.clear()
+            water_cache.clear()
+        remember_rivers()
         if not map_mode:
             show_city_map(reset_cam=True)
         else:
             canvas = ensure_map(zoom)
             ctx.image = canvas
+
+    def patch_water() -> bool:
+        if zoom not in pl8_zooms or not river_xy:
+            return False
+        cached = water_cache.get((zoom, water_frame))
+        if cached is not None:
+            terrain_cache[zoom] = cached
+            map_cache[zoom] = paint_walkers(cached, zoom)
+            return True
+        source = terrain_cache.get(zoom)
+        sheets = pl8_sheets.get(zoom)
+        cityfixt = sheets.get("CITYFIXT") if sheets else None
+        if source is None or cityfixt is None:
+            return False
+        dest = source.copy()
+        n = city_map.blit_water_tiles(
+            dest,
+            ctx.city,
+            cityfixt,
+            water_frame,
+            zoom=zoom,
+            cells=river_xy,
+            sheets=sheets,
+        )
+        if n <= 0:
+            return False
+        water_cache[(zoom, water_frame)] = dest
+        terrain_cache[zoom] = dest
+        map_cache[zoom] = paint_walkers(dest, zoom)
+        return True
+
+    def on_water() -> None:
+        """city_map_draw 0x360F7: ++[0x117AC8] % 4, independent of Space/T."""
+        nonlocal water_frame, water_after
+        water_after = root.after(WATER_FRAME_MS, on_water)
+        if not map_mode or not river_xy:
+            return
+        water_frame = (water_frame + 1) % WATER_FRAMES
+        if patch_water():
+            from app.walkers import drawable_walkers
+
+            blit(map_status(len(drawable_walkers(ctx.walkers))))
+
+    def sim_step() -> None:
+        """Space / T — one city_sim_phase slot then walkers_tick. Camera keys unchanged."""
+        from app.sim import on_sim_step
+        from app.walkers import drawable_walkers
+
+        n = on_sim_step(ctx.city, ctx.walkers, ctx.sim)
+        ph, w = n.phase, n.walkers
+        _refresh_after_sim(houses_changed=ph.houses_changed > 0)
         blit(
-            f"sim tick  moved={n.stepped}  frames={n.animated}  "
-            f"live={n.live}  freed={n.freed}  drawn={len(drawable_walkers(ctx.walkers))}  "
-            f"(walkers_tick 0x459D0)"
+            f"slot {ph.phase:#x} {ph.name}  houses +{ph.houses_up}/-{ph.houses_down} "
+            f"merge={ph.houses_merge}  {ph.date_label}  "
+            f"moved={w.stepped} frames={w.animated} live={w.live}  "
+            f"drawn={len(drawable_walkers(ctx.walkers))}"
+        )
+
+    def evolve_pass() -> None:
+        """E — host-only: all 80 evolve rows. Not one EXE pulse."""
+        from app.city_sim import evolve_all_rows
+        from app.walkers import drawable_walkers
+
+        up, down, merge = evolve_all_rows(
+            ctx.city.tiles, decay=ctx.sim.wrap3 == 0
+        )
+        _refresh_after_sim(houses_changed=(up + down) > 0)
+        blit(
+            f"E evolve80  houses +{up}/-{down} merge={merge}  "
+            f"phase still {ctx.sim.phase:#x}  {ctx.sim.date_label}  "
+            f"drawn={len(drawable_walkers(ctx.walkers))}"
         )
 
     def set_zoom(new_zoom: int) -> None:
@@ -314,7 +413,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
         key = event.keysym.lower()
         step = PAN_STEP[city_map.clamp_zoom(zoom)]
         if key in {"escape", "q"}:
-            root.destroy()
+            on_close()
         elif key in {"1"}:
             use_pl8("backgrnd.pl8", first_only=True)
         elif key in {"2"}:
@@ -323,6 +422,8 @@ def show(ctx: BootContext, *, game: Path) -> None:
             show_city_map(reset_cam=not map_mode)
         elif key in {"space", "t"}:
             sim_step()
+        elif key in {"e"}:
+            evolve_pass()
         elif key in {"a"}:
             blit(audio.play_raw_preview(game))
         elif not map_mode:
@@ -392,5 +493,16 @@ def show(ctx: BootContext, *, game: Path) -> None:
     label.bind("<MouseWheel>", on_wheel)
     label.bind("<Button-4>", on_wheel)
     label.bind("<Button-5>", on_wheel)
-    blit(ctx.audio_status)
+    def on_close() -> None:
+        if water_after is not None:
+            root.after_cancel(water_after)
+        root.destroy()
+
+    root.protocol("WM_DELETE_WINDOW", on_close)
+    if ctx.start_in_map:
+        root.title("Caesar II — City Only")
+        show_city_map(reset_cam=True)
+    else:
+        blit(ctx.audio_status)
+    water_after = root.after(WATER_FRAME_MS, on_water)
     root.mainloop()
