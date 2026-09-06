@@ -66,7 +66,7 @@ Confidence: **high** = exact sequence in this file (or unique mechanic). **mediu
 | **500-563** | 64 | **high** | **Housing land (bonus, radius)** x 32: slums `(-2,1)` … villas `(8,2)` x4, palaces `(16,2)` x2. |
 | **564-611** | 48 | **high** | **Forum + worship land (bonus, radius)** exact FAQ: Aventine, Janiculan, Palatine, Shrine, Temple, Basilica (4 grades each). |
 | 612-616 | 5 | pad | Zeros. |
-| 617-731 | 115 | low | 23 x 5. Many rows sum 80–100. First row `5,0,0,80,0` may be a header. Mix/weights — not province count. |
+| 617-731 | 115 | medium | 23×5 army **mix** (sums 60–110). Same *shape* as EXE `0x95777` (spawn rows 1–23; row 0 at `0x95763` is zeros). Spawn reads the **EXE**, not this DAT — several rows differ (e.g. row 6). See `findings/province_actors.md`. |
 | **732-789** | 58 | **high** | **Other buildings (bonus, radius)** x 29. Confirmed: Odeum `3;4`, Coliseum `4;5`, Plaza `4;1`, Baths `3;3…6;3`. |
 | **790-889** | 100 | **high** | **Individual rating %**, 5 difficulties x 20 rank slots. `99` = unused (Novice 5, Easy 7). Normal pads with `65`; Hard with `82`; Impossible fills 20 (`25…94`). FAQ v1.0 listed 10 ranks (Citizen…Consul); 1.1A has 20 slots. |
 | **890-989** | 100 | **high** | **Average rating %**, same 5 x 20. Normal `30…74` padded; Impossible `35…97`. |

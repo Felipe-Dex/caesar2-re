@@ -182,7 +182,7 @@ Igual à cidade (`input_poll_*` no `view_frame`). Clique em Your City (`id 0x92`
 
 ### Ainda FUN_
 
-`FUN_00039DCD` (edifício provincial), `FUN_0003A003`, `FUN_0003DE73` (loop do modal `0x5429C`), `FUN_0003F063` (overlay kind 1). Types actor26 1–8: tabela em `ghidra_sim.md` / walkers — não reabrir aqui.
+`FUN_00039DCD` (edifício provincial), `FUN_0003A003`, `FUN_0003DE73` (loop do modal `0x5429C`), `FUN_0003F063` (overlay kind 1). Types actor26 1–8 (terra 1–5 / mar 6–8, muls 8/6/3/vila): `findings/province_actors.md`. Sem viewer provincial em `app/` — draw continua no EXE (`province_draw_actor26`).
 
 ---
 

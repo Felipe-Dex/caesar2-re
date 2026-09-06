@@ -29,7 +29,7 @@ Não são os **91 walkers da cidade**. Cidade = SavChunk **8** (201 × 58). Prov
 
 Slots 5–25 vazios. Tipo 3 **bárbaro da cidade** não mora aqui: nasce no chunk 8 quando um actor tipo **2–5** pisa Your City `0x92`. Nesta save **não há** tipos 2–5 nem 7–8.
 
-Offsets / C2.ENG / Ghidra: **`findings/province_actors.md`**.
+Offsets / C2.ENG / Ghidra: **`findings/province_actors.md`**. Terra vs mar + escala 3–5: tabela aí. Banners 2–5: `findings/province_army_banners.md`.
 
 | slot | tipo | Query (ACHEA23) | (x, y) | Excel | estado | dest | extra |
 |---:|---:|---|---|---|---:|---|---|
@@ -70,4 +70,4 @@ Screenshot da coorte (187 BC / 28561 Dn): **Prima Cohors**, **Formed 223 BC**, 1
 | 1 | 1 | (36, 27) AL29 | painel Prima Cohors — **não** Forum Clerk |
 | 2 | 6 | (44, 18) AT20 | Merchant Ship + Silk / Trade Route |
 
-Tipos 2–5 e 7–8: zero nesta save.
+Tipos 2–5 e 7–8: zero nesta save. Query 2–5 / save hostil ainda precisa do user.

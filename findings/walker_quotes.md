@@ -185,3 +185,5 @@ Names on those slots match `[64] + rec[+0x32]`: 15 Maelius Piscator, 16 Ennius L
 | `0x6DD50` | house scan r=5; modes 0/1/2 |
 | `0x28219` | percent `eax*100/edx` |
 | `0x4A7FF` | `score_a` / `score_b` (type 2 EDX=1, type 6 EDX=0) |
+
+Province actor26 types **2–5** are banners + tooltip (not [63] speech): `findings/province_army_banners.md`.

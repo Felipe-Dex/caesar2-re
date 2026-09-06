@@ -9,28 +9,45 @@ Não é o Query da **cidade** (`0x632A4`, walkers 58 B, C2.ENG **[66]**). Overla
 
 Corpo do relatório da coorte: `actor26_cohort_report_body` `0x5C036`. Ano: `format_year_bc_ad` `0x62118`.
 
-Save de referência: **ACHEA23** (`findings/achea_province_walkers.md`). HUD **187 BC January** / **28561 Dn**. ACHEA23 só tem tipos **1** e **6**.
+Save de referência: **ACHEA23** (`findings/achea_province_walkers.md`). HUD **187 BC January** / **28561 Dn**. ACHEA23 só tem tipos **1** e **6**. Banners / tooltip 2–5: `findings/province_army_banners.md`.
 
-### Tipos 1–8 (`rec[+4]`)
+### Taxonomia (terra vs mar + escala)
 
 Dispatch `actors26_tick` `0x45A7A` → `0x99D44[type]` (tipo 0 unused `0x45D8E`; 1–8 abaixo). Query: tipo 1 = painel; senão `actor26_query_tooltip` `0x5BE03` (`EAX=0x2D` **[44]**, `EDX` por tipo). Spawn de terra: `economy_recompute` `0x3FCA0` → `FUN_000528bb` (tenta **5, 4, 3, 2** nesta ordem, um por pulso). Banner: `FUN_00058c87` `EAX` = slot oficial **+ 1** (igual `FUN_00026f16`; invasão na cidade `EAX=0x53` → **[82]** `The City Is Attacked!`). Sem string **Wolf** no C2.ENG.
 
-| Tipo | Query **[44]+EDX** | Banner ao nascer | Handler / spawn | Conf. |
-|---:|---|---|---|---|
-| **1** | painel **[4]** (não o tooltip) | — (jogador / `CALL 0x2AA02` `EAX=1` @ `0x3123E`) | `0x45D8F` `actor26_set_sprite_t1` | alta (ACHEA23) |
-| **2** | EDX 0x19 → **Enemy Army** | **[93]** `Enemy Invades!` (`EAX=0x5E` @ `0x532EE`) | `0x45E39` + `actor26_set_sprite_t2`; spawn `FUN_00053215` `EAX=2`; tropas ×8; `marchb2.wav`; origem `[0x1026E8]` | alta EXE; sem save |
-| **3** | EDX 0x1A → **Barbarians** | **[92]** `Barbarian Invasion!` (`EAX=0x5D` @ `0x53203`) | `0x45E64` + `FUN_00047ae2`; spawn `FUN_00053127` `EAX=3`; tropas ×6; `marchb2.wav`; origem `[0x1026E8]` | alta EXE; sem save |
-| **4** | EDX 0x1A → **Barbarians** | **[90]** `Raiders Sighted!` (`EAX=0x5B` @ `0x53115`) | mesmo handler que 3; spawn `FUN_0005302b` `EAX=4`; tropas ×3; `marchb2.wav`; origem `[0x1026E8]` | alta EXE; sem save |
-| **5** | EDX 0x1A → **Barbarians** | **[91]** `Local Uprising!` (`EAX=0x5C` @ `0x53363`) | `0x45E75` (sprite t2 se `[0x1025CC]∈{6,0xF,0x12,0x22}`, senão `FUN_00047ae2`); spawn `FUN_00053300` `EAX=5`; tropas ×`FUN_000533fb` (vila `0x93`–`0x96`); `uprise.wav`; origem **`[0x1025CC]`** (esta província) | alta EXE; sem save |
-| **6** | EDX 0x1B → **Merchant Ship** | — (comércio) | `0x45EC3` `FUN_00047a44(0x4E)`; spawn `FUN_00054087` `EAX=6` só | alta (ACHEA23) |
-| **7** | EDX 0x1C → **Enemy Ship** | — | `0x45ED2`: `[0x102CF0]=2` + **RET**. **Nenhum** `actor26_spawn` com `EAX=7` neste 1.1A | tooltip só |
-| **8** | EDX 0x1D → **Barbarian Ship** | — | mesmo RET que 7. **Nenhum** spawn `EAX=8` | tooltip só |
+**Terra (1–5)** e **mar (6–8)** são dois grupos. Em terra, 3/4/5 partilham o título Query **Barbarians**; o que muda é o **banner** e o **multiplicador de tropas**. 7–8 só existem no tooltip neste 1.1A.
 
-Tipos **2–5** são exércitos terrestres (notas antigas certas). **7–8 “sem AI”** também é certo neste build; o mapeamento posterior para navios no tooltip **não** contradiz isso — só não há spawn. Não há unidade “Wolf”.
+| Tipo | Domínio | Query | Banner ao nascer | Tamanho (`+0x8A` = soma dos 5 dwords) | Conf. |
+|---:|---|---|---|---|---|
+| **1** | terra — jogador | painel **[4]** (ACHEA23: **Prima Cohors**) | — (`CALL 0x2AA02` `EAX=1` @ `0x3123E`) | **não** usa a tabela hostil. ACHEA23: **1330** Heavy / battle-ready | alta (ACHEA23) |
+| **2** | terra — rival | **[44]+25** **Enemy Army** | **[93]** `Enemy Invades!` (`EAX=0x5E`) | mix × **8** (`<< 3` em `FUN_000528bb`). Soma-mix 60–110 → **480–880** | alta EXE; sem save |
+| **3** | terra — horda | **[44]+26** **Barbarians** | **[92]** `Barbarian Invasion!` (`EAX=0x5D`) | mix × **6** (`FUN_00052d3c`). → **360–660** | alta EXE; sem save |
+| **4** | terra — raid | **[44]+26** **Barbarians** | **[90]** `Raiders Sighted!` (`EAX=0x5B`) | mix × **3** (`FUN_00052bd1`). → **180–330** | alta EXE; sem save |
+| **5** | terra — revolta | **[44]+26** **Barbarians** | **[91]** `Local Uprising!` (`EAX=0x5C`) | mix × **(vila−0x92)** ∈ **{1,2,3,4}** (`FUN_000533fb` → `DAT_00117ba4`). → **60–440** | alta EXE; sem save |
+| **6** | mar — comércio | **[44]+27** **Merchant Ship** | — | n/a (cargo `+0x99`). ACHEA23 slot 3: **Silk** from Trade Route | alta (ACHEA23) |
+| **7** | mar | **[44]+28** **Enemy Ship** | — | sem spawn `EAX=7` neste 1.1A | tooltip só |
+| **8** | mar | **[44]+29** **Barbarian Ship** | — | sem spawn `EAX=8` | tooltip só |
+
+Mix = 5×i32 @ `0x95763 + comp×0x14`, `comp = [0x95443 + origem]`. Origem 2–4 = `[0x1026E8]`; tipo 5 = `[0x1025CC]` (esta província). Os cinco dwords vão a `+0x86 / +0x76 / +0x82 / +0x7E / +0x7A` (Aux / ? / Heavy / Light / Sling); `+0x8A` é a soma. Linha 0 da tabela é zeros; linhas 1–23 somam **60–110** (não é um efetivo fixo — é o *base* que o mul escala). Mesma forma que C2MODEL `[617:731]` (23×5); o spawn **lê o EXE**, e várias linhas diferem do DAT.
+
+ACHEA23 `[0x1025CC]=15` → `[5]+16` **Achaea**; `comp=2` → mix `(0,0,50,30,20)` soma **100**. Um tipo **5** daqui teria `+0x8A` = **100 / 200 / 300 / 400** (vila `0x93`…`0x96`). Tipos 2–4 dependem de `[0x1026E8]` (não nesta save).
+
+| Tipo | Handler / spawn | SFX / origem |
+|---:|---|---|
+| **1** | `0x45D8F` `actor26_set_sprite_t1` | jogador |
+| **2** | `0x45E39` + `actor26_set_sprite_t2`; `FUN_00053215` `EAX=2` | `marchb2.wav`; `[0x1026E8]` |
+| **3** | `0x45E64` + `FUN_00047ae2`; `FUN_00053127` `EAX=3` | `marchb2.wav`; `[0x1026E8]` |
+| **4** | mesmo handler que 3; `FUN_0005302b` `EAX=4` | `marchb2.wav`; `[0x1026E8]` |
+| **5** | `0x45E75` (sprite t2 se `[0x1025CC]∈{6,0xF,0x12,0x22}`, senão `FUN_00047ae2`); `FUN_00053300` `EAX=5` | `uprise.wav`; `[0x1025CC]` |
+| **6** | `0x45EC3` `FUN_00047a44(0x4E)`; `FUN_00054087` `EAX=6` só | comércio |
+| **7** | `0x45ED2`: `[0x102CF0]=2` + **RET** | — |
+| **8** | mesmo RET que 7 | — |
+
+Tipos **2–5** são exércitos terrestres. **7–8 “sem AI”** neste build; o tooltip de navio **não** contradiz isso — só não há spawn. Não há unidade “Wolf”.
 
 Ao pisar Your City `0x92` (`FUN_0004987d`): qualquer **2–5** chama `walker_spawn_type3_from_actor26` `0x53562` (walker cidade tipo 3 **Enemy**) e põe state 2. Pisar `0x97` / outro occupied manda **[112]/[113]** (`EAX=0x71`/`0x72`), não o banner de spawn.
 
-Como ver no jogo (ACHEA23 não chega): esperar o pulso anual / paz (`FUN_00052eb9` + RNG). Tipo **5** nasce junto de um tile `0x93`–`0x96` (estado de vila; **não** é Roman Town `0x97` / Border Town `0x98` — `0x97` vira `0x93` quando um 2–5 pisa) com *Local Uprising!*. Tipo **4** = *Raiders Sighted!* (raid que entra). Tipo **3** = *Barbarian Invasion!* (horda). Tipo **2** = *Enemy Invades!* + Query **Enemy Army** (rivais). Query em 3/4/5 diz só **Barbarians** — o banner é que distingue.
+Como ver no jogo (ACHEA23 não chega): esperar o pulso anual / paz (`FUN_00052eb9` + RNG). Tipo **5** nasce junto de um tile `0x93`–`0x96` (estado de vila; **não** é Roman Town `0x97` / Border Town `0x98` — `0x97` vira `0x93` quando um 2–5 pisa) com *Local Uprising!*. Tipo **4** = *Raiders Sighted!* (raid que entra). Tipo **3** = *Barbarian Invasion!* (horda). Tipo **2** = *Enemy Invades!* + Query **Enemy Army** (rivais). Query em 3/4/5 diz só **Barbarians** — o banner é que distingue a escala.
 
 ---
 
@@ -85,11 +102,12 @@ Pool SavChunk **7**. Spawn de navio `FUN_00054087` grava `city_year` em `+0x3A` 
 | +0x28 | u8 | painel | **0** | índice **[4]** → Prima Cohors |
 | **+0x3A** | **i32** | `format_year_bc_ad` | **−223** | ano formado (signed BC) |
 | +0x3E … | 14 × 4 B | ícones | 14× `(1,1,0,0)` | loop `ECX&lt;0xE`; tipo 1=Heavy. Screenshot mostra uma fila (~16); o EXE itera **14** |
-| **+0x7A** | i32 | relatório | 0 | Sling |
-| **+0x7E** | i32 | relatório | 0 | Light |
-| **+0x82** | i32 | relatório | **1330** | Heavy |
-| **+0x86** | i32 | relatório | 0 | Auxiliaries |
-| **+0x8A** | i32 | relatório | **1330** | battle-ready (`We have %d battle-ready soldiers`) |
+| **+0x76** | i32 | spawn hostil + batalha | — | mix[1] × mul (Query da coorte **não** nomeia; `FUN_000649b1` lê) |
+| **+0x7A** | i32 | relatório | 0 | Sling = mix[4] × mul |
+| **+0x7E** | i32 | relatório | 0 | Light = mix[3] × mul |
+| **+0x82** | i32 | relatório | **1330** | Heavy = mix[2] × mul |
+| **+0x86** | i32 | relatório | 0 | Auxiliaries = mix[0] × mul |
+| **+0x8A** | i32 | relatório / tooltip 2–5 | **1330** | battle-ready = soma dos cinco |
 | +0x92 | u8 | espaçamento ícones | 14 | |
 | +0x93 | u8 | “Confined to fort” | 0x30 | |
 | **+0x94** | u8 | morale 0…4 | **4** | EXCELLENT. Spawn default era 2 |
@@ -140,6 +158,20 @@ Só o slot **3** fecha Silk + origem Trade Route (Q&A + bytes).
 ## 5. Ainda opaco
 
 - LUT `0x95393` (4 bytes / província → skip **[5]**): fórmula fechada; bytes no `c2_x.bin` não estão em VA identity — mapa LE ainda falho.
-- Tipos 2–5 / 7–8: zero nesta save (ACHEA23). Títulos e banners acima são do EXE + C2.ENG; falta Query ao vivo. 7–8 sem spawn neste 1.1A.
+- Tipos 2–5 / 7–8: zero nesta save (ACHEA23). Títulos, banners e muls acima são do EXE + C2.ENG; falta Query ao vivo e um save hostil. 7–8 sem spawn neste 1.1A. `+0x76` sem nome de UI na província.
 - `+0x23` nos parked (12 / 11) parece frame congelado, não cargo.
 - Painel de **batalha** `FUN_000649B1` / `FUN_00064F8A` (EAX=`0x47` = **[70]** Heavy Infantry…) é outra UI, não este Query da província.
+
+---
+
+## Gaps
+
+Não muda a tabela terra/mar nem os muls 8/6/3. Detalhe e SAV: `findings/province_gaps.md`.
+
+| Item | Status |
+|---|---|
+| LUT `0x95393` bytes + nomes **[5]+n+1** | **Done** (Achea pid 15 → Macedonia / Trade Route / Creta / Campania) |
+| Tipos **2–5** Query ao vivo | **Needs** save com invasão / raiders / uprising |
+| Tipos **7–8** spawn | **Done** — não nascem neste 1.1A |
+| `+0x23` parked / `+0x76` | **Needs** (sem string de Query) |
+| Batalha `0x649B1` | fora deste Query |
