@@ -225,3 +225,19 @@ Already done: empty→**Reservoir** (`0xBE`), empty→**Tent** (`0x82`), D.SAV�
 - `0xF1–0xF2` leftover. Zoom / Query are UI only. Clear area stamps **`0x1C`**. Rubble is terrain **`0x05`**.
 
 Do not start a crack session from the drive-letter strings.
+
+---
+
+## 7. Host City Only (esta fatia)
+
+`app/palette.py` + `app/place.py`. Flyouts com os nomes do §0. **Colocam** cinco stamps; o resto do menu diz “ainda não”.
+
+| UI | Id | Pé | Custo | Notas |
+|---|---|---|---:|---|
+| Reservoir | `0xBE` | **3×3 NW** | **51** | A/B bytes (`+1=0x80` `+3=0x20` `+4=+9=0x6E`). A/B cirúrgico no (0,0) foi **1×1**; Achea tem 9 bacias 1-célula. Este host reserva 3×3 como os outros multi-tile. |
+| Aqueduct | stub `0xCB` · NS `0xD0` · EW `0xD1` · junção `0xD6` | 1×1 rect | **0** | `+1=0x40` (`0x60` na junção). Sem LUT completa `0xCF–0xD6`. |
+| Well | `0xD7` | 1×1 rect | **20** | D.SAV `+3=0x08` `+4=0x10` |
+| Gardens | `0x78` | 1×1 rect | **3** | BUILD1A. Família `0x78–0x7B`; o host carimba o 1º id. |
+| Praefecture | `0xE3` | 1×1 rect | **100** | HOUSES1 `+4=0x50`. Achea também tem 2×1 — não neste stamp. |
+
+Rio recusado (excepto ponte de estrada já documentada). Arrasto 1×1 é tesouro-atómico. Fountain / Plaza / Forums / Entert'ment / Worship / Education / Wall / Tower / Barracks = stub.

@@ -31,7 +31,7 @@ def _print_status(ctx) -> None:
     print(
         "sim           : Space/T -> "
         f"{on_sim_step.__module__}.on_sim_step "
-        "(city_sim_phase one slot, then walkers_tick; E = evolve80)"
+        "(one slot then walkers_tick; M = month; play/faster auto-clock; E = evolve80)"
     )
     sim = getattr(ctx, "sim", None)
     if sim is not None:
@@ -55,6 +55,8 @@ def main(argv: list[str] | None = None) -> int:
             "Caesar II v0 — load original files, show one PL8. "
             "--new --city-only starts a fresh city (grass+river). "
             "Space/T = one city_sim_phase slot then walkers_tick. "
+            "M = skip stubs + one calendar_advance (month++). "
+            "Unpaused play/faster auto-advances months (sim_tick_due). "
             "E = host evolve-all-rows. See findings/city_only.md."
         )
     )
@@ -232,6 +234,13 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {line}")
             if "FAIL" in line:
                 failed += 1
+        from app.place import selftest as place_selftest
+
+        print("-- place selftest --")
+        for line in place_selftest():
+            print(f"  {line}")
+            if "FAIL" in line:
+                failed += 1
         if failed:
             print("FAILED        : city_map_generate selftest")
             return 1
@@ -282,6 +291,28 @@ def main(argv: list[str] | None = None) -> int:
                 water_fail += 1
         if water_fail:
             print("FAILED        : water LUT selftest")
+            return 1
+        from app.place import selftest as place_selftest
+
+        print("-- place selftest --")
+        place_fail = 0
+        for line in place_selftest():
+            print(f"  {line}")
+            if "FAIL" in line:
+                place_fail += 1
+        if place_fail:
+            print("FAILED        : place selftest")
+            return 1
+        from app.city_overlay import selftest as overlay_selftest
+
+        print("-- overlay selftest --")
+        overlay_fail = 0
+        for line in overlay_selftest():
+            print(f"  {line}")
+            if "FAIL" in line:
+                overlay_fail += 1
+        if overlay_fail:
+            print("FAILED        : overlay selftest")
             return 1
         if args.new:
             from app.new_game import river_tile_count

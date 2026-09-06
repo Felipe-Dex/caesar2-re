@@ -54,16 +54,16 @@ python -m app --check --no-audio
 
 Pillow is already required by `tools/decode_pl8.py`. tkinter ships with this Windows Python. No Godot / pygame install.
 
-Keys in the window: **Esc** quit · **1** `backgrnd.pl8` · **2** first `CITYFIXT` tile · **3** 80×80 city map + people (SavChunk 8) · **+** / **-** zoom 0/1/2 · arrows or drag to pan · **Home** re-center · **Space** / **T** one `city_sim_phase` slot then `walkers_tick` · **E** host evolve-all-rows · **A** play 2 s of `A01.RAW`.
+Keys in the window: **Esc** quit · **1** `backgrnd.pl8` · **2** first `CITYFIXT` tile · **3** 80×80 city map + people (SavChunk 8) · **+** / **-** zoom 0/1/2 · setas fazem pan · **Home** re-center · **Space** / **T** one `city_sim_phase` slot then `walkers_tick` · **E** host evolve-all-rows · **A** play 2 s of `A01.RAW`. No mapa: clique na **sidebar direita** (Housing / Roads / Clear / Query). **Housing** e **Clear** — clique-arrasta um **rectângulo** (soltar carimba; preview enquanto arrasta). **Roads** — só **linha recta** no eixo dominante (horizontal se |dx|≥|dy|, senão vertical; sem L); ponte no rio recto, curvas saltadas. Clique sem mover = 1 tile. Sem ferramenta / **Query**, arrastar ainda faz **pan**. **Direito** cancela o arrasto (não carimba) e a ferramenta. Tesouro: o rectângulo de tendas é **tudo ou nada** (recusa se não chega para todas as tendas novas × 6).
 
 ### Mapa da cidade / City map (tecla **3**)
 
 Boot carrega o primeiro save da pasta do jogo (`FELIPE01.SAV`, senão `FELIPE02` / `LASTYEAR` / qualquer `.SAV`). **Não copia** o ficheiro para o git.
 
-A janela **640×480** é uma **viewport** sobre o canvas iso nativo (já não encolhe o mapa inteiro para 960×497).
+A janela nativa é **640×480** (viewport sobre o canvas iso; já não encolhe o mapa inteiro). **Maximizar / redimensionar** alarga o recorte iso (mais tiles, mesmo zoom PL8). O chrome INT_CITY fica 162 px 1:1 à direita.
 
 - **3** desenha o mapa isométrico 80×80 (SavChunk 13, 20 bytes/tile) e as pessoas do SavChunk 8. Terreno (`id < 0x78`) usa `CITYFIXT[LUT[id×4+(zoom>>1)]+16]` (colunas da LUT = zoom, não frames). **Rio** (`+1 & 0x10`, ids `0x1E–0x51`): `+0` fica locked (o EXE em `0x361DC` não cicla ids; `[0x117AC8]` só incrementa). O host cintila só o azul interior (`WATER_FRAME_MS` 250) — as margens não mudam de silhueta. Relva fica quieta. Edifícios (`id ≥ 0x78`) usam `tile[+3] & 0x1C` → `HOUSES1` / `BUILD1A`–`D` / `CITYFIXT` e `LUT[tile[+4]]` (`city_tile_draw_building` `0x3739F`). Casas `0x82–0xA1` e fóruns `0xA2–0xA8` neste save vão para `HOUSES1`. `AHOUSE` / `AFORUM` são ícones 182×132 do menu, não o mapa iso. Deixa a janela aberta: o rio cintila sozinho (Space/T não é preciso).
-- **Pan:** setas (passo 96/48/24 px conforme o zoom) ou **clique-arrastar**. **Home** centra o canvas.
+- **Pan:** setas (passo 96/48/24 px conforme o zoom) ou **clique-arrastar** quando **não** há ferramenta de construir (ou a ferramenta é **Query**). Com Housing / Roads / Clear, o arrasto é borracha, não pan. **Home** centra o canvas.
 - **Zoom:** `+` / `=` / `]` aproxima (set 0 = `HOUSES1` / `BUILD1*` / `LTLMEN1B`, 58×30, flags `0x0002`). `-` / `[` / **Z** afasta. Set 1 = `HOUSES2` / `BUILD2*` / `CITYFIX2` / `LTLMEN2B` (26×14, `0x0102`). Set 2 = `HOUSES3` / `BUILD3*` / `CITYFIX3` / `LTLMEN3B` (10×6, `0x0202`). Roda do rato também muda o zoom. Se o PL8 faltar, o host faz scale nearest do zoom 0.
 - **Space** / **T:** um pulso do EXE: `city_sim_phase` (1 slot) **depois** `walkers_tick`. **E:** as 80 filas de evolve (atalho). Achea `+15=0` faz casas **descerem**. Preferir `20230610.SAV`. Como testar: `findings/app_sim_phase.md`.
 - PNG sem janela (gitignorado): `python -m app --map-preview --no-audio`
@@ -99,7 +99,7 @@ No intro video. `INTRO.SMK` is only verified on disk (`smk_play` @ `0x5AB3D` is 
 | city map SavChunk 13 | `0xE2FBC` | `city_map.py`: 80×80×20 from `.SAV` **ou** generate; tecla **3** |
 | walkers SavChunk 8 | `0x1107A4` | `walkers.py`: 201×58; overlay after `render_iso` (tecla **3**) |
 
-`--new --city-only` starts a city (grass + river, year −300, treasury from C2MODEL). No placement yet — Space ticks empty grass. Houses / forums / industry / people blit from the original PL8s when a `.SAV` is loaded (tecla **3**).
+`--new --city-only` starts a city (grass + river, year −300, treasury from C2MODEL). Paleta `INT_CITY` + placement v1: Tent `0x82` (custo 6), estrada `0x52–0x5C`, ponte `0x4E–0x51` no rio recto (recusa curva), clear em dois passos (prédio→`0x05`, rubble→`0x1C`). Flyouts Water/Forums/… ainda stub. Houses / forums / industry / people blit from the original PL8s when a `.SAV` is loaded (tecla **3**).
 
 ---
 

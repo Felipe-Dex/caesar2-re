@@ -194,31 +194,66 @@ def iso_origin_x(width: int = MAP_W, *, zoom: int = 0) -> int:
     return (width - 1) * (tile_w // 2)
 
 
+# walker_step 0x488DC — facing 0–7 = N NE E SE S SW W NW
+_FACING_XY: tuple[tuple[int, int], ...] = (
+    (0, -1),
+    (1, -1),
+    (1, 0),
+    (1, 1),
+    (0, 1),
+    (-1, 1),
+    (-1, 0),
+    (-1, -1),
+)
+
+
 def tile_iso_xy(
-    x: int,
-    y: int,
+    x: float,
+    y: float,
     *,
     origin_x: int | None = None,
     zoom: int = 0,
 ) -> tuple[int, int]:
     """Diamond top-left. Same formula as city_map.render_iso."""
     tile_w, tile_h = iso_tile_size(zoom)
-    half_w, half_h = tile_w // 2, tile_h // 2
+    half_w, half_h = tile_w / 2.0, tile_h / 2.0
     if origin_x is None:
         origin_x = iso_origin_x(zoom=zoom)
     sx = origin_x + (x - y) * half_w
     sy = (x + y) * half_h
-    return sx, sy
+    return int(round(sx)), int(round(sy))
+
+
+def walker_draw_xy(walker: Walker) -> tuple[float, float]:
+    """Tile coords for blit. walk_frame 1–15 slides from the previous pad.
+
+    ``walker_step`` commits x/y first, then ``walk_frame`` runs 1…15 on the
+    new tile. Without the lerp they teleport and moonwalk in place.
+    """
+    x, y = float(walker.x), float(walker.y)
+    frame = walker.walk_frame
+    facing = walker.facing
+    if 1 <= frame <= 15 and 0 <= facing <= 7:
+        dx, dy = _FACING_XY[facing]
+        t = frame / 16.0
+        x -= dx * (1.0 - t)
+        y -= dy * (1.0 - t)
+    return x, y
 
 
 def walker_iso_xy(
     walker: Walker, *, origin_x: int | None = None, zoom: int = 0
 ) -> tuple[int, int]:
-    """Blit origin for LTLMEN: feet near the bottom-center of the tile."""
+    """Blit origin for LTLMEN: feet on the road diamond, not the aqueduct lift."""
     tile_w, tile_h = iso_tile_size(zoom)
     men = LTLMEN_SIZE_BY_ZOOM[max(0, min(zoom, 2))]
-    sx, sy = tile_iso_xy(walker.x, walker.y, origin_x=origin_x, zoom=zoom)
-    return sx + tile_w // 2 - men // 2, sy + tile_h - (men + 2)
+    fx, fy = walker_draw_xy(walker)
+    sx, sy = tile_iso_xy(fx, fy, origin_x=origin_x, zoom=zoom)
+    # Centre of the iso diamond is the pad. Bottom-edge feet sit on the
+    # SE neighbour (often the lifted aqueduct pipe, +26 px).
+    cx = sx + tile_w // 2
+    cy = sy + tile_h // 2
+    return cx - men // 2, cy - men + men // 4
 
 
 def load_ltlmen_frames(

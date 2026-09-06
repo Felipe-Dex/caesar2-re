@@ -324,7 +324,7 @@ from app.walkers import overlay_walkers
 img = overlay_walkers(img, walkers, game)   # img = native render_iso canvas
 ```
 
-`overlay_walkers` loads `LTLMEN1B.PL8` via `assets.load_pl8_frames` → `decode_pl8` (no PL8 copy). Blit at `tile_iso_xy` (same diamond math as `render_iso`) with the 16×16 feet near the tile bottom-center. Prefers saved `sprite_id`; else `TYPE_LTLMEN_BASE[type] + facing*3 + frame`.
+`overlay_walkers` loads `LTLMEN1B.PL8` via `assets.load_pl8_frames` → `decode_pl8` (no PL8 copy). Blit at `tile_iso_xy` (same diamond math as `render_iso`) with the 16×16 feet on the road diamond centre — not the aqueduct lift. `walk_frame` 1–15 lerps from the previous pad so they do not teleport. Prefers saved `sprite_id`; else `TYPE_LTLMEN_BASE[type] + facing*3 + frame`.
 
 ---
 

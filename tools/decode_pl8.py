@@ -357,7 +357,11 @@ def unpack_iso(payload: bytes, spr: SpriteRecord) -> tuple[bytes, int, int]:
     """
     w, h = spr.width, spr.height
     extra = spr.extra_rows
-    canvas_h = h + extra
+    # Type 1 stores extra_rows but the payload is diamond-only. A taller
+    # canvas of index-0 padded the blit AABB and iso_sprite_dest shifted
+    # each tile by a different extra (CITYFIXT 4–30) — black grid / boxes.
+    use_extra = spr.tile_type in (2, 3, 4)
+    canvas_h = h + extra if use_extra else h
     out = bytearray(w * canvas_h)
     pos = 0
 
@@ -374,7 +378,7 @@ def unpack_iso(payload: bytes, spr: SpriteRecord) -> tuple[bytes, int, int]:
     half_h = h // 2
     half_w = w // 2
 
-    shift = extra if spr.tile_type in (2, 3, 4) else 0
+    shift = extra if use_extra else 0
 
     for y in range(half_h):
         row_start = (half_h - 1 - y) * 2

@@ -27,6 +27,9 @@ app/
   walker_tick.py   walkers_tick 0x459D0
   calendar.py      data HUD (chunks 25/26)
   new_game.py      start_city_assignment City Only + city_map_generate
+  place.py         stamp Tent/Road/Clear + tesouro (v1)
+  city_chrome.py   INT_CITY sidebar + hitboxes 3×5
+  city_overlay.py  overlay-filter 0x98B34 + Query stub
   sim.py           um pulso: phase depois walkers
   window.py        tkinter 640×480 + teclas + câmara + cache iso
 ```
@@ -67,7 +70,7 @@ Um Space = **um** slot `[0x1026A8]`, não o dump `0xD6`. Wrap `> 0xD6` avança o
 | Space / T | 1 pulso | câmara não muda |
 | E | evolve80 | host-only |
 | A | 2 s `A01.RAW` | |
-| setas / arrastar | pan | só no mapa; passo 96/48/24 |
+| setas / arrastar | pan | só no mapa; passo 96/48/24. Com Housing/Roads/Clear o arrasto é borracha, não pan |
 | + − / ] [ / Z / roda | zoom 0/1/2 | PL8 ou scale nearest |
 | Home | recentrar | |
 

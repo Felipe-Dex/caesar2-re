@@ -1,10 +1,8 @@
 """Host stand-in for city_sim_phase 0x3F60C — one slot per pulse.
 
-Ghidra HTTP was down this pass; dispatcher + evolve/merge were read from
-c2_x.bin (Capstone) and findings/ghidra_sim.md / housing_merge.md.
-
-Implemented: slots 1–0x50 housing evolve + villa/palace merge, wrap →
-calendar month. Everything else is a named stub (no crash, no wipe).
+Implemented: housing evolve 1–0x50, wipes + paint +13/+14/+15, +17 flood,
+walker emit, wrap → calendar month. City Only stubs (0xC2–0xD1, 0xD3)
+advance the slot with no work — they are not jumped for a fake month.
 """
 
 from __future__ import annotations
@@ -14,8 +12,17 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from app.calendar import MONTH_CHUNK, YEAR_CHUNK, GameDate, format_hud_date
+from app.calendar import (
+    MONTH_CHUNK,
+    SPEED_SCALAR_DEFAULT,
+    YEAR_CHUNK,
+    GameDate,
+    calendar_advance,
+    format_hud_date,
+    sim_tick_interval_ms,
+)
 from app.city_map import (
+    FLAG_PAD,
     ID_HOUSING_HI,
     ID_HOUSING_LO,
     MAP_H,
@@ -82,64 +89,96 @@ def slot_name(phase: int) -> str:
     if 1 <= phase <= 0x50:
         return f"housing evolve row {phase - 1}"
     if phase == 0x51:
-        return "wipe +13 (stub, keep saved)"
+        return "wipe +13"
     if phase == 0x52:
-        return "wipe +15 (stub, keep saved)"
+        return "wipe +15"
     if phase == 0x53:
-        return "wipe +14 (stub, keep saved)"
+        return "wipe +14"
     if phase == 0x54:
-        return "wipe +12 (stub, keep saved)"
+        return "wipe +12"
     if phase == 0x55:
         return "nop"
     if 0x56 <= phase <= 0x5D:
-        return "paint +13/+14 0x3FDD0 (stub)"
+        return f"paint +13 reservoir row {(phase - 0x56) * 10}"
     if 0x5E <= phase <= 0x65:
-        return "paint +14 0x401E7 (stub)"
+        return f"paint +14 security row {(phase - 0x5E) * 10}"
     if 0x66 <= phase <= 0x6D:
-        return "paint +12 amenities 0x4034B (stub)"
+        return "paint +12 amenities (City Only skip)"
     if 0x6E <= phase <= 0x75:
-        return "tile_or_radius 0x3FEF7 (stub)"
+        return f"paint +13 water row {(phase - 0x6E) * 10}"
     if 0x76 <= phase <= 0x7D:
-        return "land-value +15 0x40695 (stub)"
+        return f"land-value +15 row {(phase - 0x76) * 10}"
     if 0x7E <= phase <= 0x8D:
-        return "housing target cap +15 0x40D08 (stub)"
+        return f"housing cap +15 row {(phase - 0x7E) * 5}"
     if 0x8E <= phase <= 0x91:
-        return "industry emit type1 (stub)"
+        return f"forum emit row {(phase - 0x8E) * 20}"
     if 0x92 <= phase <= 0x95:
-        return "barracks emit (stub)"
+        return f"tower emit row {(phase - 0x92) * 20}"
     if 0x96 <= phase <= 0x99:
-        return "emit types 5/4 (stub)"
+        return f"prefecture/barracks emit row {(phase - 0x96) * 20}"
     if 0x9A <= phase <= 0x9D:
-        return "emit types 2/6 (stub)"
+        return f"market emit row {(phase - 0x9A) * 20}"
     if 0x9E <= phase <= 0xA1:
-        return "immigrant / rioter 0x41DD4 (stub)"
+        return "immigrant / rioter 0x41DD4 (City Only skip)"
     if 0xA2 <= phase <= 0xC1:
-        return "road flood +17 0x430DA (stub)"
+        return f"road flood +17 dir {(phase - 0xA2) // 8} row {((phase - 0xA2) % 8) * 10}"
     if 0xC2 <= phase <= 0xC9:
-        return "0x445AF (stub)"
+        return "0x445AF (City Only skip)"
     if phase == 0xCA:
-        return "0x43F88 (stub)"
+        return "0x43F88 (City Only skip)"
     if phase == 0xCB:
-        return "0x53C67 / 0x6CA74 (stub)"
+        return "0x53C67 (City Only skip)"
     if phase == 0xCC:
-        return "0x29A19 (stub)"
+        return "0x29A19 (City Only skip)"
     if phase == 0xCD:
-        return "0x456F6 (stub)"
+        return "0x456F6 (City Only skip)"
     if 0xCE <= phase <= 0xD0:
-        return "0x4327B rows (stub)"
+        return "0x4327B (City Only skip)"
     if phase == 0xD1:
-        return "0x43B2E (stub)"
+        return "0x43B2E (City Only skip)"
     if phase == 0xD2:
-        return "walkers_relink_tiles (stub)"
+        return "walkers_relink_tiles"
     if phase == 0xD3:
-        return "overlay dispatch (stub)"
+        return "overlay dispatch (host paints live)"
     if 0xD4 <= phase <= 0xD6:
         return "empty"
     return f"unknown slot {phase:#x}"
 
 
 def slot_implemented(phase: int) -> bool:
-    return 1 <= phase <= 0x50
+    """Work the host actually runs (not City Only empty skips)."""
+    if 1 <= phase <= 0x54:
+        return True
+    if phase == 0x55:
+        return True
+    if 0x56 <= phase <= 0x65:
+        return True
+    if 0x6E <= phase <= 0x8D:
+        return True
+    if 0x8E <= phase <= 0x9D:
+        return True
+    if 0xA2 <= phase <= 0xC1:
+        return True
+    if phase == 0xD2:
+        return True
+    if 0xD4 <= phase <= 0xD6:
+        return True
+    return False
+
+
+def slot_city_only_skip(phase: int) -> bool:
+    """EXE still increments these; City Only has nothing to do."""
+    if phase == 0:
+        return True
+    if 0x66 <= phase <= 0x6D:
+        return True
+    if 0x9E <= phase <= 0xA1:
+        return True
+    if 0xC2 <= phase <= 0xD1:
+        return True
+    if phase == 0xD3:
+        return True
+    return False
 
 
 def i8(b: int) -> int:
@@ -169,6 +208,13 @@ class SimState:
     ratings_seed: int = 0
     tax_rate: int = 5
     history: bytearray = field(default_factory=lambda: bytearray(4000))
+    # sim_tick_due 0x3E4B9 / view_frame catch-up. Original starts unpaused.
+    paused: bool = False
+    speed_scalar: int = SPEED_SCALAR_DEFAULT  # [0x9CE50]
+    catchup: int = 0  # [0xC45A0] 0 → 1 pulse; ≠0 → 4
+    tick_acc: int = 0  # [0x117ACC] ms accumulator
+    population: int = 0  # [0x102AB0] — emit needs >= 2
+    flood_dir: int = 0  # [0x102678] 0…3
 
     @property
     def date(self) -> GameDate:
@@ -187,8 +233,10 @@ class PhaseResult:
     houses_up: int = 0
     houses_down: int = 0
     houses_merge: int = 0
+    walkers_spawned: int = 0
     month_wrapped: bool = False
     date_label: str = ""
+    note: str = ""
 
     @property
     def houses_changed(self) -> int:
@@ -222,6 +270,9 @@ def load_sim_from_sav(
     month = _chunk_i32(chunks, MONTH_CHUNK, 0)
     if not (0 <= month <= 11):
         month = 0
+    treasury = 0
+    if len(chunks) > 28 and len(chunks[28]) >= 4:
+        treasury = _chunk_i32(chunks, 28, 0)
     return SimState(
         phase=phase,
         row=_chunk_i32(chunks, ROW_CHUNK, 0),
@@ -229,6 +280,7 @@ def load_sim_from_sav(
         month=month,
         week_gate=_chunk_i32(chunks, WEEK_GATE_CHUNK, 0),
         source=path.name,
+        treasury=treasury,
     )
 
 
@@ -416,6 +468,61 @@ def _evolve_up(tiles: bytearray, x: int, y: int, grade: int) -> int:
     return 2 if merged else 1
 
 
+def _has_pad_neighbor(tiles: bytearray, x: int, y: int) -> bool:
+    for dx, dy in ((0, -1), (1, 0), (0, 1), (-1, 0)):
+        nx, ny = x + dx, y + dy
+        if _in_map(nx, ny) and tiles[_off(nx, ny) + 1] & FLAG_PAD:
+            return True
+    return False
+
+
+def house_stay_reason(tiles: bytearray, x: int, y: int) -> str:
+    """Why this origin did not (or would not) change grade this pulse."""
+    off = _off(x, y)
+    hid = tiles[off]
+    if not (ID_HOUSING_LO <= hid <= ID_HOUSING_HI):
+        return "not-house"
+    if tiles[off + 5] & 0xF:
+        return "not-origin"
+    grade = hid - 0x82
+    lv = i8(tiles[off + 15])
+    water = tiles[off + 13] & 0x03
+    plus17 = i8(tiles[off + 17])
+    stay_lo, stay_hi = EVOLVE_MIN[grade], EVOLVE_MAX[grade]
+    bits = [f"id={hid:#x}", f"+15={lv}", f"stay={stay_lo}..{stay_hi}"]
+    if water == 0:
+        bits.append("no-water +13")
+    else:
+        bits.append(f"water={water:#x}")
+    if not _has_pad_neighbor(tiles, x, y):
+        bits.append("no-road")
+    if plus17:
+        bits.append(f"+17={plus17}")
+    if lv < stay_lo:
+        bits.append("would-down")
+    elif lv > stay_hi:
+        bits.append("table-hit" if HOUSE_SIZE[grade] == HOUSE_SIZE[min(grade + 1, 31)] else "merge-blocked")
+    else:
+        bits.append("lv-in-stay")
+    return " ".join(bits)
+
+
+def diagnose_housing_row(tiles: bytearray, y: int, *, limit: int = 4) -> list[str]:
+    out: list[str] = []
+    if not (0 <= y < MAP_H):
+        return out
+    for x in range(MAP_W):
+        off = _off(x, y)
+        if tiles[off + 5] & 0xF:
+            continue
+        hid = tiles[off]
+        if ID_HOUSING_LO <= hid <= ID_HOUSING_HI:
+            out.append(f"({x},{y}) {house_stay_reason(tiles, x, y)}")
+            if len(out) >= limit:
+                break
+    return out
+
+
 def evolve_row(tiles: bytearray, y: int, *, decay: bool = True) -> tuple[int, int, int]:
     """city_buildings_evolve_row 0x42360 for one map row. Housing only."""
     up = down = merge = 0
@@ -461,40 +568,230 @@ def evolve_all_rows(tiles: bytearray, *, decay: bool = True) -> tuple[int, int, 
     return up, down, merge
 
 
-def _calendar_advance(state: SimState) -> bool:
-    """0x3FBCF month step. economy_recompute 0x3FCA0 is stubbed."""
-    state.week_gate += 1
-    if state.week_gate < 1:
-        return False
-    state.week_gate = 0
-    state.month += 1
-    if state.month < 12:
-        return True
-    state.month = 0
-    state.year_raw += 1
-    return True
+def _phase_wrap(state: SimState) -> bool:
+    """Reset [0x1026A8] after 0xD6 and run calendar_advance 0x3FBCF."""
+    state.wrap4 = (state.wrap4 + 1) % 4
+    state.wrap3 = (state.wrap3 + 1) % 3
+    state.phase = 0
+    return calendar_advance(state)
 
 
-def city_sim_phase(tiles: bytearray, state: SimState) -> PhaseResult:
+def _band10(phase: int, lo: int) -> tuple[int, int]:
+    start = (phase - lo) * 10
+    return start, 10
+
+
+def _band5(phase: int, lo: int) -> tuple[int, int]:
+    start = (phase - lo) * 5
+    return start, 5
+
+
+def _band20(phase: int, lo: int) -> tuple[int, int]:
+    start = (phase - lo) * 20
+    return start, 20
+
+
+def _walker_live_count(walkers) -> int:
+    if walkers is None:
+        return 0
+    if isinstance(walkers, bytearray):
+        stride = 0x3A
+        return sum(
+            1
+            for slot in range(1, min(201, len(walkers) // stride))
+            if walkers[slot * stride]
+        )
+    return sum(1 for w in walkers if getattr(w, "occupied", 0))
+
+
+def _log_phase(
+    state: SimState,
+    phase: int,
+    name: str,
+    *,
+    up: int = 0,
+    down: int = 0,
+    spawned: int = 0,
+    note: str = "",
+    wrapped: bool = False,
+    walkers=None,
+    tiles: bytearray | None = None,
+) -> str:
+    from app.sim_log import format_phase, write
+
+    line = format_phase(
+        date=state.date_label,
+        phase=phase,
+        name=name,
+        houses_up=up,
+        houses_down=down,
+        spawned=spawned,
+        note=note,
+    )
+    write(line)
+    if wrapped and tiles is not None:
+        counts = housing_id_counts(tiles)
+        house_bits = " ".join(
+            f"{hid:#x}:{n}" for hid, n in sorted(counts.items())
+        ) or "none"
+        write(
+            f"{state.date_label}  WRAP  pop={state.population}  "
+            f"houses={{{house_bits}}}  walkers={_walker_live_count(walkers)}"
+        )
+    return line
+
+
+def city_sim_phase(
+    tiles: bytearray,
+    state: SimState,
+    walkers=None,
+) -> PhaseResult:
     """One [0x1026A8] slot, then ++, wrap after 0xD6."""
+    from app.city_paint import (
+        cap_housing_plus15,
+        flood_plus17,
+        paint_land_value,
+        paint_plus13_buildings,
+        paint_plus13_water,
+        paint_plus14_security,
+        recount_population,
+        wipe_lane,
+    )
+    from app import walker_tick as wt
+    from app.walker_tick import emit_walkers, relink_walker_tiles
+
     phase = state.phase
     name = slot_name(phase)
     implemented = slot_implemented(phase)
-    up = down = merge = 0
+    up = down = merge = spawned = painted = 0
     wrapped = False
+    note = ""
+    can = len(tiles) >= MAP_W * MAP_H * TILE_STRIDE
+
+    if can:
+        state.population = recount_population(tiles)
 
     if 1 <= phase <= 0x50:
         row = phase - 1
         state.row = row
-        up, down, merge = evolve_row(tiles, row, decay=state.wrap3 == 0)
-    # else: stub / empty / wipe-skipped
+        if can:
+            up, down, merge = evolve_row(tiles, row, decay=state.wrap3 == 0)
+            state.population = recount_population(tiles)
+            stays = diagnose_housing_row(tiles, row)
+            if stays:
+                note = f"n={len(stays)} " + "; ".join(stays)
+    elif phase == 0x51 and can:
+        wipe_lane(tiles, 13)
+        note = "wiped +13"
+    elif phase == 0x52 and can:
+        wipe_lane(tiles, 15)
+        note = "wiped +15"
+    elif phase == 0x53 and can:
+        wipe_lane(tiles, 14)
+        note = "wiped +14"
+    elif phase == 0x54 and can:
+        wipe_lane(tiles, 12)
+        note = "wiped +12"
+    elif 0x56 <= phase <= 0x5D and can:
+        y0, n = _band10(phase, 0x56)
+        state.row = y0
+        painted = paint_plus13_buildings(tiles, y0, n)
+        note = f"written={painted}"
+    elif 0x5E <= phase <= 0x65 and can:
+        y0, n = _band10(phase, 0x5E)
+        state.row = y0
+        painted = paint_plus14_security(tiles, y0, n)
+        note = f"written={painted}"
+    elif 0x6E <= phase <= 0x75 and can:
+        y0, n = _band10(phase, 0x6E)
+        state.row = y0
+        painted = paint_plus13_water(tiles, y0, n)
+        note = f"water-splash={painted}"
+    elif 0x76 <= phase <= 0x7D and can:
+        y0, n = _band10(phase, 0x76)
+        state.row = y0
+        painted = paint_land_value(tiles, y0, n)
+        note = f"lv-written={painted}"
+    elif 0x7E <= phase <= 0x8D and can:
+        y0, n = _band5(phase, 0x7E)
+        state.row = y0
+        painted = cap_housing_plus15(tiles, y0, n, population=state.population)
+        note = f"capped={painted} pop={state.population}"
+    elif 0x8E <= phase <= 0x9D and can:
+        y0, n = _band20(phase, 0x8E if phase <= 0x91 else (
+            0x92 if phase <= 0x95 else (0x96 if phase <= 0x99 else 0x9A)
+        ))
+        state.row = y0
+        spawned = emit_walkers(
+            tiles, walkers, y0, n, population=state.population
+        )
+        note = wt.LAST_EMIT_NOTE or f"pop={state.population}"
+    elif 0xA2 <= phase <= 0xC1 and can:
+        slot = phase - 0xA2
+        state.flood_dir = slot // 8
+        y0 = (slot % 8) * 10
+        state.row = y0
+        if slot == 0:
+            painted = flood_plus17(tiles, y0, 10, state.flood_dir)
+            note = f"flood-rebuild={painted}"
+    elif phase == 0xD2 and can:
+        relink_walker_tiles(tiles, walkers)
+        note = f"relink walkers={_walker_live_count(walkers)}"
+    elif slot_city_only_skip(phase):
+        note = "phase-skipped City Only"
+
+    log_this = False
+    if 1 <= phase <= 0x50 and note.startswith("n="):
+        log_this = True
+    elif phase in (0x51, 0x52, 0x53, 0x54, 0xA2):
+        log_this = True
+    elif painted or spawned or up or down:
+        log_this = True
+    elif 0x8E <= phase <= 0x9D and note and "civic=0" not in note:
+        log_this = True
+    elif phase == 0xD2 and "walkers=0" not in note:
+        log_this = True
+    log_line = ""
+    if log_this:
+        log_line = _log_phase(
+            state,
+            phase,
+            name,
+            up=up,
+            down=down,
+            spawned=spawned,
+            note=note,
+            wrapped=False,
+            walkers=walkers,
+            tiles=tiles,
+        )
 
     state.phase = phase + 1
     if state.phase > PHASE_MAX:
-        state.wrap4 = (state.wrap4 + 1) % 4
-        state.wrap3 = (state.wrap3 + 1) % 3
-        state.phase = 0
-        wrapped = _calendar_advance(state)
+        wrapped = _phase_wrap(state)
+        if not log_this:
+            _log_phase(
+                state,
+                phase,
+                name,
+                up=up,
+                down=down,
+                spawned=spawned,
+                note=note or "calendar wrap",
+                wrapped=False,
+                walkers=walkers,
+                tiles=tiles,
+            )
+        from app.sim_log import write
+
+        counts = housing_id_counts(tiles) if can else {}
+        house_bits = " ".join(
+            f"{hid:#x}:{n}" for hid, n in sorted(counts.items())
+        ) or "none"
+        write(
+            f"{state.date_label}  WRAP  pop={state.population}  "
+            f"houses={{{house_bits}}}  walkers={_walker_live_count(walkers)}"
+        )
 
     return PhaseResult(
         phase=phase,
@@ -503,8 +800,63 @@ def city_sim_phase(tiles: bytearray, state: SimState) -> PhaseResult:
         houses_up=up,
         houses_down=down,
         houses_merge=merge,
+        walkers_spawned=spawned,
         month_wrapped=wrapped,
         date_label=state.date_label,
+        note=note or log_line,
+    )
+
+
+def city_sim_clock_pulse(
+    tiles: bytearray, state: SimState, walkers=None
+) -> PhaseResult:
+    """One auto-clock pulse (unpaused play / faster).
+
+    Always one city_sim_phase slot — same as the EXE. Empty City Only
+    slots still consume the pulse. Do not jump 0x51–0xD6 to the calendar.
+    """
+    return city_sim_phase(tiles, state, walkers)
+
+
+def city_sim_until_wrap(
+    tiles: bytearray, state: SimState, walkers=None
+) -> PhaseResult:
+    """Host M: remaining slots this cycle, then one calendar_advance.
+
+    Runs evolve, water/+15 paint, walker emit, and +17 flood. City Only
+    empty slots are nops that still increment. Does not skip paint/emit.
+    """
+    up = down = merge = spawned = 0
+    last_phase = state.phase
+    last_name = slot_name(state.phase)
+    last_impl = slot_implemented(state.phase)
+    wrapped = False
+    guard = 0
+    while guard < 0xE0:
+        guard += 1
+        result = city_sim_phase(tiles, state, walkers)
+        up += result.houses_up
+        down += result.houses_down
+        merge += result.houses_merge
+        spawned += result.walkers_spawned
+        last_phase = result.phase
+        last_name = result.name
+        last_impl = result.implemented
+        if result.month_wrapped:
+            wrapped = True
+            break
+
+    return PhaseResult(
+        phase=last_phase,
+        name=last_name,
+        implemented=last_impl,
+        houses_up=up,
+        houses_down=down,
+        houses_merge=merge,
+        walkers_spawned=spawned,
+        month_wrapped=wrapped,
+        date_label=state.date_label,
+        note=f"month houses +{up}/-{down} spawn={spawned}",
     )
 
 
@@ -513,23 +865,23 @@ def slot_table_rows() -> list[tuple[str, str, str]]:
     bands = [
         ("0", slot_name(0), "N"),
         ("1–0x50", "housing evolve + merge (80 rows)", "Y"),
-        ("0x51", slot_name(0x51), "N"),
-        ("0x52", slot_name(0x52), "N"),
-        ("0x53", slot_name(0x53), "N"),
-        ("0x54", slot_name(0x54), "N"),
+        ("0x51", slot_name(0x51), "Y"),
+        ("0x52", slot_name(0x52), "Y"),
+        ("0x53", slot_name(0x53), "Y"),
+        ("0x54", slot_name(0x54), "Y"),
         ("0x55", slot_name(0x55), "Y"),
-        ("0x56–0x5D", slot_name(0x56), "N"),
-        ("0x5E–0x65", slot_name(0x5E), "N"),
+        ("0x56–0x5D", slot_name(0x56), "Y"),
+        ("0x5E–0x65", slot_name(0x5E), "Y"),
         ("0x66–0x6D", slot_name(0x66), "N"),
-        ("0x6E–0x75", slot_name(0x6E), "N"),
-        ("0x76–0x7D", slot_name(0x76), "N"),
-        ("0x7E–0x8D", slot_name(0x7E), "N"),
-        ("0x8E–0x91", slot_name(0x8E), "N"),
-        ("0x92–0x95", slot_name(0x92), "N"),
-        ("0x96–0x99", slot_name(0x96), "N"),
-        ("0x9A–0x9D", slot_name(0x9A), "N"),
+        ("0x6E–0x75", slot_name(0x6E), "Y"),
+        ("0x76–0x7D", slot_name(0x76), "Y"),
+        ("0x7E–0x8D", slot_name(0x7E), "Y"),
+        ("0x8E–0x91", slot_name(0x8E), "Y"),
+        ("0x92–0x95", slot_name(0x92), "Y"),
+        ("0x96–0x99", slot_name(0x96), "Y"),
+        ("0x9A–0x9D", slot_name(0x9A), "Y"),
         ("0x9E–0xA1", slot_name(0x9E), "N"),
-        ("0xA2–0xC1", slot_name(0xA2), "N"),
+        ("0xA2–0xC1", slot_name(0xA2), "Y"),
         ("0xC2–0xC9", slot_name(0xC2), "N"),
         ("0xCA", slot_name(0xCA), "N"),
         ("0xCB", slot_name(0xCB), "N"),
@@ -537,7 +889,7 @@ def slot_table_rows() -> list[tuple[str, str, str]]:
         ("0xCD", slot_name(0xCD), "N"),
         ("0xCE–0xD0", slot_name(0xCE), "N"),
         ("0xD1", slot_name(0xD1), "N"),
-        ("0xD2", slot_name(0xD2), "N"),
+        ("0xD2", slot_name(0xD2), "Y"),
         ("0xD3", slot_name(0xD3), "N"),
         ("0xD4–0xD6", slot_name(0xD4), "Y"),
         ("wrap >0xD6", "calendar_advance month; economy stub", "Y"),
@@ -622,5 +974,263 @@ def selftest() -> list[str]:
     u, d, m = evolve_row(tiles, 5, decay=False)
     lines.append(
         f"Achea-style +15=0 on 0x89: down->{tiles[off]:#x} (d={d}) - not a no-op"
+    )
+
+    from app.calendar import selftest as calendar_selftest
+
+    lines.extend(calendar_selftest())
+
+    tiles = _blank_tiles()
+    state = SimState(phase=0xD6, year_raw=-187, month=0)
+    result = city_sim_phase(tiles, state)
+    ok = (
+        result.month_wrapped
+        and state.phase == 0
+        and state.month == 1
+        and state.year_raw == -187
+        and state.date_label == "187 BC February"
+    )
+    lines.append(
+        f"Space wrap 0xD6→month++: {'ok' if ok else 'FAIL'} "
+        f"phase={state.phase:#x} {state.date_label}"
+    )
+
+    tiles = _blank_tiles()
+    state = SimState(phase=0xD6, year_raw=-187, month=11)
+    city_sim_phase(tiles, state)
+    ok = state.month == 0 and state.year_raw == -186 and state.date_label == "186 BC January"
+    lines.append(
+        f"Space wrap Dec→year++: {'ok' if ok else 'FAIL'} {state.date_label}"
+    )
+
+    tiles = _blank_tiles()
+    state = SimState(phase=0xC0, year_raw=-300, month=5)
+    result = city_sim_until_wrap(tiles, state)
+    ok = (
+        result.month_wrapped
+        and state.phase == 0
+        and state.month == 6
+        and state.date_label == "300 BC July"
+    )
+    lines.append(
+        f"M remaining slots wrap: {'ok' if ok else 'FAIL'} "
+        f"phase={state.phase:#x} {state.date_label}"
+    )
+
+    tiles = _blank_tiles()
+    state = SimState(phase=1, year_raw=-300, month=0, city_only=1)
+    result = city_sim_until_wrap(tiles, state)
+    ok = (
+        result.month_wrapped
+        and state.phase == 0
+        and state.month == 1
+        and state.year_raw == -300
+        and state.date_label == "300 BC February"
+    )
+    lines.append(
+        f"M City Only 0x1→Feb: {'ok' if ok else 'FAIL'} "
+        f"phase={state.phase:#x} {state.date_label}"
+    )
+
+    tiles = _blank_tiles()
+    state = SimState(phase=1, year_raw=-300, month=0, city_only=1)
+    result = city_sim_clock_pulse(tiles, state)
+    ok = (
+        not result.month_wrapped
+        and state.phase == 2
+        and state.month == 0
+        and state.date_label == "300 BC January"
+    )
+    lines.append(
+        f"clock pulse housing 0x1: {'ok' if ok else 'FAIL'} "
+        f"phase={state.phase:#x} {state.date_label}"
+    )
+
+    tiles = _blank_tiles()
+    state = SimState(phase=0, year_raw=-300, month=0)
+    result = city_sim_clock_pulse(tiles, state)
+    ok = not result.month_wrapped and state.phase == 1 and state.month == 0
+    lines.append(
+        f"clock pulse phase 0→1: {'ok' if ok else 'FAIL'} phase={state.phase:#x}"
+    )
+
+    tiles = _blank_tiles()
+    tiles[_off(4, 4) + 13] = 0xFF
+    state = SimState(phase=0x51, year_raw=-300, month=0)
+    result = city_sim_clock_pulse(tiles, state)
+    ok = (
+        not result.month_wrapped
+        and state.phase == 0x52
+        and state.month == 0
+        and tiles[_off(4, 4) + 13] == 0
+    )
+    lines.append(
+        f"clock 0x51 wipes +13, no month skip: {'ok' if ok else 'FAIL'} "
+        f"phase={state.phase:#x} +13={tiles[_off(4, 4) + 13]}"
+    )
+
+    from app.city_paint import paint_plus13_buildings, paint_plus13_water
+
+    tiles = _blank_tiles()
+    off = _off(10, 10)
+    tiles[off] = 0xBE
+    tiles[off + 1] = 0x80
+    tiles[off + 10] = 3
+    paint_plus13_buildings(tiles, 10, 1)
+    ring = tiles[_off(10, 10) + 13] & 4
+    house = _off(12, 10)
+    tiles[house] = 0xDD
+    tiles[_off(12, 10) + 13] = tiles[_off(12, 10) + 13]  # fountain sees ring
+    paint_plus13_water(tiles, 10, 3)
+    splash = tiles[_off(14, 10) + 13] & 1
+    ok = bool(ring) and bool(splash)
+    lines.append(
+        f"reservoir +13 0x04 / fountain +13 0x01: {'ok' if ok else 'FAIL'} "
+        f"ring={ring:#x} splash={splash:#x}"
+    )
+
+    tiles = _blank_tiles()
+    # Fountain water + garden LV: tent −2 is offset by garden +2 r=2.
+    foff = _off(8, 8)
+    tiles[foff] = 0xDD
+    tiles[foff + 1] = 0x01
+    tiles[foff + 13] = 4
+    goff = _off(9, 8)
+    tiles[goff] = 0x78
+    tiles[goff + 1] = 0x01
+    toff = _off(8, 9)
+    tiles[toff] = 0x82
+    tiles[toff + 1] = 0x01
+    tiles[toff + 13] = 0x01
+    from app.city_paint import cap_housing_plus15, paint_land_value
+
+    paint_land_value(tiles, 8, 2)
+    cap_housing_plus15(tiles, 8, 2, population=2)
+    u, d, m = evolve_row(tiles, 9, decay=False)
+    ok = tiles[toff] >= 0x83 and u >= 1
+    lines.append(
+        f"tent+water+garden evolve: {'ok' if ok else 'FAIL'} "
+        f"id={tiles[toff]:#x} +15={tiles[toff + 15]} u={u}"
+    )
+
+    tiles = _blank_tiles()
+    foff = _off(8, 8)
+    tiles[foff] = 0xDD
+    tiles[foff + 1] = 0x01
+    toff = _off(8, 9)
+    tiles[toff] = 0x82
+    tiles[toff + 1] = 0x01
+    paint_plus13_water(tiles, 8, 2)
+    splash = tiles[toff + 13] & 1
+    ok = splash == 0
+    lines.append(
+        f"dry fountain no +13 splash: {'ok' if ok else 'FAIL'} "
+        f"+13={tiles[toff + 13]:#x}"
+    )
+
+    from app.walker_tick import emit_walkers
+    from app.walkers import Walker, live_walkers
+
+    tiles = _blank_tiles()
+    poff = _off(20, 20)
+    tiles[poff] = 0xE3
+    tiles[poff + 1] = 0x01
+    roff = _off(20, 19)
+    tiles[roff] = 0x52
+    tiles[roff + 1] = 0x20
+    walkers: list[Walker] = []
+    nsp = emit_walkers(tiles, walkers, 20, 1, population=4)
+    live = live_walkers(walkers)
+    ok = nsp >= 1 and len(live) >= 1 and live[0].type == 5
+    lines.append(
+        f"prefecture emit type 5: {'ok' if ok else 'FAIL'} "
+        f"n={nsp} live={len(live)} type={live[0].type if live else 0}"
+    )
+
+    tiles = _blank_tiles()
+    boff = _off(20, 20)
+    tiles[boff] = 0xE4
+    tiles[boff + 1] = 0x01
+    tiles[_off(20, 19)] = 0x52
+    tiles[_off(20, 19) + 1] = 0x20
+    walkers = []
+    nsp = emit_walkers(tiles, walkers, 20, 1, population=4)
+    live = live_walkers(walkers)
+    ok = nsp >= 1 and len(live) >= 1 and live[0].type == 4
+    lines.append(
+        f"barracks emit type 4: {'ok' if ok else 'FAIL'} "
+        f"n={nsp} live={len(live)} type={live[0].type if live else 0}"
+    )
+
+    tiles = _blank_tiles()
+    toff = _off(8, 9)
+    tiles[toff] = 0x82
+    tiles[toff + 1] = 0x01
+    foff = _off(8, 8)
+    tiles[foff] = 0xDD
+    tiles[foff + 1] = 0x01
+    tiles[_off(9, 9)] = 0x52
+    tiles[_off(9, 9) + 1] = 0x20
+    tiles[_off(12, 8)] = 0xE4
+    tiles[_off(12, 8) + 1] = 0x01
+    tiles[_off(12, 7)] = 0x52
+    tiles[_off(12, 7) + 1] = 0x20
+    walkers = []
+    state = SimState(phase=1, year_raw=-300, month=0, city_only=1)
+    city_sim_until_wrap(tiles, state, walkers)
+    water = tiles[toff + 13] & 0x03
+    lv = tiles[toff + 15]
+    city_sim_until_wrap(tiles, state, walkers)
+    live = live_walkers(walkers)
+    # Dry fountain is silent (+13). Evolve + barracks walker are the check.
+    ok = tiles[toff] >= 0x83 and len(live) >= 1
+    lines.append(
+        f"month-cycle tent evolve + walker: {'ok' if ok else 'FAIL'} "
+        f"id={tiles[toff]:#x} +15={lv}->{tiles[toff + 15]} +13={tiles[toff + 13]:#x} "
+        f"walkers={len(live)} water={water:#x} {state.date_label}"
+    )
+
+    from app.walker_tick import selftest as walker_selftest
+
+    lines.extend(walker_selftest())
+
+    from app.sim_log import LOG_PATH, last_line
+
+    ok = LOG_PATH.is_file() and bool(last_line())
+    lines.append(
+        f"sim log {LOG_PATH.as_posix()}: {'ok' if ok else 'FAIL'} "
+        f"tail={last_line()[-80:]!r}"
+    )
+
+    ok = sim_tick_interval_ms(state.speed_scalar) == 200
+    lines.append(
+        f"default speed_scalar 70 → 200ms: {'ok' if ok else 'FAIL'} "
+        f"paused={state.paused}"
+    )
+
+    from app.sim import on_month_step, sim_tick_due
+
+    gate = SimState()
+    ok = sim_tick_due(gate, 50) == 0
+    gate.tick_acc = 0
+    ok = ok and sim_tick_due(gate, 200) == 1
+    gate.paused = True
+    gate.tick_acc = 0
+    ok = ok and sim_tick_due(gate, 200) == 0
+    gate.paused = False
+    gate.catchup = 1
+    gate.tick_acc = 0
+    ok = ok and sim_tick_due(gate, 200) == 4
+    lines.append(f"sim_tick_due pause/play/fast: {'ok' if ok else 'FAIL'}")
+
+    tiles = _blank_tiles()
+    state = SimState(phase=1, year_raw=-300, month=0, city_only=1)
+    class _Map:
+        def __init__(self, t: bytearray) -> None:
+            self.tiles = t
+    n = on_month_step(_Map(tiles), [], state)
+    ok = n.phase.month_wrapped and state.date_label == "300 BC February"
+    lines.append(
+        f"M on_month_step City Only: {'ok' if ok else 'FAIL'} {state.date_label}"
     )
     return lines

@@ -95,6 +95,7 @@ class EngTable:
     strings: list[str]
     offsets: list[int]
     unique: int
+    _blob: bytes | None = None
 
     def find(self, needle: str) -> tuple[int, str] | None:
         low = needle.lower()
@@ -102,6 +103,25 @@ class EngTable:
             if low in s.lower():
                 return i, s
         return None
+
+    def skip(self, slot: int, n: int = 0) -> str | None:
+        """FUN_00026f16: official slot + n extra NULs in the packed run."""
+        if slot < 0 or slot >= len(self.offsets):
+            return None
+        if self._blob is None:
+            self._blob = self.path.read_bytes()
+        pos = self.offsets[slot]
+        data = self._blob
+        for _ in range(n):
+            z = data.find(b"\x00", pos)
+            if z < 0:
+                return None
+            pos = z + 1
+        z = data.find(b"\x00", pos)
+        if z < 0:
+            return None
+        text = data[pos:z].decode("latin-1")
+        return text if text else None
 
 
 def verify_named(game: Path, names: tuple[str, ...]) -> list[FileStatus]:
@@ -182,6 +202,20 @@ def load_pl8_frames(game: Path, pl8_name: str) -> tuple[list[Image.Image], Path]
     palette = decode_pl8.load_palette(pal_path, verbose=False)
     flags, _unk, sprites, blob = decode_pl8.parse_pl8(pl8, verbose=False)
     return decode_pl8.decode_frames(blob, sprites, flags, palette), pl8
+
+
+def load_pl8_sprites_xy(
+    game: Path, pl8_name: str
+) -> list[tuple[Image.Image, int, int]]:
+    """Decode every sprite and keep the PL8 draw offset (x, y)."""
+    pl8 = find_file(game, pl8_name)
+    if pl8 is None:
+        raise FileNotFoundError(f"{pl8_name} not found in {game}")
+    pal_path, _why = decode_pl8.resolve_palette(pl8, game)
+    palette = decode_pl8.load_palette(pal_path, verbose=False)
+    flags, _unk, sprites, blob = decode_pl8.parse_pl8(pl8, verbose=False)
+    frames = decode_pl8.decode_frames(blob, sprites, flags, palette)
+    return [(fr, spr.x, spr.y) for fr, spr in zip(frames, sprites)]
 
 
 def city_map_pl8s_for_zoom(zoom: int) -> tuple[tuple[str, str], ...]:

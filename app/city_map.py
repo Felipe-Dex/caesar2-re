@@ -1,4 +1,4 @@
-"""80×80 city tiles × 20 bytes (AoS) and a one-shot isometric preview.
+"""80×80 city tiles × 20 bytes (AoS), isometric preview, and a top-down minimap.
 
 Ghidra (findings/ghidra_city.md, ghidra_walkers.md):
 
@@ -83,8 +83,20 @@ ID_TERRAIN_MAX = 0x78
 ID_HOUSING_LO = 0x82
 ID_HOUSING_HI = 0xA1
 ID_WATER_MAX = 8
+ID_RESERVOIR = 0xBE
+ID_AQUEDUCT_STUB = 0xCB
+ID_AQUEDUCT_LO = 0xCB
+ID_AQUEDUCT_HI = 0xD6
+# CITYFIXT type-1 extra_rows (0x70/0x76=26, 0x7B/0x7C=28). One lift so
+# stub/NS/EW/junction sit at the same iso height — not the terrain diamond.
+AQUEDUCT_ISO_LIFT = 26
+ID_WELL = 0xD7
+ID_FOUNTAIN_LO = 0xDB
+ID_FOUNTAIN_HI = 0xDE
 FLAG_RIVER = 0x10
+FLAG_RIVER_BANK = 0x08  # 0x65B3E: corner hits > 2 (0x36/0x3A/0x46/0x4A)
 FLAG_PAD = 0x20
+FLAG_WATER_SOURCE = 0x18  # river 0x10 + bank 0x08 (ghidra_water.md)
 # city_map_draw_terrain: LUT[id*4 + (zoom>>1)] + 0x10. Host zoom col = 0.
 # [0x117AC8] is incremented 0..3 and never consumed. Do not remap +0.
 CITYFIXT_TERRAIN_BIAS = 0x10
@@ -267,6 +279,71 @@ def river_tile_xy(city: CityMap) -> list[tuple[int, int]]:
             if tiles[row + x * TILE_STRIDE + 1] & FLAG_RIVER:
                 out.append((x, y))
     return out
+
+
+def is_aqueduct_id(tid: int) -> bool:
+    return ID_AQUEDUCT_LO <= tid <= ID_AQUEDUCT_HI
+
+
+def aqueduct_iso_lift(tid: int) -> int:
+    return AQUEDUCT_ISO_LIFT if is_aqueduct_id(tid) else 0
+
+
+def tile_wants_water_anim(tid: int, flags: int, coverage: int) -> bool:
+    """River diamond, well, aqueduct, charged reservoir, fountain."""
+    if flags & FLAG_RIVER and ID_RIVER_LO <= tid <= ID_RIVER_HI:
+        return True
+    if tid == ID_WELL:
+        return True
+    if is_aqueduct_id(tid):
+        return True
+    if tid == ID_RESERVOIR and (coverage & 3):
+        return True
+    if ID_FOUNTAIN_LO <= tid <= ID_FOUNTAIN_HI:
+        return True
+    return False
+
+
+def water_anim_tile_xy(city: CityMap) -> list[tuple[int, int]]:
+    """Tiles whose interior blue cycles (river + well/aqueduct/fountain)."""
+    out: list[tuple[int, int]] = []
+    tiles = city.tiles
+    for y in range(city.height):
+        row = y * ROW_STRIDE
+        for x in range(city.width):
+            off = row + x * TILE_STRIDE
+            if tile_wants_water_anim(tiles[off], tiles[off + 1], tiles[off + 10]):
+                out.append((x, y))
+    return out
+
+
+def iso_sprite_dest(sx: int, sy: int, spr_h: int, tile_h: int) -> tuple[int, int]:
+    """Diamond top-left → canvas paste. Extra ISO rows sit *above* the diamond."""
+    return sx, sy - max(0, spr_h - tile_h)
+
+
+def _trim_phantom_extra(spr: Image.Image, tile_h: int) -> Image.Image:
+    """Drop type-1 padding below the diamond (fully transparent extra rows).
+
+    CITYFIXT type 1 may decode taller than ``tile_h`` if extra_rows were
+    appended under the diamond. Those rows are index 0. Type 2/3/4 extra
+    sits *above* the diamond, so the bottom ``tile_h`` rows stay opaque
+    and this is a no-op — reservoir / praefecture keep their lift.
+    """
+    extra = spr.height - tile_h
+    if extra <= 0:
+        return spr
+    rgba = spr if spr.mode == "RGBA" else spr.convert("RGBA")
+    bottom = rgba.crop((0, tile_h, rgba.width, rgba.height))
+    extrema = bottom.getextrema()
+    if len(extrema) >= 4 and extrema[3][1] == 0:
+        return rgba.crop((0, 0, rgba.width, tile_h))
+    return spr
+
+
+def _sprite_rgba(spr: Image.Image) -> Image.Image:
+    """Keep index-0 alpha. RGB paste would draw palette 0 as opaque black."""
+    return spr if spr.mode == "RGBA" else spr.convert("RGBA")
 
 PREFERRED_SAVES = ("FELIPE01.SAV", "FELIPE02.SAV", "LASTYEAR.SAV")
 
@@ -559,6 +636,33 @@ def _draw_diamond(
 # Used only to bound which tiles can overlap a river AABB.
 _MAX_SPRITE_H = (96, 48, 24)
 ISO_BG = (12, 16, 28)
+
+# Host INT_CITY well — not an EXE VA (Ghidra was down). Sprite 1 is
+# (478,24) 162×24; sprite 2 (palette 3×5) starts at (478,208). The gap
+# (478,48,162,160) is the overlay/radar hole. Native map is 80×80
+# (1 px/tile); blit nearest-neighbor-scales it to fill the well.
+# Sprite 3 at (478,368) is the stone relief, not the minimap.
+MINIMAP_WELL = (478, 48, 162, 160)
+MINIMAP_SIZE = 80
+MINIMAP_X, MINIMAP_Y, MINIMAP_W, MINIMAP_H = MINIMAP_WELL
+MINIMAP_RECT = MINIMAP_WELL
+_MINI_GRASS = (56, 124, 48)
+_MINI_RIVER = (40, 92, 188)
+_MINI_ROAD = (176, 172, 164)
+_MINI_HOUSE = (204, 88, 56)
+_MINI_RUBBLE = (132, 92, 52)
+_MINI_BUILDING = (200, 168, 72)
+_MINI_VIEW = (255, 220, 40)
+_ID_RUBBLE = 0x05
+_ID_BRIDGE_LO = 0x4E
+_ID_ROAD_HI = 0x5C
+# Visible iso well (left of sidebar, below the 24 px top bar).
+_VIEW_MAP_W = 478
+_VIEW_MAP_H = 456
+_VIEW_MAP_OX = 0
+_VIEW_MAP_OY = 24
+_SCREEN_W = 640
+_SCREEN_H = 480
 # CITYFIXT.256 blues used as river fill (not grass 90 / bank browns).
 _WATER_B_OVER_R = 20
 _WATER_B_OVER_G = 8
@@ -616,6 +720,19 @@ def _water_interior_frames(spr: Image.Image) -> tuple[Image.Image, ...]:
     return packed
 
 
+def _prepare_iso_sprite(
+    spr: Image.Image, tile_h: int, *, lift: int = 0
+) -> Image.Image:
+    out = _trim_phantom_extra(_sprite_rgba(spr), tile_h)
+    if lift > 0 and out.height == tile_h:
+        # Type-1 extra_rows is a blit lift, not payload. Diamond at the
+        # top of the pad so iso_sprite_dest raises it above the terrain.
+        pad = Image.new("RGBA", (out.width, tile_h + lift), (0, 0, 0, 0))
+        pad.paste(out, (0, 0), out)
+        return pad
+    return out
+
+
 def _blit_iso(
     img: Image.Image,
     frames: Sequence[Image.Image] | None,
@@ -624,15 +741,18 @@ def _blit_iso(
     sy: int,
     *,
     tile_w: int = ISO_W,
+    tile_h: int = ISO_H,
+    lift: int = 0,
 ) -> bool:
     if frames is None or index is None:
         return False
     if not (0 <= index < len(frames)):
         return False
-    spr = frames[index]
+    spr = _prepare_iso_sprite(frames[index], tile_h, lift=lift)
     if spr.width < tile_w // 2:
         return False
-    img.paste(spr, (sx, sy), spr)
+    px, py = iso_sprite_dest(sx, sy, spr.height, tile_h)
+    img.paste(spr, (px, py), spr)
     return True
 
 
@@ -645,8 +765,7 @@ def _tile_frames(
     if tile.is_terrain:
         idx = tile.cityfixt_index()
         if (
-            tile.is_river
-            and ID_RIVER_LO <= tile.terrain_id <= ID_RIVER_HI
+            tile_wants_water_anim(tile.terrain_id, tile.flags, tile.coverage)
             and cityfixt is not None
             and idx is not None
             and 0 <= idx < len(cityfixt)
@@ -660,6 +779,13 @@ def _tile_frames(
     frames = sheets.get(name) if sheets is not None else None
     if name == PL8_CITYFIXT and frames is None:
         frames = cityfixt
+    if (
+        frames is not None
+        and idx is not None
+        and 0 <= idx < len(frames)
+        and tile_wants_water_anim(tile.terrain_id, tile.flags, tile.coverage)
+    ):
+        return _water_interior_frames(frames[idx]), int(water_frame) % WATER_FRAMES
     return frames, idx
 
 
@@ -668,13 +794,40 @@ def _sprite_size(
     index: int | None,
     tile_w: int,
     tile_h: int,
+    *,
+    lift: int = 0,
 ) -> tuple[int, int]:
     if frames is None or index is None or not (0 <= index < len(frames)):
         return tile_w, tile_h
-    spr = frames[index]
+    spr = _prepare_iso_sprite(frames[index], tile_h, lift=lift)
     if spr.width < tile_w // 2:
         return tile_w, tile_h
     return spr.width, spr.height
+
+
+def building_sprite_image(
+    tid: int,
+    draw: int,
+    variant: int,
+    sheets: dict[str, Sequence[Image.Image]] | None,
+    *,
+    zoom: int = 0,
+) -> Image.Image | None:
+    """RGBA building sprite for a ghost stamp (same LUT as city_tile_draw_building)."""
+    raw = bytearray(TILE_BYTES)
+    raw[0] = tid & 0xFF
+    raw[3] = draw & 0xFF
+    raw[4] = variant & 0xFF
+    tile = Tile.unpack(bytes(raw))
+    cityfixt = sheets.get(PL8_CITYFIXT) if sheets else None
+    frames, idx = _tile_frames(tile, 0, cityfixt, sheets)
+    tile_w, tile_h = iso_tile_size(zoom)
+    if frames is None or idx is None or not (0 <= idx < len(frames)):
+        return None
+    spr = _prepare_iso_sprite(frames[idx], tile_h, lift=aqueduct_iso_lift(tid))
+    if spr.width < tile_w // 2:
+        return None
+    return spr
 
 
 def _paint_iso_tile(
@@ -689,8 +842,24 @@ def _paint_iso_tile(
     cityfixt: Sequence[Image.Image] | None,
     sheets: dict[str, Sequence[Image.Image]] | None,
 ) -> None:
+    """Blit this cell's own LUT sprite at ``(sx, sy)``.
+
+    Multi-tile buildings (Barracks 3×3, villa, palace) store a *piece*
+    in ``+4`` on every footprint tile. The origin does **not** own a
+    full-compound graphic — HOUSES1[81] is 58×56, one diamond. Drawing
+    the origin variant on the other eight cells would stamp extra forts.
+    """
     frames, idx = _tile_frames(tile, water_frame, cityfixt, sheets)
-    if _blit_iso(img, frames, idx, sx, sy, tile_w=tile_w):
+    if _blit_iso(
+        img,
+        frames,
+        idx,
+        sx,
+        sy,
+        tile_w=tile_w,
+        tile_h=tile_h,
+        lift=aqueduct_iso_lift(tile.terrain_id),
+    ):
         return
     _draw_diamond(img, sx, sy, _fallback_color(tile), tile_w=tile_w, tile_h=tile_h)
 
@@ -699,6 +868,60 @@ def _rects_overlap(
     a: tuple[int, int, int, int], b: tuple[int, int, int, int]
 ) -> bool:
     return a[0] < b[2] and a[2] > b[0] and a[1] < b[3] and a[3] > b[1]
+
+
+def _union_rect(
+    a: tuple[int, int, int, int] | None, b: tuple[int, int, int, int]
+) -> tuple[int, int, int, int]:
+    if a is None:
+        return b
+    return (min(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3]))
+
+
+def iso_overlap_radius(zoom: int = 0) -> int:
+    """Chebyshev ring that can overlap a max-height extra_rows sprite."""
+    z = clamp_zoom(zoom)
+    half_h = iso_tile_size(z)[1] // 2
+    return max(2, (_MAX_SPRITE_H[z] + half_h - 1) // half_h)
+
+
+def _diamond_box(
+    tx: int, ty: int, origin_x: int, tile_w: int, tile_h: int
+) -> tuple[int, int, int, int]:
+    half_w, half_h = tile_w // 2, tile_h // 2
+    sx = origin_x + (tx - ty) * half_w
+    sy = (tx + ty) * half_h
+    return (sx, sy, sx + tile_w, sy + tile_h)
+
+
+def _iso_rect_tile_bounds(
+    rect: tuple[int, int, int, int],
+    zoom: int,
+    width: int,
+    height: int,
+    pad: int,
+) -> tuple[int, int, int, int]:
+    """Inclusive tile range that can overlap a canvas-pixel AABB."""
+    x0, y0, x1, y1 = rect
+    if x1 <= x0 or y1 <= y0:
+        return 0, 0, -1, -1
+    txs: list[float] = []
+    tys: list[float] = []
+    for px, py in (
+        (x0, y0),
+        (x1 - 1, y0),
+        (x0, y1 - 1),
+        (x1 - 1, y1 - 1),
+    ):
+        tx, ty = _canvas_to_tile(float(px), float(py), zoom)
+        txs.append(tx)
+        tys.append(ty)
+    return (
+        max(0, int(min(txs)) - pad),
+        max(0, int(min(tys)) - pad),
+        min(width - 1, int(max(txs)) + pad + 1),
+        min(height - 1, int(max(tys)) + pad + 1),
+    )
 
 
 def render_iso(
@@ -747,6 +970,39 @@ def render_iso(
     return img
 
 
+def blit_dirty_tiles(
+    img: Image.Image,
+    city: CityMap,
+    cells: Sequence[tuple[int, int]],
+    *,
+    zoom: int = 0,
+    water_frame: int = 0,
+    cityfixt: Sequence[Image.Image] | None = None,
+    sheets: dict[str, Sequence[Image.Image]] | None = None,
+    bg: tuple[int, int, int] = ISO_BG,
+) -> int:
+    """Re-blit given tiles (and iso-overlapping neighbors) onto ``img``.
+
+    Place/clear uses a max-height wipe so a tall HOUSES1 ``extra_rows``
+    sprite (reservoir / praefecture / barracks) does not leave ghost
+    pixels on neighbor diamonds. River anim calls ``blit_water_tiles``
+    directly and keeps the locked +0 AABB.
+    """
+    z = clamp_zoom(zoom)
+    return blit_water_tiles(
+        img,
+        city,
+        cityfixt,
+        water_frame,
+        zoom=z,
+        cells=cells,
+        sheets=sheets,
+        bg=bg,
+        min_clear_h=_MAX_SPRITE_H[z],
+        union_overlap=True,
+    )
+
+
 def blit_water_tiles(
     img: Image.Image,
     city: CityMap,
@@ -757,27 +1013,36 @@ def blit_water_tiles(
     cells: Sequence[tuple[int, int]] | None = None,
     sheets: dict[str, Sequence[Image.Image]] | None = None,
     bg: tuple[int, int, int] = ISO_BG,
+    min_clear_h: int = 0,
+    union_overlap: bool = False,
 ) -> int:
     """Re-blit river tiles onto an existing canvas (not a full 80×80 pass).
 
     Alpha paste is not a replace, so each river AABB is rebuilt on a
     small crop (bg + overlapping tiles, iso order) and pasted back.
     Sprite size is the locked +0 diamond (interior cycle keeps the mask).
+    ``union_overlap`` (place/clear) wipes the seed AABB once, then
+    redraws **every** diamond/sprite that overlaps it, in iso painter
+    order. A Chebyshev ring around the seeds is not enough: a long road
+    union is a large rectangle whose corners sit far from the line, and
+    filling those corners with ``ISO_BG`` without a blit leaves the
+    black triangles. Do not grow the wipe from neighbour diamonds — that
+    expands the AABB and punches new holes. River anim leaves this off.
     Returns tiles blitted.
     """
     if cityfixt is None and sheets is not None:
         cityfixt = sheets.get(PL8_CITYFIXT)
-    if cityfixt is None:
-        return 0
     rivers = cells if cells is not None else river_tile_xy(city)
     if not rivers:
+        return 0
+    if cityfixt is None and not union_overlap:
         return 0
     z = clamp_zoom(zoom)
     tile_w, tile_h = iso_tile_size(z)
     half_w, half_h = tile_w // 2, tile_h // 2
     origin_x = (MAP_W - 1) * half_w
     max_h = _MAX_SPRITE_H[z]
-    ring = max(1, (max_h + half_h - 1) // half_h)
+    ring = iso_overlap_radius(z)
 
     clear_rects: list[tuple[int, int, int, int]] = []
     for x, y in rivers:
@@ -785,8 +1050,17 @@ def blit_water_tiles(
         sx = origin_x + (x - y) * half_w
         sy = (x + y) * half_h
         frames, idx = _tile_frames(tile, water_frame, cityfixt, sheets)
-        sw, sh = _sprite_size(frames, idx, tile_w, tile_h)
-        box = (sx, sy, sx + sw, sy + sh)
+        sw, sh = _sprite_size(
+            frames, idx, tile_w, tile_h, lift=aqueduct_iso_lift(tile.terrain_id)
+        )
+        # Seeds keep a max-height wipe so Clear of a tall sprite (now rubble)
+        # still covers leftover extra_rows. Members are painted with their
+        # own +4 piece — never the origin compound on a neighbour diamond.
+        sh = max(sh, min_clear_h)
+        px, py = iso_sprite_dest(sx, sy, sh, tile_h)
+        box = (px, py, px + sw, py + sh)
+        if union_overlap:
+            box = (px - half_w, py, px + sw + half_w, py + sh + half_h)
         clear_rects.append(box)
 
     box_cache: dict[tuple[int, int], tuple[int, int, int, int]] = {}
@@ -799,10 +1073,57 @@ def blit_water_tiles(
         sx = origin_x + (tx - ty) * half_w
         sy = (tx + ty) * half_h
         frames, idx = _tile_frames(tile, water_frame, cityfixt, sheets)
-        sw, sh = _sprite_size(frames, idx, tile_w, tile_h)
-        hit = (sx, sy, sx + sw, sy + sh)
+        sw, sh = _sprite_size(
+            frames, idx, tile_w, tile_h, lift=aqueduct_iso_lift(tile.terrain_id)
+        )
+        px, py = iso_sprite_dest(sx, sy, sh, tile_h)
+        hit = (px, py, px + sw, py + sh)
         box_cache[(tx, ty)] = hit
         return hit
+
+    if union_overlap:
+        wipe: tuple[int, int, int, int] | None = None
+        for rect in clear_rects:
+            wipe = _union_rect(wipe, rect)
+        if wipe is None:
+            return 0
+        tx0, ty0, tx1, ty1 = _iso_rect_tile_bounds(
+            wipe, z, city.width, city.height, ring
+        )
+        members: set[tuple[int, int]] = set()
+        for ny in range(ty0, ty1 + 1):
+            for nx in range(tx0, tx1 + 1):
+                if _rects_overlap(sprite_box(nx, ny), wipe):
+                    members.add((nx, ny))
+        for rx, ry in rivers:
+            if 0 <= rx < city.width and 0 <= ry < city.height:
+                members.add((rx, ry))
+        x0 = max(0, wipe[0])
+        y0 = max(0, wipe[1])
+        x1 = min(img.width, wipe[2])
+        y1 = min(img.height, wipe[3])
+        if x1 <= x0 or y1 <= y0:
+            return 0
+        crop = Image.new("RGBA", (x1 - x0, y1 - y0), (*bg, 255))
+        ordered = sorted(members, key=lambda p: (p[1], p[0]))
+        n = 0
+        for nx, ny in ordered:
+            sx = origin_x + (nx - ny) * half_w
+            sy = (nx + ny) * half_h
+            _paint_iso_tile(
+                crop,
+                city.tile(nx, ny),
+                sx - x0,
+                sy - y0,
+                tile_w=tile_w,
+                tile_h=tile_h,
+                water_frame=water_frame,
+                cityfixt=cityfixt,
+                sheets=sheets,
+            )
+            n += 1
+        img.paste(crop, (x0, y0))
+        return n
 
     n = 0
     seen_boxes: set[tuple[int, int, int, int]] = set()
@@ -842,6 +1163,244 @@ def blit_water_tiles(
             n += 1
         img.paste(crop, (x0, y0))
     return n
+
+
+def _minimap_color(tid: int, flags: int) -> tuple[int, int, int]:
+    """One pixel: house / building / road+bridge / rubble / river / grass."""
+    if ID_HOUSING_LO <= tid <= ID_HOUSING_HI:
+        return _MINI_HOUSE
+    if tid >= ID_TERRAIN_MAX:
+        return _MINI_BUILDING
+    if _ID_BRIDGE_LO <= tid <= _ID_ROAD_HI:
+        return _MINI_ROAD
+    if tid == _ID_RUBBLE:
+        return _MINI_RUBBLE
+    if flags & FLAG_RIVER or tid < ID_WATER_MAX:
+        return _MINI_RIVER
+    return _MINI_GRASS
+
+
+def _view_to_canvas(
+    vx: int,
+    vy: int,
+    cam_x: int,
+    cam_y: int,
+    canvas_w: int,
+    canvas_h: int,
+    *,
+    screen_w: int = _SCREEN_W,
+    screen_h: int = _SCREEN_H,
+) -> tuple[int, int]:
+    """Same rules as place.view_to_canvas (kept here to avoid a cycle)."""
+    if canvas_w <= screen_w and canvas_h <= screen_h:
+        ox = (screen_w - canvas_w) // 2
+        oy = (screen_h - canvas_h) // 2
+        return vx - ox, vy - oy
+    return cam_x + vx, cam_y + vy
+
+
+def _canvas_to_tile(px: float, py: float, zoom: int) -> tuple[float, float]:
+    """Inverse of tile_iso_xy using the diamond centre (float, unclamped)."""
+    tile_w, tile_h = iso_tile_size(zoom)
+    half_w, half_h = tile_w / 2.0, tile_h / 2.0
+    origin_x = float(iso_origin_x(zoom=zoom))
+    col = (px - origin_x - half_w) / half_w
+    row = (py - half_h) / half_h
+    return (col + row) / 2.0, (row - col) / 2.0
+
+
+def view_tiles_for_camera(
+    cam_x: int,
+    cam_y: int,
+    zoom: int,
+    canvas_w: int,
+    canvas_h: int,
+    *,
+    view_w: int = _VIEW_MAP_W,
+    view_h: int = _VIEW_MAP_H,
+    view_ox: int = _VIEW_MAP_OX,
+    view_oy: int = _VIEW_MAP_OY,
+    screen_w: int = _SCREEN_W,
+    screen_h: int = _SCREEN_H,
+) -> tuple[int, int, int, int]:
+    """Inclusive tile AABB of the visible iso well (not under INT_CITY)."""
+    corners = (
+        (view_ox, view_oy),
+        (view_ox + view_w - 1, view_oy),
+        (view_ox, view_oy + view_h - 1),
+        (view_ox + view_w - 1, view_oy + view_h - 1),
+    )
+    txs: list[float] = []
+    tys: list[float] = []
+    for vx, vy in corners:
+        cx, cy = _view_to_canvas(
+            vx, vy, cam_x, cam_y, canvas_w, canvas_h, screen_w=screen_w, screen_h=screen_h
+        )
+        tx, ty = _canvas_to_tile(cx, cy, zoom)
+        txs.append(tx)
+        tys.append(ty)
+    x0 = max(0, min(MAP_W - 1, int(min(txs))))
+    y0 = max(0, min(MAP_H - 1, int(min(tys))))
+    x1 = max(0, min(MAP_W - 1, int(max(txs))))
+    y1 = max(0, min(MAP_H - 1, int(max(tys))))
+    if x1 < x0:
+        x0, x1 = x1, x0
+    if y1 < y0:
+        y0, y1 = y1, y0
+    return x0, y0, x1, y1
+
+
+def minimap_well_contains(x: int, y: int) -> bool:
+    """True for the upper-sidebar well (blocks palette / rubber-band)."""
+    wx, wy, ww, wh = MINIMAP_WELL
+    return wx <= x < wx + ww and wy <= y < wy + wh
+
+
+def minimap_contains(x: int, y: int) -> bool:
+    mx, my, mw, mh = MINIMAP_RECT
+    return mx <= x < mx + mw and my <= y < my + mh
+
+
+def minimap_tile_at(x: int, y: int) -> tuple[int, int] | None:
+    """Screen pixel → tile, or None if outside the scaled well."""
+    if not minimap_contains(x, y):
+        return None
+    mx, my, mw, mh = MINIMAP_RECT
+    tx = (x - mx) * MINIMAP_SIZE // mw
+    ty = (y - my) * MINIMAP_SIZE // mh
+    if tx < 0 or ty < 0 or tx >= MINIMAP_SIZE or ty >= MINIMAP_SIZE:
+        return None
+    return tx, ty
+
+
+def camera_center_on_tile(
+    tx: int,
+    ty: int,
+    zoom: int,
+    canvas_w: int,
+    canvas_h: int,
+    *,
+    view_w: int = _VIEW_MAP_W,
+    view_h: int = _VIEW_MAP_H,
+    view_ox: int = _VIEW_MAP_OX,
+    view_oy: int = _VIEW_MAP_OY,
+    screen_w: int = _SCREEN_W,
+    screen_h: int = _SCREEN_H,
+) -> tuple[int, int]:
+    """cam_x, cam_y so tile (tx, ty) sits in the centre of the visible well."""
+    sx, sy = tile_iso_xy(tx, ty, zoom=zoom)
+    tw, th = iso_tile_size(zoom)
+    cx = sx + tw // 2
+    cy = sy + th // 2
+    if canvas_w <= screen_w and canvas_h <= screen_h:
+        return 0, 0
+    return cx - (view_ox + view_w // 2), cy - (view_oy + view_h // 2)
+
+
+def minimap_click_pan(
+    x: int,
+    y: int,
+    zoom: int,
+    canvas_w: int,
+    canvas_h: int,
+    *,
+    view_w: int = _VIEW_MAP_W,
+    view_h: int = _VIEW_MAP_H,
+    screen_w: int = _SCREEN_W,
+    screen_h: int = _SCREEN_H,
+    minimap: tuple[int, int, int, int] | None = None,
+) -> tuple[int, int] | None:
+    """If (x,y) is on the scaled well, new camera; else None."""
+    tile = (
+        minimap_tile_at(x, y)
+        if minimap is None
+        else _minimap_tile_at_rect(x, y, minimap)
+    )
+    if tile is None:
+        return None
+    return camera_center_on_tile(
+        tile[0],
+        tile[1],
+        zoom,
+        canvas_w,
+        canvas_h,
+        view_w=view_w,
+        view_h=view_h,
+        screen_w=screen_w,
+        screen_h=screen_h,
+    )
+
+
+def _minimap_tile_at_rect(
+    x: int, y: int, rect: tuple[int, int, int, int]
+) -> tuple[int, int] | None:
+    mx, my, mw, mh = rect
+    if not (mx <= x < mx + mw and my <= y < my + mh):
+        return None
+    tx = (x - mx) * MINIMAP_SIZE // mw
+    ty = (y - my) * MINIMAP_SIZE // mh
+    if tx < 0 or ty < 0 or tx >= MINIMAP_SIZE or ty >= MINIMAP_SIZE:
+        return None
+    return tx, ty
+
+
+def render_minimap(
+    city: CityMap,
+    viewport: tuple[int, int, int, int, int] | None = None,
+    overlay_id: int = 0,
+) -> Image.Image:
+    """80×80 top-down, one pixel per tile.
+
+    ``viewport`` is ``(cam_x, cam_y, zoom, canvas_w, canvas_h[, win_w, win_h])``
+    — the same pan/zoom ``crop_viewport`` uses. Yellow outline = tiles under
+    the visible iso well (left of the 162 px sidebar). Omit it to skip the
+    rect. ``overlay_id`` is SavChunk 1 / [0x117A59] (0 = Geography).
+    """
+    pixels: list[tuple[int, int, int]] = []
+    tiles = city.tiles
+    for y in range(MAP_H):
+        row = y * ROW_STRIDE
+        for x in range(MAP_W):
+            off = row + x * TILE_STRIDE
+            pixels.append(_minimap_color(tiles[off], tiles[off + 1]))
+    if overlay_id:
+        from app.city_overlay import apply_overlay_colors
+
+        pixels = apply_overlay_colors(pixels, tiles, overlay_id)
+    img = Image.new("RGB", (MINIMAP_SIZE, MINIMAP_SIZE))
+    img.putdata(pixels)
+    if viewport is not None:
+        cam_x, cam_y, zoom, canvas_w, canvas_h, *rest = viewport
+        win_w = rest[0] if len(rest) >= 1 else _SCREEN_W
+        win_h = rest[1] if len(rest) >= 2 else _SCREEN_H
+        box = view_tiles_for_camera(
+            cam_x,
+            cam_y,
+            zoom,
+            canvas_w,
+            canvas_h,
+            view_w=max(1, win_w - (_SCREEN_W - _VIEW_MAP_W)),
+            view_h=max(1, win_h - (_SCREEN_H - _VIEW_MAP_H)),
+            screen_w=win_w,
+            screen_h=win_h,
+        )
+        ImageDraw.Draw(img).rectangle(box, outline=_MINI_VIEW)
+    return img
+
+
+def blit_minimap(
+    frame: Image.Image,
+    city: CityMap,
+    viewport: tuple[int, int, int, int, int] | None = None,
+    overlay_id: int = 0,
+) -> Image.Image:
+    """Scale ``render_minimap`` (80×80) to ``MINIMAP_RECT`` with nearest-neighbor."""
+    mx, my, mw, mh = MINIMAP_RECT
+    mini = render_minimap(city, viewport, overlay_id=overlay_id)
+    if mini.size != (mw, mh):
+        mini = mini.resize((mw, mh), Image.Resampling.NEAREST)
+    frame.paste(mini, (mx, my))
+    return frame
 
 
 def selftest() -> list[str]:
@@ -893,6 +1452,67 @@ def selftest() -> list[str]:
         lines.append("FAIL  WATER_FRAMES / WATER_FRAME_MS")
     else:
         lines.append(f"ok    {WATER_FRAMES} frames, host {WATER_FRAME_MS} ms")
+    if iso_sprite_dest(10, 40, 51, 30) != (10, 19):
+        lines.append(f"FAIL  tall blit origin {iso_sprite_dest(10, 40, 51, 30)}")
+    elif iso_sprite_dest(10, 40, 30, 30) != (10, 40):
+        lines.append("FAIL  diamond blit origin moved")
+    else:
+        lines.append("ok    tall sprite origin sobe extra_rows")
+    phantom = Image.new("RGBA", (58, 38), (0, 0, 0, 0))
+    for y in range(30):
+        for x in range(58):
+            phantom.putpixel((x, y), (40, 120, 50, 255))
+    trimmed = _trim_phantom_extra(phantom, 30)
+    if trimmed.size != (58, 30):
+        lines.append(f"FAIL  type-1 phantom extra {trimmed.size}, want 58x30")
+    else:
+        lines.append("ok    type-1 extra transparente não sobe o losango")
+    tall = Image.new("RGBA", (58, 46), (0, 0, 0, 0))
+    for y in range(46):
+        for x in range(58):
+            tall.putpixel((x, y), (160, 140, 90, 255))
+    kept = _trim_phantom_extra(tall, 30)
+    if kept.size != (58, 46):
+        lines.append(f"FAIL  type-2 extra cortada {kept.size}")
+    elif iso_sprite_dest(10, 40, kept.height, 30) != (10, 24):
+        lines.append(f"FAIL  reservoir dest {iso_sprite_dest(10, 40, kept.height, 30)}")
+    else:
+        lines.append("ok    reservoir / praefecture extra_rows sobe 16")
+    res = Tile.unpack(bytes([ID_RESERVOIR, 0x80, 0, 0x20, 0x6E]) + bytes(15))
+    spec = res.building_sprite()
+    if spec != (PL8_HOUSES1, 90):
+        lines.append(f"FAIL  reservoir sprite {spec}, want HOUSES1 90")
+    else:
+        lines.append("ok    Reservoir 0xBE -> HOUSES1[90] (tall type 2)")
+    well = Tile.unpack(bytes([ID_WELL, 0x01, 0, 0x08, 0x10]) + bytes(15))
+    if not tile_wants_water_anim(well.terrain_id, well.flags, well.coverage):
+        lines.append("FAIL  well water anim")
+    else:
+        lines.append("ok    Well 0xD7 no ciclo de água")
+    aq = Tile.unpack(bytes([0xD0, 0x40, 0, 0x10, 0x76]) + bytes(15))
+    if not tile_wants_water_anim(aq.terrain_id, aq.flags, aq.coverage):
+        lines.append("FAIL  aqueduct water anim")
+    else:
+        lines.append("ok    Aqueduct no ciclo de água")
+    dests: list[tuple[int, int]] = []
+    specs: list[tuple[int, tuple[str, int] | None]] = []
+    want_spr = {0xCB: 0x79, 0xCF: 0x79, 0xD0: 0x76, 0xD1: 0x7C, 0xD6: 0x70}
+    want_var = {0xCB: 0x79, 0xCF: 0x79, 0xD0: 0x76, 0xD1: 0x7C, 0xD6: 0x70}
+    for tid, var in want_var.items():
+        t = Tile.unpack(bytes([tid, 0x40, 0, 0x10, var]) + bytes(15))
+        specs.append((tid, t.building_sprite()))
+        dests.append(iso_sprite_dest(10, 40, 30 + aqueduct_iso_lift(tid), 30))
+    bad = [
+        (tid, spec, want_spr[tid])
+        for tid, spec in specs
+        if spec != (PL8_CITYFIXT, want_spr[tid])
+    ]
+    if bad:
+        lines.append(f"FAIL  aqueduct sprite {bad}")
+    elif aqueduct_iso_lift(0xD0) != AQUEDUCT_ISO_LIFT or len(set(dests)) != 1:
+        lines.append(f"FAIL  aqueduct altura {dests}")
+    else:
+        lines.append("ok    Aqueduct 0xCB/0xCF/0xD0/0xD1/0xD6 mesma altura extra_rows")
     spr = Image.new("RGBA", (6, 6), (0, 0, 0, 0))
     pix = spr.load()
     pix[1, 1] = (40, 80, 180, 255)
@@ -910,4 +1530,180 @@ def selftest() -> list[str]:
         lines.append("FAIL  water interior did not cycle")
     else:
         lines.append("ok    interior cycle keeps mask + bank")
+    city = CityMap()
+    samples = (
+        (0, 0, 8, 0, _MINI_GRASS, "grass"),
+        (1, 0, 0x1E, FLAG_RIVER, _MINI_RIVER, "river"),
+        (2, 0, 0x52, FLAG_PAD, _MINI_ROAD, "road"),
+        (3, 0, 0x4E, FLAG_RIVER | FLAG_PAD, _MINI_ROAD, "bridge"),
+        (4, 0, 0x82, 0, _MINI_HOUSE, "house"),
+        (5, 0, 0x05, 0, _MINI_RUBBLE, "rubble"),
+    )
+    for x, y, tid, flags, color, name in samples:
+        off = city.offset(x, y)
+        city.tiles[off] = tid
+        city.tiles[off + 1] = flags
+    mini = render_minimap(city)
+    if mini.size != (MINIMAP_SIZE, MINIMAP_SIZE):
+        lines.append(f"FAIL  minimap size {mini.size}")
+    else:
+        lines.append("ok    minimap 80×80")
+    pix = mini.load()
+    for x, y, _tid, _flags, color, name in samples:
+        got = pix[x, y]
+        if got != color:
+            lines.append(f"FAIL  minimap {name} {got}, want {color}")
+        else:
+            lines.append(f"ok    minimap {name}")
+    cw, ch = iso_canvas_size(0)
+    box = view_tiles_for_camera(0, 0, 0, cw, ch)
+    framed = render_minimap(city, viewport=(0, 0, 0, cw, ch))
+    fp = framed.load()
+    x0, y0, x1, y1 = box
+    if fp[x0, y0] != _MINI_VIEW:
+        lines.append(f"FAIL  view-rect {fp[x0, y0]} at {box}")
+    else:
+        lines.append(f"ok    view-rect {box}")
+    if minimap_well_contains(500, 300) or minimap_contains(500, 300):
+        lines.append("FAIL  palette (500,300) hits minimap")
+    elif not minimap_well_contains(478, 48) or minimap_tile_at(478, 48) != (0, 0):
+        lines.append("FAIL  minimap dest / tile_at")
+    elif minimap_tile_at(478 + 161, 48 + 159) != (79, 79):
+        lines.append("FAIL  minimap SE tile_at")
+    elif minimap_tile_at(500, 300) is not None:
+        lines.append("FAIL  tile_at stole a palette click")
+    else:
+        lines.append("ok    well (478,48,162,160) · paleta (500,300) livre")
+    ox = city.offset(10, 40)
+    city.tiles[ox] = ID_RESERVOIR
+    city.tiles[ox + 1] = 0x80
+    city.tiles[ox + 3] = 0x20
+    city.tiles[ox + 4] = 0x6E
+    tall = Image.new("RGBA", (ISO_W, ISO_H + 16), (80, 60, 40, 255))
+    houses = [Image.new("RGBA", (ISO_W, ISO_H), (0, 0, 0, 0)) for _ in range(91)]
+    houses[90] = tall
+    sheets = {PL8_HOUSES1: houses}
+    sx, sy = tile_iso_xy(10, 40)
+    px, py = iso_sprite_dest(sx, sy, tall.height, ISO_H)
+    img = Image.new(
+        "RGBA", (sx + ISO_W + ISO_HALF_W + 16, sy + ISO_H + ISO_HALF_H + 8), (*ISO_BG, 255)
+    )
+    _paint_iso_tile(
+        img,
+        city.tile(10, 40),
+        sx,
+        sy,
+        tile_w=ISO_W,
+        tile_h=ISO_H,
+        water_frame=0,
+        cityfixt=None,
+        sheets=sheets,
+    )
+    sample = (sx + ISO_W // 2, py + 2)
+    east = (sx + ISO_W + 6, sy + ISO_H // 2)
+    img.putpixel(east, (80, 60, 40, 255))
+    painted = img.getpixel(sample)
+    city.tiles[ox] = _ID_RUBBLE
+    city.tiles[ox + 1] = 0
+    city.tiles[ox + 3] = 0
+    city.tiles[ox + 4] = 0
+    water_only = img.copy()
+    blit_water_tiles(
+        water_only, city, None, 0, cells=[(10, 40)], sheets=sheets
+    )
+    leftover = water_only.getpixel(sample)
+    east_water = water_only.getpixel(east)
+    blit_dirty_tiles(img, city, [(10, 40)], sheets=sheets)
+    wiped = img.getpixel(sample)
+    east_wiped = img.getpixel(east)
+    if iso_overlap_radius(0) < 2:
+        lines.append(f"FAIL  iso_overlap_radius {iso_overlap_radius(0)}")
+    elif painted[0:3] != (80, 60, 40):
+        lines.append(f"FAIL  tall sprite não pintou extra_rows {painted}")
+    elif leftover[0:3] != (80, 60, 40) or east_water[0:3] != (80, 60, 40):
+        lines.append(f"FAIL  water blit expandiu AABB {leftover}/{east_water}")
+    elif wiped[0:3] == (80, 60, 40) or east_wiped[0:3] == (80, 60, 40):
+        lines.append(f"FAIL  ghost extra_rows/este após clear {wiped}/{east_wiped}")
+    else:
+        lines.append("ok    clear tall sprite limpa extra_rows + losango E")
+    road_city = CityMap()
+    for y in range(MAP_H):
+        for x in range(MAP_W):
+            road_city.tiles[road_city.offset(x, y)] = 0x14
+    road = [(x, 40) for x in range(8, 48)]
+    for rx, ry in road:
+        road_city.tiles[road_city.offset(rx, ry)] = 0x53
+        road_city.tiles[road_city.offset(rx, ry) + 1] = FLAG_PAD
+    road_img = render_iso(road_city, zoom=0)
+    tw, th = iso_tile_size(0)
+    blit_dirty_tiles(road_img, road_city, road)
+    voids = 0
+    for tx, ty in ((25, 5), (26, 3), (40, 20), (50, 10), (28, 40)):
+        sx, sy = tile_iso_xy(tx, ty)
+        sample = (sx + tw // 2, sy + th // 2)
+        if road_img.getpixel(sample)[0:3] == ISO_BG:
+            voids += 1
+    if voids:
+        lines.append(f"FAIL  road dirty AABB left {voids} ISO_BG voids")
+    else:
+        lines.append("ok    road dirty não deixa vazio preto no AABB")
+
+    # One 3×3 barracks: each cell has its own +4 piece (58px), not the origin
+    # compound. Dirty of the footprint must match a full render — no second
+    # fort on the neighbour grass.
+    from app.place import (
+        DRAW_BARRACKS,
+        ID_BARRACKS,
+        _BARRACKS_VAR,
+        TOOL_BARRACKS,
+        try_place,
+    )
+    from app.city_sim import SimState
+
+    fort = CityMap()
+    for y in range(MAP_H):
+        for x in range(MAP_W):
+            fort.tiles[fort.offset(x, y)] = 0x14
+    sim = SimState(treasury=400)
+    placed = try_place(fort, 40, 40, TOOL_BARRACKS, sim)
+    variants = [
+        fort.tiles[fort.offset(40 + dx, 40 + dy) + 4]
+        for dy in range(3)
+        for dx in range(3)
+    ]
+    piece = [
+        fort.tiles[fort.offset(40 + dx, 40 + dy) + 5] & 0xF
+        for dy in range(3)
+        for dx in range(3)
+    ]
+    if (
+        not placed.ok
+        or placed.flush_iso
+        or variants != list(_BARRACKS_VAR)
+        or piece != list(range(9))
+        or variants[0] == variants[1]
+    ):
+        lines.append(
+            f"FAIL  barracks pieces flush={placed.flush_iso} +4={variants} +5={piece}"
+        )
+    else:
+        lines.append("ok    Barracks 9 peças distintas (origem não se repete)")
+    grass = CityMap()
+    for y in range(MAP_H):
+        for x in range(MAP_W):
+            grass.tiles[grass.offset(x, y)] = 0x14
+    full_fort = render_iso(fort, zoom=0)
+    dirty_fort = render_iso(grass, zoom=0)
+    blit_dirty_tiles(dirty_fort, fort, placed.dirty or [(40, 40)])
+    sx, sy = tile_iso_xy(40, 40)
+    box = (sx - 40, sy - 40, sx + tw * 4, sy + th * 5)
+    same = full_fort.crop(box).tobytes() == dirty_fort.crop(box).tobytes()
+    east_x, east_y = tile_iso_xy(44, 40)
+    east = dirty_fort.getpixel((east_x + tw // 2, east_y + th // 2))
+    if not same:
+        lines.append("FAIL  barracks dirty ≠ full no footprint")
+    elif east[0:3] == ISO_BG:
+        lines.append("FAIL  barracks dirty deixou buraco na relva E")
+    else:
+        lines.append("ok    Barracks dirty = full, sem 2º forte na relva")
     return lines

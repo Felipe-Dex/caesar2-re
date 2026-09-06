@@ -16,7 +16,7 @@ import struct
 from collections.abc import MutableSequence
 from dataclasses import dataclass
 
-from app.city_map import FLAG_PAD, MAP_H, MAP_W, TILE_BYTES
+from app.city_map import FLAG_PAD, FLAG_RIVER, MAP_H, MAP_W, TILE_BYTES, is_aqueduct_id
 from app.walkers import (
     TYPE_LTLMEN_BASE,
     TYPE_MAX,
@@ -83,6 +83,16 @@ _SPEED_PAD = 1
 
 _MAP_MAX = MAP_W - 1  # 79; diagonal edge uses 78 ('N')
 
+# Walkable pavement. EXE dest_ok is FLAG_PAD-only; the host also stamps
+# 0x20 on aqueduct T/cross (0xD5/0xD6) and leftover grass, which put
+# walkers on the pipe. Restrict to city roads / bridges / plaza.
+ID_ROAD_LO = 0x52
+ID_ROAD_HI = 0x5C
+ID_BRIDGE_LO = 0x4E
+ID_BRIDGE_HI = 0x51
+ID_PLAZA_LO = 0x7C
+ID_PLAZA_HI = 0x7E
+
 
 @dataclass
 class WalkerClock:
@@ -147,6 +157,35 @@ def _tile_at(tiles: bytearray, x: int, y: int) -> int:
     return y * (MAP_W * TILE_BYTES) + x * TILE_BYTES
 
 
+def is_walker_road(tiles: bytearray, off: int) -> bool:
+    """True for city road 0x52–0x5C, bridge 0x4E–0x51, plaza 0x7C–0x7E.
+
+    Aqueduct is an elevated pipe — not a patrol surface even when +1 has
+    FLAG_PAD (host T/cross 0xD5/0xD6). Residual grass+PAD is also out.
+    """
+    if off < 0 or off + TILE_BYTES > len(tiles):
+        return False
+    tid = tiles[off]
+    flags = tiles[off + _TILE_FLAGS]
+    if is_aqueduct_id(tid):
+        return False
+    if not (flags & FLAG_PAD):
+        return False
+    if ID_ROAD_LO <= tid <= ID_ROAD_HI:
+        return True
+    if ID_BRIDGE_LO <= tid <= ID_BRIDGE_HI:
+        return True
+    if flags & FLAG_RIVER:
+        return True
+    return ID_PLAZA_LO <= tid <= ID_PLAZA_HI
+
+
+def _path_log(msg: str) -> None:
+    from app.sim_log import write
+
+    write(msg)
+
+
 def _u16(rec: bytearray, off: int) -> int:
     return rec[off] | (rec[off + 1] << 8)
 
@@ -191,19 +230,27 @@ def walker_set_dest(rec: bytearray, facing: int) -> None:
     """walker_set_dest 0x48E59 — dest is one tile along facing."""
     if facing < 0 or facing > 7:
         return
+    rec[_OFF_FACING] = facing
     dx, dy, _doff = _FACING_DELTA[facing]
     _set_i8(rec, _OFF_DEST_X, _i8(rec, _OFF_X) + dx)
     _set_i8(rec, _OFF_DEST_Y, _i8(rec, _OFF_Y) + dy)
 
 
 def tile_or_radius(
-    tiles: bytearray, x: int, y: int, radius: int, lane: int, bits: int
+    tiles: bytearray,
+    x: int,
+    y: int,
+    radius: int,
+    lane: int,
+    bits: int,
+    extra: int = 0,
 ) -> None:
-    """tile_or_radius 0x6CD7E with EAX extra=0: clipped Chebyshev square."""
+    """tile_or_radius 0x6CD7E: clipped square of side 2*r+1 (+ EAX extra)."""
     if not tiles:
         return
-    for ny in range(max(0, y - radius), min(MAP_H, y + radius + 1)):
-        for nx in range(max(0, x - radius), min(MAP_W, x + radius + 1)):
+    span = radius + max(0, extra)
+    for ny in range(max(0, y - radius), min(MAP_H, y + span + 1)):
+        for nx in range(max(0, x - radius), min(MAP_W, x + span + 1)):
             tiles[_tile_at(tiles, nx, ny) + lane] |= bits
 
 
@@ -216,7 +263,7 @@ def walker_dest_ok(tiles: bytearray, dest_off: int) -> int:
     flags = tiles[dest_off + _TILE_FLAGS]
     if slot0 and slot1:
         return 999
-    if flags & FLAG_PAD:
+    if is_walker_road(tiles, dest_off):
         return 1
     if flags == 0:
         return 2
@@ -260,7 +307,7 @@ def walker_pick_pad_facing(
         off = _tile_off(nx, ny)
         if off + TILE_BYTES > len(tiles):
             continue
-        if tiles[off + _TILE_FLAGS] & FLAG_PAD:
+        if is_walker_road(tiles, off):
             pads[f] = (tiles[off + _TILE_SLOT0], tiles[off + _TILE_SLOT1])
     if not pads:
         return 8
@@ -304,6 +351,297 @@ def walker_free(pool: bytearray, tiles: bytearray, slot: int) -> None:
     _put(pool, slot, bytearray(WALKER_STRIDE))
 
 
+# walker_spawn_retry LUTs 0x99BE4 / 0x99C04 / 0x99C44 / 0x99CA4
+_RETRY_OFFSETS: dict[int, tuple[tuple[int, int], ...]] = {
+    1: ((0, -1), (1, 0), (0, 1), (-1, 0)),
+    4: (
+        (0, -1), (1, -1), (2, 0), (2, 1),
+        (1, 2), (0, 2), (-1, 1), (-1, 0),
+    ),
+    9: (
+        (0, -1), (1, -1), (2, -1), (3, 0),
+        (3, 1), (3, 2), (2, 3), (1, 3),
+        (0, 3), (-1, 2), (-1, 1), (-1, 0),
+    ),
+    0x10: (
+        (0, -1), (1, -1), (2, -1), (3, -1),
+        (4, 0), (4, 1), (4, 2), (4, 3),
+        (3, 4), (2, 4), (1, 4), (0, 4),
+        (-1, 3), (-1, 2), (-1, 1), (-1, 0),
+    ),
+}
+
+_LAST_SPAWN_SLOT = 0
+LAST_EMIT_NOTE = ""
+
+
+def walker_spawn(
+    pool: bytearray,
+    tiles: bytearray,
+    type_id: int,
+    x: int,
+    y: int,
+    *,
+    pad: int = 0,
+    rng: int = 1,
+) -> int:
+    """walker_spawn 0x2A7EF. Returns slot 1…200 or 0. Never fills slot 0."""
+    global _LAST_SPAWN_SLOT
+    if not _in_map(x, y):
+        return 0
+    off = _tile_off(x, y)
+    if off + TILE_BYTES > len(tiles):
+        return 0
+    if tiles[off + _TILE_SLOT0] and tiles[off + _TILE_SLOT1]:
+        return 0
+    flags = tiles[off + _TILE_FLAGS]
+    if flags & 0x8B:
+        return 0
+    if pad:
+        if not is_walker_road(tiles, off):
+            if is_aqueduct_id(tiles[off]):
+                _path_log(f"walker spawn skip aqueduct  xy={x},{y}  id={tiles[off]:#x}")
+            elif flags & FLAG_PAD:
+                _path_log(
+                    f"walker spawn skip non-road pad  xy={x},{y}  "
+                    f"id={tiles[off]:#x}  flags={flags:#x}"
+                )
+            return 0
+    elif flags & 0x54:
+        return 0
+    for slot in range(1, WALKER_COUNT):
+        rec = _rec(pool, slot)
+        if rec[_OFF_OCCUPIED]:
+            continue
+        rec = bytearray(WALKER_STRIDE)
+        rec[_OFF_OCCUPIED] = 1
+        rec[_OFF_TYPE] = type_id & 0xFF
+        rec[_OFF_FACING] = 1
+        _set_i8(rec, _OFF_X, x)
+        _set_i8(rec, _OFF_Y, y)
+        _set_i8(rec, _OFF_DEST_X, x)
+        _set_i8(rec, _OFF_DEST_Y, y)
+        struct.pack_into("<i", rec, _OFF_TILE, off)
+        rec[0xA] = (x << 4) & 0xFF
+        rec[0xB] = (y << 4) & 0xFF
+        rec[_OFF_UNK_1E] = 5
+        _set_u16(rec, _OFF_RNG, rng & 0x7FFF)
+        rec[_OFF_ON_ROAD] = 1 if pad else 0
+        if tiles[off + _TILE_SLOT0] == 0:
+            tiles[off + _TILE_SLOT0] = slot
+        else:
+            tiles[off + _TILE_SLOT1] = slot
+        tiles[off + 3] |= 1
+        _put(pool, slot, rec)
+        _LAST_SPAWN_SLOT = slot
+        return slot
+    return 0
+
+
+def walker_spawn_retry(
+    pool: bytearray,
+    tiles: bytearray,
+    type_id: int,
+    x: int,
+    y: int,
+    *,
+    pad: int = 0x20,
+    retry_class: int = 1,
+    start: int = 0,
+    rng: int = 1,
+) -> int:
+    """walker_spawn_retry 0x42236. Returns 1-based attempt index or 0."""
+    offsets = _RETRY_OFFSETS.get(retry_class)
+    if offsets is None:
+        return 1 if walker_spawn(pool, tiles, type_id, x, y, pad=pad, rng=rng) else 0
+    attempts = len(offsets)
+    idx = start % attempts if start else 0
+    for n in range(attempts):
+        dx, dy = offsets[idx]
+        if walker_spawn(pool, tiles, type_id, x + dx, y + dy, pad=pad, rng=rng):
+            return n + 1
+        idx = 0 if idx + 1 >= attempts else idx + 1
+    return 0
+
+
+def walker_finish_spawn(pool: bytearray, slot: int, *, next_state: int) -> None:
+    """Emit tail: state 1, wait 0x14, next_state from the building."""
+    if slot <= 0:
+        return
+    rec = _rec(pool, slot)
+    rec[_OFF_STATE] = 1
+    rec[_OFF_WAIT] = 0x14
+    rec[_OFF_NEXT_STATE] = next_state & 0xFF
+    sid = sprite_id_for(rec[_OFF_TYPE], rec[_OFF_FACING], 0)
+    rec[_OFF_SPRITE_ID] = sid & 0xFF
+    rec[_OFF_SPRITE_ID + 1] = (sid >> 8) & 0xFF
+    _put(pool, slot, rec)
+
+
+def _spawn_on_nearby_pad(
+    pool: bytearray,
+    tiles: bytearray,
+    type_id: int,
+    x: int,
+    y: int,
+    *,
+    size: int = 1,
+    rng: int = 1,
+) -> int:
+    """Host fallback: any FLAG_PAD on the building rim (EXE LUT miss)."""
+    for dy in range(-1, size + 1):
+        for dx in range(-1, size + 1):
+            if 0 <= dx < size and 0 <= dy < size:
+                continue
+            if walker_spawn(
+                pool, tiles, type_id, x + dx, y + dy, pad=0x20, rng=rng
+            ):
+                return 1
+    return 0
+
+
+def walkers_relink_tiles(pool: bytearray, tiles: bytearray) -> None:
+    """Phase 0xD2: wipe +7/+8 then re-place live slots 1…200."""
+    if len(tiles) >= MAP_W * MAP_H * TILE_BYTES:
+        for i in range(MAP_W * MAP_H):
+            base = i * TILE_BYTES
+            tiles[base + _TILE_SLOT0] = 0
+            tiles[base + _TILE_SLOT1] = 0
+    for slot in range(1, WALKER_COUNT):
+        rec = _rec(pool, slot)
+        if rec[_OFF_OCCUPIED] == 0:
+            continue
+        off = struct.unpack_from("<i", rec, _OFF_TILE)[0]
+        if off < 0 or off + TILE_BYTES > len(tiles):
+            continue
+        if tiles[off + _TILE_SLOT0] == 0:
+            tiles[off + _TILE_SLOT0] = slot
+        elif tiles[off + _TILE_SLOT1] == 0:
+            tiles[off + _TILE_SLOT1] = slot
+
+
+def emit_walkers(
+    tiles: bytearray,
+    walkers: MutableSequence[Walker] | bytearray | None,
+    y0: int,
+    n: int,
+    *,
+    population: int,
+    rng: int = 1,
+) -> int:
+    """Spawn from civic buildings onto adjacent roads. Mutates walkers."""
+    global LAST_EMIT_NOTE
+    if walkers is None:
+        LAST_EMIT_NOTE = "skip walkers=None"
+        return 0
+    if population < 2:
+        LAST_EMIT_NOTE = f"skip pop={population}<2"
+        return 0
+    pool = _pool_from(walkers)
+    spawned = emit_walkers_row(
+        tiles, pool, y0, n, population=population, rng=rng
+    )
+    _write_back(walkers, pool)
+    return spawned
+
+
+def relink_walker_tiles(
+    tiles: bytearray, walkers: MutableSequence[Walker] | bytearray | None
+) -> None:
+    if walkers is None:
+        return
+    pool = _pool_from(walkers)
+    walkers_relink_tiles(pool, tiles)
+    _write_back(walkers, pool)
+
+
+def emit_walkers_row(
+    tiles: bytearray,
+    pool: bytearray,
+    y0: int,
+    n: int,
+    *,
+    population: int,
+    rng: int = 1,
+) -> int:
+    """Phases 0x8E–0x99: forum 0xAE–0xB9, prefecture 0xE3, barracks 0xE4."""
+    global LAST_EMIT_NOTE
+    spawned = 0
+    civic = 0
+    waiting = 0
+    noroad = 0
+    if population < 2:
+        LAST_EMIT_NOTE = f"skip pop={population}<2"
+        return 0
+    for y in range(y0, min(MAP_H, y0 + n)):
+        for x in range(MAP_W):
+            off = _tile_off(x, y)
+            hid = tiles[off]
+            if tiles[off + 5] & 0xF:
+                continue
+            wait = tiles[off + 6] & 0x0F
+            start = (tiles[off + 5] >> 4) & 0x0F
+            size = 1
+            if 0xAE <= hid <= 0xB9:
+                typ, nxt, cls, tries = 1, 3, 1, 4
+                if hid >= 0xB6:
+                    nxt, cls, tries = 1, 0x10, 16
+                    size = 4
+                elif hid >= 0xB2:
+                    nxt, cls, tries = 2, 9, 12
+                    size = 3
+                else:
+                    cls, tries = 4, 8
+                    size = 2
+            elif hid == 0xE3:
+                typ, nxt, cls, tries = 5, 8, 1, 4
+            elif hid == 0xE4:
+                typ, nxt, cls, tries = 4, 7, 9, 12
+                size = 3
+            elif 0xFC <= hid <= 0xFF:
+                typ, nxt, cls, tries = 2, 4, 1, 4
+            else:
+                continue
+            civic += 1
+            if wait:
+                tiles[off + 6] = (tiles[off + 6] & 0xF0) | ((wait - 1) & 0x0F)
+                waiting += 1
+                continue
+            got = walker_spawn_retry(
+                pool,
+                tiles,
+                typ,
+                x,
+                y,
+                pad=0x20,
+                retry_class=cls,
+                start=start,
+                rng=rng,
+            )
+            if not got:
+                got = _spawn_on_nearby_pad(
+                    pool, tiles, typ, x, y, size=size, rng=rng
+                )
+            if got:
+                walker_finish_spawn(pool, _LAST_SPAWN_SLOT, next_state=nxt)
+                spawned += 1
+                start = got & 0x0F
+                wait = 3
+            else:
+                noroad += 1
+                start = (start + 1) & 0x0F
+                if start >= tries:
+                    start = 0
+                wait = 0
+            tiles[off + 6] = (tiles[off + 6] & 0xF0) | (wait & 0x0F)
+            tiles[off + 5] = (tiles[off + 5] & 0x0F) | ((start & 0x0F) << 4)
+    LAST_EMIT_NOTE = (
+        f"civic={civic} spawned={spawned} waiting={waiting} "
+        f"no-road={noroad} pop={population} y0={y0} n={n}"
+    )
+    return spawned
+
+
 def walker_step(pool: bytearray, tiles: bytearray, slot: int) -> bool:
     """walker_step 0x488DC. False if dest had two walkers (freed)."""
     rec = _rec(pool, slot)
@@ -317,6 +655,8 @@ def walker_step(pool: bytearray, tiles: bytearray, slot: int) -> bool:
     _set_i8(rec, _OFF_Y, _i8(rec, _OFF_Y) + dy)
     tile = struct.unpack_from("<i", rec, _OFF_TILE)[0] + doff
     struct.pack_into("<i", rec, _OFF_TILE, tile)
+    rec[0xA] = (_i8(rec, _OFF_X) << 4) & 0xFF
+    rec[0xB] = (_i8(rec, _OFF_Y) << 4) & 0xFF
     if 0 <= tile and tile + TILE_BYTES <= len(tiles):
         if tiles[tile + _TILE_SLOT0] == 0:
             tiles[tile + _TILE_SLOT0] = slot
@@ -379,6 +719,20 @@ def walker_anim_roam(
         _put(pool, slot, rec)
         walker_step(pool, tiles, slot)
         return 1
+    dx, dy, _doff = _FACING_DELTA[facing] if 0 <= facing <= 7 else (0, 0, 0)
+    nx, ny = _i8(rec, _OFF_X) + dx, _i8(rec, _OFF_Y) + dy
+    dest_off = _tile_off(nx, ny) if _in_map(nx, ny) else -1
+    dest_id = tiles[dest_off] if dest_off >= 0 and dest_off < len(tiles) else -1
+    dest_flags = (
+        tiles[dest_off + _TILE_FLAGS]
+        if dest_off >= 0 and dest_off + _TILE_FLAGS < len(tiles)
+        else -1
+    )
+    _path_log(
+        f"walker path blocked  slot={slot}  type={rec[_OFF_TYPE]}  "
+        f"xy={_i8(rec, _OFF_X)},{_i8(rec, _OFF_Y)}  facing={facing}  "
+        f"dest={nx},{ny}  id={dest_id:#x}  flags={dest_flags:#x}  code={code}"
+    )
     rec[_OFF_STATE] = 1
     rec[_OFF_WAIT] = 0x14
     rec[_OFF_FACING] = (rec[_OFF_FACING] + 4) & 7
@@ -484,7 +838,12 @@ def _roam_step_done(
 
 
 def _pick_or_die(
-    rec: bytearray, tiles: bytearray, clock: WalkerClock, *, wait_on_stuck: int
+    rec: bytearray,
+    tiles: bytearray,
+    clock: WalkerClock,
+    *,
+    wait_on_stuck: int,
+    slot: int = 0,
 ) -> None:
     facing = walker_pick_pad_facing(
         tiles, _i8(rec, _OFF_X), _i8(rec, _OFF_Y), rec[_OFF_FACING], clock.rng
@@ -494,6 +853,10 @@ def _pick_or_die(
         rec[_OFF_STATE] = 2
         if wait_on_stuck:
             rec[_OFF_WAIT] = wait_on_stuck
+        _path_log(
+            f"walker path stuck  slot={slot}  type={rec[_OFF_TYPE]}  "
+            f"xy={_i8(rec, _OFF_X)},{_i8(rec, _OFF_Y)}  no road neighbour"
+        )
         return
     walker_set_dest(rec, facing)
     rec[_OFF_WANT_MOVE] = 1
@@ -513,7 +876,7 @@ def _roam_then_pick(
     rec = _roam_step_done(pool, tiles, slot, or_bits=or_bits, or_r=or_r)
     if rec is None:
         return
-    _pick_or_die(rec, tiles, clock, wait_on_stuck=wait_on_stuck)
+    _pick_or_die(rec, tiles, clock, wait_on_stuck=wait_on_stuck, slot=slot)
     _put(pool, slot, rec)
 
 
@@ -628,7 +991,7 @@ def _state_dispatch(
                 rec[_OFF_STATE] = 6
                 _put(pool, slot, rec)
                 return
-        _pick_or_die(rec, tiles, clock, wait_on_stuck=0x28)
+        _pick_or_die(rec, tiles, clock, wait_on_stuck=0x28, slot=slot)
         _put(pool, slot, rec)
         return
     if state == 8:
@@ -645,7 +1008,7 @@ def _state_dispatch(
                 rec[_OFF_STATE] = 6
                 _put(pool, slot, rec)
                 return
-        _pick_or_die(rec, tiles, clock, wait_on_stuck=0x28)
+        _pick_or_die(rec, tiles, clock, wait_on_stuck=0x28, slot=slot)
         _put(pool, slot, rec)
         return
     if state == 9:
@@ -743,9 +1106,13 @@ def _write_back(
         if walkers is not blob:
             walkers[:] = blob
         return
-    for i, walker in enumerate(walkers):
-        off = walker.slot * WALKER_STRIDE
-        walkers[i] = Walker.unpack(bytes(blob[off : off + WALKER_STRIDE]), slot=walker.slot)
+    # Rebuild so newly spawned slots persist (new-game walkers=[]).
+    walkers.clear()
+    for slot in range(WALKER_COUNT):
+        off = slot * WALKER_STRIDE
+        rec = blob[off : off + WALKER_STRIDE]
+        if rec[_OFF_OCCUPIED]:
+            walkers.append(Walker.unpack(bytes(rec), slot=slot))
 
 
 def walkers_tick(
@@ -804,4 +1171,119 @@ def walkers_tick(
             animated += 1
 
     _write_back(walkers, pool)
+    if after_live and (stepped or freed):
+        _path_log(
+            f"walkers_tick  live={after_live}  moved={stepped}  "
+            f"frames={animated}  freed={freed}"
+        )
     return TickResult(live=after_live, stepped=stepped, animated=animated, freed=freed)
+
+
+def selftest() -> list[str]:
+    """Synthetic road / aqueduct / leftover-pad cases. No display."""
+    lines: list[str] = []
+    tiles = bytearray(MAP_W * MAP_H * TILE_BYTES)
+    road = _tile_off(10, 10)
+    tiles[road] = 0x52
+    tiles[road + _TILE_FLAGS] = FLAG_PAD
+    aq = _tile_off(11, 10)
+    tiles[aq] = 0xD6
+    tiles[aq + _TILE_FLAGS] = FLAG_PAD | 0x40
+    grass = _tile_off(12, 10)
+    tiles[grass + _TILE_FLAGS] = FLAG_PAD
+    bridge = _tile_off(13, 10)
+    tiles[bridge] = 0x4E
+    tiles[bridge + _TILE_FLAGS] = FLAG_RIVER | FLAG_PAD
+    empty = _tile_off(14, 10)
+
+    ok = (
+        walker_dest_ok(tiles, road) == 1
+        and walker_dest_ok(tiles, aq) == 0
+        and walker_dest_ok(tiles, grass) == 0
+        and walker_dest_ok(tiles, bridge) == 1
+        and walker_dest_ok(tiles, empty) == 2
+    )
+    lines.append(
+        f"dest_ok road/bridge vs aqueduct/grass-pad: {'ok' if ok else 'FAIL'} "
+        f"r={walker_dest_ok(tiles, road)} aq={walker_dest_ok(tiles, aq)} "
+        f"g={walker_dest_ok(tiles, grass)} br={walker_dest_ok(tiles, bridge)}"
+    )
+
+    reset_clock()
+    pool = bytearray(WALKER_BYTES)
+    tiles = bytearray(MAP_W * MAP_H * TILE_BYTES)
+    poff = _tile_off(20, 20)
+    tiles[poff] = 0xE3
+    tiles[poff + 1] = 0x01
+    # Isolated aqueduct T next to prefecture — must not spawn there.
+    aoff = _tile_off(20, 19)
+    tiles[aoff] = 0xD6
+    tiles[aoff + 1] = FLAG_PAD | 0x40
+    nsp = emit_walkers_row(tiles, pool, 20, 1, population=4)
+    live = sum(1 for s in range(WALKER_COUNT) if pool[s * WALKER_STRIDE + _OFF_OCCUPIED])
+    ok = nsp == 0 and live == 0
+    lines.append(f"emit skips aqueduct pad: {'ok' if ok else 'FAIL'} n={nsp} live={live}")
+
+    reset_clock()
+    pool = bytearray(WALKER_BYTES)
+    tiles = bytearray(MAP_W * MAP_H * TILE_BYTES)
+    tiles[_tile_off(20, 20)] = 0xE3
+    tiles[_tile_off(20, 20) + 1] = 0x01
+    for x, y in ((20, 19), (21, 19), (22, 19), (22, 20), (22, 21), (21, 21), (20, 21), (20, 20)):
+        if x == 20 and y == 20:
+            continue
+        off = _tile_off(x, y)
+        tiles[off] = 0x52
+        tiles[off + 1] = FLAG_PAD
+    nsp = emit_walkers_row(tiles, pool, 20, 1, population=4)
+    clock = WalkerClock()
+    moved = 0
+    on_road = True
+    last_xy = None
+    seen: set[tuple[int, int]] = set()
+    for _ in range(90):
+        result = walkers_tick(tiles, pool, clock=clock)
+        moved += result.stepped
+        for slot in range(WALKER_COUNT):
+            rec = _rec(pool, slot)
+            if rec[_OFF_OCCUPIED] == 0:
+                continue
+            x, y = _i8(rec, _OFF_X), _i8(rec, _OFF_Y)
+            last_xy = (x, y)
+            seen.add((x, y))
+            tid = tiles[_tile_off(x, y)]
+            if not (ID_ROAD_LO <= tid <= ID_ROAD_HI):
+                on_road = False
+    ok = nsp >= 1 and moved >= 2 and len(seen) >= 2 and on_road and last_xy is not None
+    lines.append(
+        f"roam patrols 0x52-0x5C: {'ok' if ok else 'FAIL'} "
+        f"spawn={nsp} moved={moved} xy={last_xy} on_road={on_road}"
+    )
+
+    rec = bytearray(WALKER_STRIDE)
+    rec[_OFF_FACING] = 0
+    _set_i8(rec, _OFF_X, 10)
+    _set_i8(rec, _OFF_Y, 10)
+    walker_set_dest(rec, 2)
+    ok = rec[_OFF_FACING] == 2 and _i8(rec, _OFF_DEST_X) == 11 and _i8(rec, _OFF_DEST_Y) == 10
+    lines.append(f"set_dest faces dest: {'ok' if ok else 'FAIL'} facing={rec[_OFF_FACING]}")
+
+    from app.walkers import Walker, walker_draw_xy
+
+    raw = bytearray(WALKER_STRIDE)
+    raw[_OFF_OCCUPIED] = 1
+    raw[_OFF_TYPE] = 1
+    raw[_OFF_FACING] = 2
+    _set_i8(raw, _OFF_X, 10)
+    _set_i8(raw, _OFF_Y, 10)
+    raw[_OFF_WALK_FRAME] = 8
+    mid = Walker.unpack(bytes(raw), slot=1)
+    mx, my = walker_draw_xy(mid)
+    ok = abs(mx - 9.5) < 0.01 and abs(my - 10.0) < 0.01
+    lines.append(f"walk_frame lerp mid-step: {'ok' if ok else 'FAIL'} xy={mx},{my}")
+    raw[_OFF_WALK_FRAME] = 0
+    idle = Walker.unpack(bytes(raw), slot=1)
+    ix, iy = walker_draw_xy(idle)
+    ok = ix == 10.0 and iy == 10.0
+    lines.append(f"walk_frame 0 sits on tile: {'ok' if ok else 'FAIL'} xy={ix},{iy}")
+    return lines

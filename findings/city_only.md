@@ -43,7 +43,7 @@ python -m app --new --city-only --map-preview sav_preview/city_only.png --no-aud
 
 ### O que se vê
 
-A janela **abre já no mapa iso** (o mesmo `render_iso` / tecla **3** do load SAV — não o título `backgrnd.pl8`). Relva aleatória + um rio: **`+0` locked** (o EXE não cicla 0x1E–0x21); só o azul **interior** muda (`WATER_FRAME_MS` = 250 ms). Margens iguais em todos os frames. **sem** casas, walkers, HISTORY. HUD: `City Only · Normal · treasury 12000 · 300 BC January`. Deixa a janela aberta — o rio cintila sem Space.
+A janela **abre já no mapa iso** (o mesmo `render_iso` / tecla **3** do load SAV — não o título `backgrnd.pl8`). Relva aleatória + um rio: **`+0` locked** (o EXE não cicla 0x1E–0x21); só o azul **interior** muda (`WATER_FRAME_MS` = 250 ms). Margens iguais em todos os frames. **sem** casas, walkers, HISTORY. HUD: `City Only · Normal · treasury 12000 · 300 BC January`. Sidebar direita = `INT_CITY` (Housing / Roads / Clear / Query). Minimapa 80×80 escalado ao poço **acima** da paleta (`478,48,162,160`); clique centra a câmara. Deixa a janela aberta — o rio cintila sem Space.
 
 Load de `.SAV` **não mudou**: ainda começa no título; **3** entra no mapa.
 
@@ -55,14 +55,23 @@ Load de `.SAV` **não mudou**: ainda começa no título; **3** entra no mapa.
 | **1** | título `backgrnd.pl8` (sai do mapa) |
 | **2** | 1º tile `CITYFIXT` (debug; só fora do mapa) |
 | **3** | voltar ao mapa iso |
-| **Space** / **T** | 1 pulso (`city_sim_phase` depois `walkers_tick`) — relva não evolui |
+| **Space** / **T** | 1 pulso (`city_sim_phase` depois `walkers_tick`) — um slot; a data só muda no wrap |
+| **M** | fecha o ciclo: filas de casas que restam, **salta stubs** `0x51–0xD6`, um `calendar_advance` → **300 BC February** (depois March…) |
+| play / faster / pause | chrome INT_CITY + menu **Speed**. Default **unpaused**. Play ~200 ms/pulso; Faster = 4×. Stubs saltam — January→February sozinho |
 | **E** | evolve80 (host; sem casas = nop) |
-| setas / arrastar | pan |
+| setas | pan |
 | **+** **−** / **]** **[** / **Z** / roda | zoom 0/1/2 |
 | **Home** | recenter |
 | **A** | 2 s `A01.RAW` (fora do mapa) |
+| clique na **sidebar direita** | paleta: Housing (Tent), Roads, Clear, Query; zoom ± |
+| clique no **minimapa** (poço `(478,48,162,160)`) | centra a câmara nesse tile; **não** rouba a paleta |
+| clique no **mapa** | 1 tile (recusa rio); Query só lê |
+| **arrastar** com Housing / Clear | rectângulo; preview; carimba **só ao soltar**. Tendas: recusa o rect inteiro se o tesouro não chega para todas (6 cada) |
+| **arrastar** com Roads | linha **recta** (eixo dominante, sem L); ponte no rio recto; salta curvas; carimba ao soltar |
+| **arrastar** sem ferramenta / Query | pan (como antes) |
+| **botão direito** | aborta o arrasto sem carimbar + cancela a ferramenta (Esc ainda sai) |
 
-Não há placement, Forum, paleta, nem tecla cidade↔província.
+Tesouro no HUD. Tent custa **6**. Arrasto de Housing é **tudo ou nada**: se não chega para todas as tendas novas, não coloca nenhuma. Estrada de cidade sem preço pinado (não debita). Forum / flyouts Water…Amenities ainda stub. Detalhe: `findings/city_chrome.md`.
 
 ---
 
@@ -107,10 +116,10 @@ Capstone em `0x65809` / `0x65AFA` / `0x658D1` / `0x28003`:
 
 Cada fatia: **objetivo**, **depende de**, **não é Career**. Não avançar Career / REGIONS / actors26 até City Only estar jogável.
 
-### 2. Placement — estrada, tenda `0x82`, clear, débito do tesouro
+### 2. Placement — estrada, tenda `0x82`, clear, débito do tesouro — **feito (v1)**
 
 - **Objetivo:** o jogador clica (ou tecla de debug) e **põe** estrada e uma tenda `0x82` no mapa gerado; **clear** remove; tesouro desce pelo custo C2MODEL (família `[102:]` / FAQ). Sem isto o Space só faz tick de relva.
-- **Depende de:** marco 1 (mapa + tesouro vivo). Precisa dos ids de tile e do débito (A/B Reservoir = 51 é *outro* edifício — não inventar preços).
+- **Host v1:** paleta `INT_CITY` + clique. Tent **6** (A/C, não C2MODEL). Road **sem débito** (custo cidade não pinado). Ponte `0x4E–0x51` no rio recto; recusa curva. Clear: prédio→`0x05`, rubble→`0x1C`. `findings/city_chrome.md`.
 - **Não Career:** sem estrada provincial, sem `REGIONS`, sem forte / farm de província.
 
 ### 3. `+17` flood, `+15` recompute, água, imigrante / occupy
@@ -131,10 +140,10 @@ Cada fatia: **objetivo**, **depende de**, **não é Career**. Não avançar Care
 - **Depende de:** (4) números reais no tesouro / ratings. `forum.md` / `forum_strings.md`.
 - **Não Career:** sem PERSONAL de promoção, sem EMPIRE MAP, sem pick `[47]`, sem Need `[790:990]`. Oracle ids &lt; 9 em city-only → skip 24.
 
-### 6. Paleta 3 filas + overlay
+### 6. Paleta 3 filas + overlay — **chrome v1 feito; flyouts / overlay-filter não**
 
 - **Objetivo:** chrome de construção (`build_palette.md`) — 3 filas de edifícios + overlay de overlay-filter (chunk 1 / fase `0xD3`). O clique de (2) passa a escolher da paleta, não de um atalho de debug.
-- **Depende de:** (2) o store de placement; (5) ajuda a não misturar Forum com paleta de cidade.
+- **Host v1:** `INT_CITY` sidebar + Housing/Roads/Clear/Query. Falta cada flyout e o overlay `0x98B34`. `findings/city_chrome.md`.
 - **Não Career:** paleta **provincial** (estrada 20, forte, farm…) espera Career.
 
 ### 7. Win / lose a partir do EXE (não inventar)
@@ -153,7 +162,7 @@ Cada fatia: **objetivo**, **depende de**, **não é Career**. Não avançar Care
 
 ## Honestidade
 
-- Marco 1 **sem** placement = viewer de cidade fresca. Space não “joga”.
+- Placement v1 (Tent / Road / Clear) já carimba; flyouts e Forum continuam stub. Space ainda não “vive” a casa (`+17` / occupy).
 - `CityMap()` a zeros **não** é New Game.
 - Ano −300 **não** prova o modo; 406=1 + pid=0 sim.
 - Skill default do **host** é Normal (2), não o INF Novice (0) — o utilizador pediu default 2.

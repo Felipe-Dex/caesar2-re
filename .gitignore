@@ -69,6 +69,9 @@ tools/ghidramcp/
 # App: local install path (Julius-style — do not commit the user's folder)
 app/config.local.json
 
+# Host city sim play log (app/sim_log.py)
+logs/
+
 # App-generated previews (copyrighted decode output — do not publish)
 app/**/*.png
 app/**/*.PNG
