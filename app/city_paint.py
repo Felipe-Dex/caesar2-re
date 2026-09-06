@@ -24,6 +24,20 @@ HOUSE_OCCUPANCY: tuple[int, ...] = (
     100, 120, 150, 200,
     300, 500,
 )
+# C2MODEL [247:279] / EXE 0x969E7 — tax wealth. 0x4498D adds only if +10 & 0x0C.
+HOUSE_TAX_WEALTH: tuple[int, ...] = (
+    1, 2, 3, 4, 5, 6,
+    8, 10, 12, 14, 17, 20,
+    24, 28, 32, 37, 42, 47, 52, 58,
+    64, 70, 77, 84, 92, 100,
+    400, 420, 450, 500,
+    1200, 1400,
+)
+MARKET_TAX_BITS = 0x0C
+ID_FACTORY = 0xFA
+# 0x44dbf: factory stock (+9 hi-nibble) * 70 → [0x102934], if +10 & 0x0C.
+FACTORY_WEALTH_UNIT = 0x46
+FACTORY_PAD_MASK = 0x27
 
 # 0x962FD / 0x96301 — housing (bonus, radius) by grade.
 _HOUSE_LV: tuple[tuple[int, int], ...] = (
@@ -79,6 +93,64 @@ def recount_population(tiles: bytearray) -> int:
     return pop
 
 
+def housing_tax_wealth(tiles: bytearray) -> int:
+    """0x4498D: C2MODEL tax wealth on housing origins with market (+10 & 0x0C)."""
+    wealth = 0
+    if len(tiles) < MAP_W * MAP_H * TILE_STRIDE:
+        return 0
+    for y in range(MAP_H):
+        for x in range(MAP_W):
+            off = _off(x, y)
+            if tiles[off + 5] & 0xF:
+                continue
+            hid = tiles[off]
+            if not (ID_HOUSING_LO <= hid <= ID_HOUSING_HI):
+                continue
+            if not (tiles[off + 10] & MARKET_TAX_BITS):
+                continue
+            wealth += HOUSE_TAX_WEALTH[hid - ID_HOUSING_LO]
+    return wealth
+
+
+def industry_tax_wealth(tiles: bytearray) -> int:
+    """0x44d7b: 0xFA cells with +1&0x27 and market (+10&0x0C); stock×70.
+
+    Goods nibble is +19 lo; it only indexes the per-good counter, not GDP.
+    No stock / no market → 0 (do not invent output).
+    """
+    wealth = 0
+    if len(tiles) < MAP_W * MAP_H * TILE_STRIDE:
+        return 0
+    for y in range(MAP_H):
+        for x in range(MAP_W):
+            off = _off(x, y)
+            if tiles[off] != ID_FACTORY:
+                continue
+            if not (tiles[off + 1] & FACTORY_PAD_MASK):
+                continue
+            if not (tiles[off + 10] & MARKET_TAX_BITS):
+                continue
+            stock = (tiles[off + 9] & 0xF0) >> 4
+            wealth += stock * FACTORY_WEALTH_UNIT
+    return wealth
+
+
+def count_taxed_factories(tiles: bytearray) -> int:
+    """0xFA origins used as the industry av-bill denominator stand-in."""
+    n = 0
+    if len(tiles) < MAP_W * MAP_H * TILE_STRIDE:
+        return 0
+    for y in range(MAP_H):
+        for x in range(MAP_W):
+            off = _off(x, y)
+            if tiles[off] != ID_FACTORY:
+                continue
+            if tiles[off + 5] & 0xF:
+                continue
+            n += 1
+    return n
+
+
 def add_land_value(
     tiles: bytearray,
     x: int,
@@ -88,11 +160,14 @@ def add_land_value(
     bonus: int,
     *,
     skip_own: bool = False,
+    skip_housing: bool = False,
 ) -> None:
     """FUN_0006da0e — add signed bonus over (size+2r) square, clamp −64…+64.
 
     Housing skips its own footprint so a tent's −2 does not cancel fountain/garden
-    splash on that cell (C2MODEL radiates onto neighbors).
+    splash on that cell (C2MODEL radiates onto neighbors). It also skips other
+    housing: a dense hut grid's −2 must not pin watered cells at the +15=2
+    hut stay band (0x83 stay 0…3).
     """
     if size <= 0 or bonus == 0:
         return
@@ -106,7 +181,12 @@ def add_land_value(
                 continue
             if skip_own and x <= tx < x + size and y <= ty < y + size:
                 continue
-            off = _off(tx, ty) + 15
+            dest = _off(tx, ty)
+            if skip_housing:
+                hid = tiles[dest]
+                if ID_HOUSING_LO <= hid <= ID_HOUSING_HI:
+                    continue
+            off = dest + 15
             cur = i8(tiles[off]) + bonus
             if cur > 64:
                 cur = 64
@@ -327,6 +407,7 @@ def paint_land_value(tiles: bytearray, y0: int, n: int) -> int:
                         rad,
                         bonus,
                         skip_own=True,
+                        skip_housing=True,
                     )
                     painted += 1
                 elif ID_FOUNTAIN_LO <= hid <= ID_FOUNTAIN_HI:
@@ -352,95 +433,127 @@ def paint_land_value(tiles: bytearray, y0: int, n: int) -> int:
 
 def _housing_service_cap(
     tiles: bytearray, x: int, y: int, size: int, population: int
-) -> int:
+) -> tuple[int, str]:
     """FUN_00040d08 housing ladder — first failing gate writes the even cap."""
     if not _block_and(tiles, x, y, size, 13, 0x02) and not _block_and(
         tiles, x, y, size, 13, 0x01
     ):
-        return 2
+        return 2, "no-water +13&0x01|0x02"
     if not _block_max(tiles, x, y, size, 10, 0x0C):
-        return 6
+        return 6, "no-food +10&0x0C (market trader)"
     if _block_and(tiles, x, y, size, 13, 0x80):
-        return 10
+        return 10, "warehouse +13&0x80"
     if not _block_max(tiles, x, y, size, 10, 0xC0):
-        return 12
+        return 12, "no-goods +10&0xC0 (market)"
     if not _block_and(tiles, x, y, size, 13, 0x01):
-        return 14
+        return 14, "well-only; need fountain +13&0x01"
     if _block_and(tiles, x, y, size, 14, 0x10):
-        return 16
+        return 16, "bad +14&0x10"
     if not _block_and(tiles, x, y, size, 13, 0x08):
-        return 18
+        return 18, "no-baths +13&0x08"
     ch0 = _block_max(tiles, x, y, size, 12, 0x03)
     ch1 = (_block_max(tiles, x, y, size, 12, 0x0C) >> 2) & 3
     ch2 = (_block_max(tiles, x, y, size, 12, 0x30) >> 4) & 3
     ent = ch0 + ch1 + ch2
     if ent == 0:
-        return 20
+        return 20, "no-entertainment +12 (City Only skip 0x66-0x6D)"
     if _block_and(tiles, x, y, size, 14, 0x01):
-        return 24
+        return 24, "need more entertainment / security"
     road = i8(tiles[_off(x, y) + 17]) > 15
     sec = 1 if _block_max(tiles, x, y, size, 10, 0x30) else 0
     if road:
         sec += 1
     if sec == 0:
-        return 24
+        return 24, "need more entertainment / security"
     if _block_and(tiles, x, y, size, 14, 0x20):
-        return 26
+        return 26, "need more entertainment / security"
     if ent <= 1 or _block_and(tiles, x, y, size, 14, 0x08):
-        return 26
+        return 26, "need more entertainment / security"
     if ent <= 2:
-        return 28
+        return 28, "need more entertainment"
     if _block_and(tiles, x, y, size, 14, 0x04):
-        return 30
+        return 30, "need more entertainment / pop"
     if population < 20:
-        return 30
+        return 30, "need pop>=20"
     if ent <= 3:
-        return 32
+        return 32, "need more entertainment"
     if not _block_and(tiles, x, y, size, 13, 0x10):
-        return 34
+        return 34, "need +13&0x10"
     if _block_and(tiles, x, y, size, 14, 0x02):
-        return 34
+        return 34, "need more security"
     if population < 40:
-        return 36
+        return 36, "need pop>=40"
     if ent <= 4:
-        return 38
+        return 38, "need more entertainment"
     if _block_and(tiles, x, y, size, 13, 0x40):
-        return 40
+        return 40, "need +13&0x40"
     if sec <= 1:
-        return 42
+        return 42, "need more security"
     if population < 60:
-        return 44
+        return 44, "need pop>=60"
     if ent <= 5:
-        return 44
+        return 44, "need more entertainment"
     if not _block_and(tiles, x, y, size, 13, 0x20):
-        return 46
+        return 46, "need +13&0x20"
     if population < 20:
-        return 46
+        return 46, "need pop>=20"
     if ent <= 6:
-        return 48
+        return 48, "need more entertainment"
     if population < 40:
-        return 50
+        return 50, "need pop>=40"
     if population < 80:
-        return 52
+        return 52, "need pop>=80"
     if population < 60:
-        return 54
+        return 54, "need pop>=60"
     if ent <= 7:
-        return 56
+        return 56, "need more entertainment"
     if population < 100:
-        return 58
+        return 58, "need pop>=100"
     if population < 80:
-        return 58
+        return 58, "need pop>=80"
     if ent <= 8:
-        return 60
+        return 60, "need more entertainment"
     if population < 100:
-        return 62
-    return 64
+        return 62, "need pop>=100"
+    return 64, "palace-cap"
+
+
+def housing_cap_detail(
+    tiles: bytearray, x: int, y: int, *, population: int = 0
+) -> tuple[int, str]:
+    """Service cap and first failing gate for a housing origin."""
+    if not _in_map(x, y):
+        return 0, "off-map"
+    off = _off(x, y)
+    hid = tiles[off]
+    if hid < ID_HOUSING_LO or hid > ID_HOUSING_HI:
+        return 0, "not-house"
+    size = HOUSE_SIZE[hid - ID_HOUSING_LO]
+    return _housing_service_cap(tiles, x, y, size, population)
+
+
+def service_target_lv(acc: int, cap: int) -> int:
+    """Evolve +15 from 40695 acc and the 40d08 service cap.
+
+    EXE 0x41157 only clips down (if cap < acc: write cap). A watered City Only
+    block then sits at acc=2 (fountain +2 vs hut stay 0…3) and never leaves
+    the first hut. Host writes the service target through the house/insula
+    rung (cap ≤ 20) so each month can step toward water/food/entertainment.
+    Above 20, gardens/fountain acc still raise +15 and only clip to cap.
+    """
+    if cap <= 20:
+        return cap
+    if acc < 20:
+        acc = 20
+    if acc > cap:
+        return cap
+    return acc
 
 
 def cap_housing_plus15(
     tiles: bytearray, y0: int, n: int, *, population: int = 0
 ) -> int:
-    """FUN_00040d08 — min(accumulated +15, service cap) on housing origins."""
+    """FUN_00040d08 — write service-allowed +15 on housing origins."""
     written = 0
     for y in range(y0, min(MAP_H, y0 + n)):
         for x in range(MAP_W):
@@ -452,16 +565,11 @@ def cap_housing_plus15(
                 continue
             grade = hid - ID_HOUSING_LO
             size = HOUSE_SIZE[grade]
-            cap = _housing_service_cap(tiles, x, y, size, population)
+            cap, _gate = _housing_service_cap(tiles, x, y, size, population)
             cur = i8(tiles[off + 15])
-            if cap < cur:
-                cur = cap
-                tiles[off + 15] = cap & 0xFF
-                written += 1
-            water = _block_and(tiles, x, y, size, 13, 0x03)
-            # Water + service cap ≥2: first hut rung (directory become=2).
-            if water and cur < 2 and cap >= 2:
-                tiles[off + 15] = 2
+            new = service_target_lv(cur, cap)
+            if new != cur:
+                tiles[off + 15] = new & 0xFF
                 written += 1
     return written
 

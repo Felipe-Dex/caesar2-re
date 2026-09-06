@@ -21,6 +21,7 @@ Hook — sibling owns city_map.render_iso / __main__:
 from __future__ import annotations
 
 import struct
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -75,6 +76,105 @@ RO2_BATTLE_PL8: tuple[str, ...] = (
 
 STATE_FREE = 2
 
+# EXE walker_anim_* : walk_frame 0…15. Timer tables 0x9673E (road, all 2)
+# and 0x96735 (pad, all 1) → 32 / 16 sim ticks per tile. Display is 50 ms
+# (sim_tick_due unit). Play pulses every 200 ms @ speed 70, so a walk_frame
+# lerp teleports; the slide is driven from real time instead.
+DISPLAY_TICK_MS = 50
+WALK_FRAMES_PAD = 16
+WALK_FRAMES_ROAD = 32
+WALK_DISPLAY_FRAMES = WALK_FRAMES_ROAD
+WALK_MS_PER_TILE = WALK_FRAMES_ROAD * DISPLAY_TICK_MS  # 1600
+
+
+@dataclass
+class _Slide:
+    x0: float
+    y0: float
+    x1: float
+    y1: float
+    facing: int
+    start_ms: float
+    duration_ms: float
+
+
+_SLIDES: dict[int, _Slide] = {}
+# 0.0+ = virtual clock (selftest). None = time.monotonic() for Play.
+_CLOCK_MS: float | None = 0.0
+
+
+def _now_ms() -> float:
+    if _CLOCK_MS is not None:
+        return _CLOCK_MS
+    return time.monotonic() * 1000.0
+
+
+def use_realtime_slides() -> None:
+    """Play mode: interpolate from wall-clock ms so skipped frames still crawl."""
+    global _CLOCK_MS
+    _CLOCK_MS = None
+
+
+def clear_walker_slides() -> None:
+    global _CLOCK_MS
+    _SLIDES.clear()
+    _CLOCK_MS = 0.0
+
+
+def drop_walker_slide(slot: int) -> None:
+    _SLIDES.pop(slot, None)
+
+
+def _slide_t(slide: _Slide) -> float:
+    dur = slide.duration_ms if slide.duration_ms > 0 else WALK_MS_PER_TILE
+    return max(0.0, min(1.0, (_now_ms() - slide.start_ms) / dur))
+
+
+def note_walker_slide(
+    slot: int, x0: float, y0: float, x1: float, y1: float, facing: int
+) -> None:
+    """Slide previous diamond centre → next over WALK_MS_PER_TILE.
+
+    Mid-slide steps continue from the current pixel. Same-cell notes
+    (spawn / warp) are ignored so we never snap t to 1 in one frame.
+    """
+    x0, y0, x1, y1 = float(x0), float(y0), float(x1), float(y1)
+    old = _SLIDES.get(slot)
+    if old is not None:
+        t = _slide_t(old)
+        if t < 1.0:
+            x0 = old.x0 + (old.x1 - old.x0) * t
+            y0 = old.y0 + (old.y1 - old.y0) * t
+    if abs(x1 - x0) < 1e-6 and abs(y1 - y0) < 1e-6:
+        return
+    _SLIDES[slot] = _Slide(
+        x0, y0, x1, y1, facing, _now_ms(), float(WALK_MS_PER_TILE)
+    )
+
+
+def advance_walker_slides(steps: float = 1.0) -> bool:
+    """Advance the virtual clock, or report live wall-clock slides."""
+    global _CLOCK_MS
+    if _CLOCK_MS is not None:
+        _CLOCK_MS += steps * DISPLAY_TICK_MS
+    return any(_slide_t(slide) < 1.0 for slide in _SLIDES.values())
+
+
+def slide_walk_frame(slot: int, walk_frame: int) -> int:
+    """0–15 walk_frame stand-in while a slide is in progress (not idle 0)."""
+    slide = _SLIDES.get(slot)
+    if slide is None:
+        return walk_frame
+    t = _slide_t(slide)
+    if t >= 1.0:
+        return walk_frame
+    frame = int(t * 16.0)
+    if frame < 1:
+        frame = 1
+    if frame > 15:
+        frame = 15
+    return frame
+
 
 @dataclass(frozen=True)
 class Walker:
@@ -95,10 +195,14 @@ class Walker:
     wait_timer: int
     state: int
     walk_frame: int
+    anim_timer: int
     on_road: int
     life_phase: int
+    score_a: int
+    score_b: int
     home_off: int
     home_walker: int
+    name_id: int
     sprite_id: int
     bob: int
     raw: bytes = field(repr=False, compare=False)
@@ -126,10 +230,14 @@ class Walker:
             wait_timer=raw[0xF],
             state=raw[0x10],
             walk_frame=raw[0x1F],
+            anim_timer=raw[0x20],
             on_road=raw[0x23],
             life_phase=raw[0x24],
+            score_a=raw[0x26],
+            score_b=raw[0x27],
             home_off=home_off,
             home_walker=raw[0x2C],
+            name_id=raw[0x32],
             sprite_id=sprite_id,
             bob=raw[0x36],
             raw=bytes(raw),
@@ -139,13 +247,15 @@ class Walker:
     def live(self) -> bool:
         return self.occupied != 0 and TYPE_MIN <= self.type <= TYPE_MAX
 
-    def ltlmen_index(self, *, camera: int = 0) -> int:
+    def ltlmen_index(self, *, camera: int = 0, walk_frame: int | None = None) -> int:
         """LTLMEN sprite. Prefer the saved id from walker_set_sprite."""
-        if 0 <= self.sprite_id < 220:
+        if walk_frame is None and 0 <= self.sprite_id < 220:
             return self.sprite_id
         base = TYPE_LTLMEN_BASE.get(self.type, 0)
-        rel = (self.facing - camera) % 8
-        frame = self.walk_frame & 3
+        slide = _SLIDES.get(self.slot)
+        facing = slide.facing if slide is not None and _slide_t(slide) < 1.0 else self.facing
+        rel = (facing - camera) % 8
+        frame = (self.walk_frame if walk_frame is None else walk_frame) & 3
         extra = 0 if frame == 0 else (2 if frame == 2 else 1)
         return base + rel * 3 + extra
 
@@ -224,21 +334,68 @@ def tile_iso_xy(
     return int(round(sx)), int(round(sy))
 
 
-def walker_draw_xy(walker: Walker) -> tuple[float, float]:
-    """Tile coords for blit. walk_frame 1–15 slides from the previous pad.
+def walker_draw_ltlmen_index(walker: Walker, *, camera: int = 0) -> int:
+    """Walk-cycle index while sliding; saved sprite_id when standing."""
+    slide = _SLIDES.get(walker.slot)
+    if slide is not None and _slide_t(slide) < 1.0:
+        return walker.ltlmen_index(
+            camera=camera, walk_frame=slide_walk_frame(walker.slot, walker.walk_frame)
+        )
+    return walker.ltlmen_index(camera=camera)
 
-    ``walker_step`` commits x/y first, then ``walk_frame`` runs 1…15 on the
-    new tile. Without the lerp they teleport and moonwalk in place.
+
+def walker_draw_xy(walker: Walker) -> tuple[float, float]:
+    """Tile coords for blit. Time-based slide first; else walk_frame 1–15 lerp.
+
+    ``walker_step`` commits x/y first. The slide holds the previous diamond
+    centre → next centre for WALK_MS_PER_TILE so Play (50 ms display /
+    200 ms sim) still crawls a few pixels every blit. Fallback lerp uses
+    facing + anim_timer so Space/T and SAV loads do not snap.
     """
+    slide = _SLIDES.get(walker.slot)
+    if slide is not None:
+        t = _slide_t(slide)
+        return slide.x0 + (slide.x1 - slide.x0) * t, slide.y0 + (
+            slide.y1 - slide.y0
+        ) * t
     x, y = float(walker.x), float(walker.y)
     frame = walker.walk_frame
     facing = walker.facing
     if 1 <= frame <= 15 and 0 <= facing <= 7:
         dx, dy = _FACING_XY[facing]
-        t = frame / 16.0
+        speed = 2 if walker.on_road == 0 else 1
+        sub = walker.anim_timer / (speed + 1)
+        t = (frame + sub) / 16.0
         x -= dx * (1.0 - t)
         y -= dy * (1.0 - t)
     return x, y
+
+
+def find_walker_at(
+    pool: Sequence[Walker],
+    x: int,
+    y: int,
+    *,
+    tiles: bytes | bytearray | None = None,
+) -> Walker | None:
+    """Query pick: tile +7/+8, then closest live sprite (lerp may sit between)."""
+    by_slot = {w.slot: w for w in pool if w.live}
+    if tiles is not None and 0 <= x < MAP_W and 0 <= y < MAP_H:
+        off = (y * MAP_W + x) * 20
+        if off + 9 <= len(tiles):
+            for idx in (tiles[off + 7], tiles[off + 8]):
+                hit = by_slot.get(idx)
+                if hit is not None and hit.state != STATE_FREE:
+                    return hit
+    best: Walker | None = None
+    best_d = 1.35
+    for walker in drawable_walkers(pool):
+        fx, fy = walker_draw_xy(walker)
+        dist = max(abs(fx - x), abs(fy - y))
+        if dist < best_d:
+            best_d = dist
+            best = walker
+    return best
 
 
 def walker_iso_xy(
@@ -298,7 +455,7 @@ def overlay_walkers(
 
     out = img.convert("RGBA")
     for walker in drawable_walkers(walkers):
-        idx = walker.ltlmen_index(camera=camera)
+        idx = walker_draw_ltlmen_index(walker, camera=camera)
         if not (0 <= idx < n):
             continue
         spr = sprites[idx]

@@ -26,6 +26,53 @@ from app.city_chrome import (
     chrome_ox,
     speed_action,
 )
+from app.forum import (
+    KIND_CHROME,
+    ForumState,
+    blit_forum,
+    blit_pause_square,
+    click_forum,
+    is_forum_building,
+    open_forum,
+)
+from app.menus import (
+    FILE_LOAD,
+    FILE_NEW,
+    FILE_QUIT,
+    FILE_SAVE,
+    HELP_TOPIC_GAME,
+    HELP_TOPIC_HINTS,
+    HELP_TOPIC_HISTORY,
+    HELP_TOPIC_ICONS,
+    HLP_ABOUT,
+    HLP_GAME,
+    HLP_HINTS,
+    HLP_HISTORY,
+    HLP_ICONS,
+    HostOptions,
+    MenuReport,
+    OPT_ANIM,
+    OPT_CENSUS,
+    OPT_MUSIC,
+    OPT_SOUND,
+    OPT_YEAR,
+    SLOT_FILE,
+    SLOT_HELP,
+    SLOT_OPTIONS,
+    SLOT_SPEED,
+    SPD_GAME,
+    SPD_PAUSE,
+    SPD_SCROLL,
+    about_report,
+    blit_menu_report,
+    census_report,
+    cycle_scroll,
+    decorate_item,
+    help_topic_excerpt,
+    next_game_speed,
+    on_off,
+    report_contains,
+)
 from app.city_map import WATER_FRAME_MS, WATER_FRAMES
 from app.city_overlay import (
     OVERLAY_CANCEL,
@@ -440,7 +487,11 @@ def hud_treasury_text(ctx: BootContext) -> str:
 
 
 def top_menu_layout(
-    eng, font: ImageFont.ImageFont
+    eng,
+    font: ImageFont.ImageFont,
+    *,
+    options: HostOptions | None = None,
+    sim=None,
 ) -> list[tuple[int, str, tuple[int, int, int, int], list[tuple[int, str]]]]:
     """File / Options / Speed / Help plus packed dropdown rows (C2.ENG)."""
     x = _MENU_X0
@@ -450,7 +501,17 @@ def top_menu_layout(
         tw, _th = _text_size(font, label)
         w = max(28, tw + 10)
         items = [
-            (skip, _eng_skip(eng, slot, skip, fb).rstrip())
+            (
+                skip,
+                decorate_item(
+                    slot,
+                    skip,
+                    _eng_skip(eng, slot, skip, fb).rstrip(),
+                    eng=eng,
+                    options=options,
+                    sim=sim,
+                ),
+            )
             for skip, fb in zip(_MENU_ITEM_SKIP[slot], _MENU_ITEM_FALLBACK[slot])
         ]
         rows.append((slot, label, (x, 0, w, TOP_BAR_H), items))
@@ -542,6 +603,8 @@ def compose_city_hud(
     extra: str | None = None,
     *,
     menu_open: int | None = None,
+    options: HostOptions | None = None,
+    report: MenuReport | None = None,
 ) -> Image.Image:
     """File/Options/Speed/Help + date + Dn on the INT_CITY top bar (0x6189D)."""
     out = frame.convert("RGBA")
@@ -549,7 +612,7 @@ def compose_city_hud(
     overlay = Image.new("RGBA", (fw, fh), (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
     font = _hud_font()
-    layout = top_menu_layout(ctx.eng, font)
+    layout = top_menu_layout(ctx.eng, font, options=options, sim=ctx.sim)
     for slot, label, rect, items in layout:
         rx, ry, rw, rh = rect
         if menu_open == slot:
@@ -575,7 +638,10 @@ def compose_city_hud(
         extra_right = fw - SIDEBAR_W - 8
         draw.rectangle((6, fh - 28, extra_right, fh - 7), fill=(0, 0, 0, 170))
         draw.text((14, fh - 24), extra[:88], fill=(180, 220, 255, 255), font=font)
-    return Image.alpha_composite(out, overlay).convert("RGB")
+    hud = Image.alpha_composite(out, overlay).convert("RGB")
+    if report is not None:
+        hud = blit_menu_report(hud, report)
+    return hud
 
 
 def _hud_lines(ctx: BootContext, *, map_mode: bool = False) -> list[str]:
@@ -726,6 +792,10 @@ def show(ctx: BootContext, *, game: Path) -> None:
     overlay_id = OVERLAY_GEOGRAPHY
     overlay_flyout = False
     place_dlg: PlaceInfo | None = None
+    forum_state: ForumState | None = None
+    menu_report: MenuReport | None = None
+    options = HostOptions(sound="skip" not in (ctx.audio_status or "").lower())
+    city_skill = int(ctx.sim.skill) if getattr(ctx.sim, "city_only", 0) else 2
 
     def current_canvas() -> Image.Image | None:
         return map_cache.get(zoom)
@@ -829,7 +899,17 @@ def show(ctx: BootContext, *, game: Path) -> None:
         shown = extra
         if prev is not None:
             shown = f"{prev.message}  tesouro {ctx.sim.treasury}"
-        if map_mode:
+        if forum_state is not None:
+            frame = blit_forum((win_w, win_h), forum_state, ctx.sim, eng=ctx.eng)
+            frame = compose_city_hud(
+                frame,
+                ctx,
+                shown,
+                menu_open=menu_open,
+                options=options,
+                report=menu_report,
+            )
+        elif map_mode:
             frame = compose_frame(ctx, None, view=view, map_mode=True)
             frame = chrome.blit(
                 frame,
@@ -855,8 +935,25 @@ def show(ctx: BootContext, *, game: Path) -> None:
             )
             if place_dlg is not None:
                 frame = blit_place_dialog(frame, place_dlg)
-            frame = compose_city_hud(frame, ctx, shown, menu_open=menu_open)
+            frame = compose_city_hud(
+                frame,
+                ctx,
+                shown,
+                menu_open=menu_open,
+                options=options,
+                report=menu_report,
+            )
+            palette.sync_unlocks(ctx.sim)
             frame = palette.blit(frame, selected=tool, ox=ox)
+            if ctx.sim.paused:
+                pause_spr = chrome.frames[6] if len(chrome.frames) > 6 else None
+                frame = blit_pause_square(
+                    frame,
+                    pause_spr,
+                    label=_eng_skip(ctx.eng, 8, 2, "Game Paused"),
+                    view_w=max(1, win_w - SIDEBAR_W),
+                    view_h=max(1, win_h - TOP_BAR_H),
+                )
         else:
             frame = compose_frame(ctx, shown, view=view, map_mode=False)
         photo = ImageTk.PhotoImage(frame)
@@ -968,6 +1065,14 @@ def show(ctx: BootContext, *, game: Path) -> None:
             canvas = ensure_map(zoom)
             ctx.image = canvas
 
+    def refresh_walkers_only() -> None:
+        """Repaint people on the cached terrain — no iso rebuild."""
+        src = terrain_cache.get(zoom)
+        if src is None:
+            return
+        map_cache[zoom] = paint_walkers(src, zoom)
+        ctx.image = map_cache[zoom]
+
     def patch_water() -> bool:
         if zoom not in pl8_zooms or not river_xy:
             return False
@@ -1002,7 +1107,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
         """Host interior water cycle (250 ms). +0 / banks stay locked."""
         nonlocal water_frame, water_after
         water_after = root.after(WATER_FRAME_MS, on_water)
-        if not map_mode or not river_xy:
+        if not map_mode or forum_state is not None or not river_xy or not options.animations:
             return
         water_frame = (water_frame + 1) % WATER_FRAMES
         if patch_water():
@@ -1012,6 +1117,8 @@ def show(ctx: BootContext, *, game: Path) -> None:
 
     def sim_step() -> None:
         """Space / T — one city_sim_phase slot then walkers_tick. Camera keys unchanged."""
+        if forum_state is not None:
+            return
         from app.sim import on_sim_step
         from app.walkers import drawable_walkers
 
@@ -1031,6 +1138,8 @@ def show(ctx: BootContext, *, game: Path) -> None:
 
     def month_step() -> None:
         """M — remaining slots this cycle (paint/emit included), then month++."""
+        if forum_state is not None:
+            return
         from app.calendar import format_hud_date
         from app.sim import on_month_step
         from app.walkers import drawable_walkers
@@ -1066,45 +1175,190 @@ def show(ctx: BootContext, *, game: Path) -> None:
             return
         from app.walkers import drawable_walkers
 
+        extra = speed_action(sim)
+        if action == "speed_pause" and sim.paused:
+            extra = _eng_skip(ctx.eng, 8, 2, "Game Paused")
         blit(
-            f"{speed_action(sim)}  {sim.date_label}  "
+            f"{extra}  {sim.date_label}  "
+            f"drawn={len(drawable_walkers(ctx.walkers))}"
+        )
+
+    def _enter_forum() -> None:
+        nonlocal forum_state, place_dlg, overlay_flyout, tool, menu_report
+        place_dlg = None
+        overlay_flyout = False
+        menu_report = None
+        palette.close()
+        tool = None
+        forum_state = open_forum(ctx.sim, ctx.city.tiles, game)
+        blit(_eng_skip(ctx.eng, 28, 8, "PLEBS"))
+
+    def _leave_forum() -> None:
+        nonlocal forum_state
+        forum_state = None
+        from app.walkers import drawable_walkers
+
+        blit(map_status(len(drawable_walkers(ctx.walkers))))
+
+    def _forum_back() -> bool:
+        """Right-click / Esc: panel → chrome, chrome → city."""
+        nonlocal forum_state
+        if forum_state is None:
+            return False
+        if forum_state.kind != KIND_CHROME:
+            forum_state.kind = KIND_CHROME
+            blit(_eng_skip(ctx.eng, 28, 0, "CLEAR FORUM"))
+            return True
+        _leave_forum()
+        return True
+
+    def _menu_layout():
+        return top_menu_layout(
+            ctx.eng, _hud_font(), options=options, sim=ctx.sim
+        )
+
+    def _confirm(question: str) -> bool:
+        from tkinter import messagebox
+
+        return bool(messagebox.askyesno(root.title(), question, parent=root))
+
+    def _open_report(report: MenuReport, extra: str | None = None) -> None:
+        nonlocal menu_report, place_dlg
+        place_dlg = None
+        menu_report = report
+        blit(extra if extra is not None else report.title)
+
+    def _apply_new_city() -> None:
+        nonlocal city_skill, tool, overlay_id, overlay_flyout, place_dlg
+        nonlocal menu_report, forum_state
+        from app.new_game import start_city_assignment
+        from app.walkers import drawable_walkers
+
+        fresh = start_city_assignment(skill=city_skill, game=game)
+        ctx.city = fresh.city
+        ctx.walkers = fresh.walkers
+        ctx.sim = fresh.sim
+        ctx.start_in_map = True
+        tool = None
+        overlay_id = OVERLAY_GEOGRAPHY
+        overlay_flyout = False
+        place_dlg = None
+        menu_report = None
+        forum_state = None
+        invalidate_iso([], flush=True)
+        show_city_map(reset_cam=True)
+        blit(
+            f"{_eng_skip(ctx.eng, 0, 1, 'New Game')}  "
+            f"{fresh.skill_name}  tesouro {ctx.sim.treasury}  "
+            f"drawn={len(drawable_walkers(ctx.walkers))}"
+        )
+
+    def _apply_load() -> None:
+        nonlocal city_skill, tool, overlay_id, overlay_flyout, place_dlg
+        nonlocal menu_report, forum_state
+        from tkinter import filedialog
+
+        from app.city_map import load_chunk_sizes, load_city_from_sav
+        from app.city_sim import load_sim_from_sav
+        from app.walkers import drawable_walkers, load_walkers_from_sav
+
+        title = _eng_skip(ctx.eng, 38, 2, "Select a saved game to LOAD")
+        path = filedialog.askopenfilename(
+            parent=root,
+            title=title,
+            initialdir=str(game),
+            filetypes=[("Caesar II save", "*.sav *.SAV"), ("All", "*.*")],
+        )
+        if not path:
+            blit(_eng_skip(ctx.eng, 38, 4, "FILE ERROR -- Load Canceled"))
+            return
+        dest = Path(path)
+        try:
+            sizes = load_chunk_sizes(game)
+            city = load_city_from_sav(dest, sizes, game=game)
+            try:
+                walkers = load_walkers_from_sav(dest, sizes, game=game)
+            except (OSError, ValueError):
+                walkers = []
+            sim = load_sim_from_sav(dest, sizes, game=game)
+        except (OSError, ValueError):
+            blit(_eng_skip(ctx.eng, 38, 4, "FILE ERROR -- Load Canceled"))
+            return
+        ctx.city = city
+        ctx.walkers = walkers
+        ctx.sim = sim
+        ctx.start_in_map = True
+        if getattr(sim, "city_only", 0):
+            city_skill = int(sim.skill)
+        tool = None
+        overlay_id = OVERLAY_GEOGRAPHY
+        overlay_flyout = False
+        place_dlg = None
+        menu_report = None
+        forum_state = None
+        invalidate_iso([], flush=True)
+        show_city_map(reset_cam=True)
+        blit(
+            f"{_eng_skip(ctx.eng, 0, 2, 'Load')}  {dest.name}  "
+            f"{sim.date_label}  tesouro {sim.treasury}  "
             f"drawn={len(drawable_walkers(ctx.walkers))}"
         )
 
     def clock_step() -> None:
-        """sim_tick_due 0x3E4B9 — auto-advance when Speed is not paused."""
+        """sim_tick_due 0x3E4B9 — auto-advance when Speed is not paused.
+
+        Walker slides use wall-clock ms (1600 ms / tile = 32 display frames)
+        so Play (200 ms sim) still crawls a few pixels every 50 ms blit.
+        """
         nonlocal sim_after
         sim_after = root.after(TICK_MS, clock_step)
-        if not map_mode:
+        if not map_mode or forum_state is not None:
             return
         from app.sim import on_clock_step, sim_tick_due
-        from app.walkers import drawable_walkers
-
-        n = sim_tick_due(ctx.sim, TICK_MS)
-        if n <= 0:
-            return
-        result = on_clock_step(ctx.city, ctx.walkers, ctx.sim, pulses=n)
-        ph, w = result.phase, result.walkers
-        if (
-            ph.houses_changed
-            or ph.walkers_spawned
-            or w.stepped
-            or w.animated
-            or w.live
-        ):
-            _refresh_after_sim(houses_changed=ph.houses_changed > 0)
-        from app.sim_log import last_line
-
-        tail = last_line()
-        blit(
-            f"{speed_action(ctx.sim)}  slot {ph.phase:#x}  "
-            f"houses +{ph.houses_up}/-{ph.houses_down}  {ph.date_label}  "
-            f"moved={w.stepped}  drawn={len(drawable_walkers(ctx.walkers))}"
-            + (f"  | {tail[-88:]}" if tail else "")
+        from app.walkers import (
+            advance_walker_slides,
+            drawable_walkers,
+            use_realtime_slides,
         )
+
+        use_realtime_slides()
+        n = sim_tick_due(ctx.sim, TICK_MS)
+        sim_ran = False
+        ph = w = None
+        if n > 0:
+            result = on_clock_step(ctx.city, ctx.walkers, ctx.sim, pulses=n)
+            ph, w = result.phase, result.walkers
+            sim_ran = True
+        slid = False
+        if not ctx.sim.paused:
+            slid = advance_walker_slides()
+        if sim_ran and ph is not None and w is not None:
+            if (
+                ph.houses_changed
+                or ph.walkers_spawned
+                or w.stepped
+                or w.animated
+                or w.live
+                or slid
+            ):
+                _refresh_after_sim(houses_changed=ph.houses_changed > 0)
+            from app.sim_log import last_line
+
+            tail = last_line()
+            blit(
+                f"{speed_action(ctx.sim)}  slot {ph.phase:#x}  "
+                f"houses +{ph.houses_up}/-{ph.houses_down}  {ph.date_label}  "
+                f"moved={w.stepped}  drawn={len(drawable_walkers(ctx.walkers))}"
+                + (f"  | {tail[-88:]}" if tail else "")
+            )
+        elif slid:
+            refresh_walkers_only()
+            blit()
 
     def evolve_pass() -> None:
         """E — host-only: all 80 evolve rows. Not one EXE pulse."""
+        if forum_state is not None:
+            return
         from app.city_sim import evolve_all_rows
         from app.walkers import drawable_walkers
 
@@ -1140,8 +1394,9 @@ def show(ctx: BootContext, *, game: Path) -> None:
 
         if not map_mode or current_canvas() is None:
             return
-        cam_x += dx
-        cam_y += dy
+        mul = max(1, int(options.scroll_step))
+        cam_x += dx * mul
+        cam_y += dy * mul
         blit(map_status(len(drawable_walkers(ctx.walkers))))
 
     def use_pl8(name: str, first_only: bool) -> None:
@@ -1161,7 +1416,11 @@ def show(ctx: BootContext, *, game: Path) -> None:
         key = event.keysym.lower()
         ch = (getattr(event, "char", "") or "").lower()
         step = PAN_STEP[city_map.clamp_zoom(zoom)]
-        if key in {"escape", "q"}:
+        if key in {"escape"}:
+            if _forum_back():
+                return
+            on_close()
+        elif key in {"q"}:
             on_close()
         elif key in {"1"}:
             use_pl8("backgrnd.pl8", first_only=True)
@@ -1176,7 +1435,13 @@ def show(ctx: BootContext, *, game: Path) -> None:
         elif key in {"e"}:
             evolve_pass()
         elif key in {"a"}:
-            blit(audio.play_raw_preview(game))
+            if not options.sound:
+                blit(
+                    f"{_eng_skip(ctx.eng, 56, 1, 'Sounds are')} "
+                    f"{on_off(ctx.eng, False)}"
+                )
+            else:
+                blit(audio.play_raw_preview(game))
         elif not map_mode:
             return
         elif key in {"left"}:
@@ -1254,7 +1519,17 @@ def show(ctx: BootContext, *, game: Path) -> None:
 
     def open_place(x: int, y: int) -> None:
         nonlocal place_dlg
-        place_dlg = query_place(ctx.city, x, y)
+        from app.walker_quotes import query_walker
+        from app.walkers import find_walker_at
+
+        hit = find_walker_at(ctx.walkers, x, y, tiles=ctx.city.tiles)
+        if hit is not None:
+            place_dlg = query_walker(
+                hit, ctx.city.tiles, ctx.eng, ctx.sim.tax_rate
+            )
+            blit(f"Query {place_dlg.name}  tesouro {ctx.sim.treasury}")
+            return
+        place_dlg = query_place(ctx.city, x, y, ctx.eng)
         blit(f"Query {place_dlg.name}  tesouro {ctx.sim.treasury}")
 
     def place_at(vx: int, vy: int) -> None:
@@ -1286,6 +1561,30 @@ def show(ctx: BootContext, *, game: Path) -> None:
         if action.startswith("speed_"):
             overlay_flyout = False
             apply_speed(action)
+            return
+        if action == "view_forum":
+            overlay_flyout = False
+            _enter_forum()
+            return
+        if action == "view_city":
+            overlay_flyout = False
+            if forum_state is not None:
+                _leave_forum()
+                return
+            from app.walkers import drawable_walkers
+
+            blit(map_status(len(drawable_walkers(ctx.walkers))))
+            return
+        if action == "view_province":
+            overlay_flyout = False
+            blit(
+                _eng_skip(
+                    ctx.eng,
+                    31,
+                    24,
+                    "You cannot get promoted when playing in city-only mode.",
+                )
+            )
             return
         if action == "overlay_menu":
             overlay_flyout = not overlay_flyout
@@ -1353,34 +1652,130 @@ def show(ctx: BootContext, *, game: Path) -> None:
         return True
 
     def _menu_click(x: int, y: int) -> bool:
-        nonlocal menu_open
+        nonlocal menu_open, menu_report
         font = _hud_font()
-        layout = top_menu_layout(ctx.eng, font)
+        layout = _menu_layout()
         item = _menu_item_at(layout, menu_open, x, y, font)
         if item is not None:
             slot, skip, lab = item
             menu_open = None
-            if slot == 0 and skip == 4:
-                on_close()
+            if slot == SLOT_FILE and skip == FILE_QUIT:
+                q = _eng_skip(ctx.eng, 9, 0, "Exit to DOS?")
+                if _confirm(q):
+                    on_close()
+                else:
+                    blit(last_extra)
                 return True
-            if slot == 0 and skip == 3:
-                blit(f"{lab} — ainda não (o host não grava .SAV)")
+            if slot == SLOT_FILE and skip == FILE_SAVE:
+                blit(
+                    f"{lab} — "
+                    + _eng_skip(ctx.eng, 38, 6, "FILE ERROR -- Save Canceled")
+                    + " (host has no 500-chunk BSS)"
+                )
                 return True
-            if slot == 2 and skip == 3:
+            if slot == SLOT_FILE and skip == FILE_NEW:
+                q = _eng_skip(ctx.eng, 9, 1, "Start a New Game?")
+                if _confirm(q):
+                    _apply_new_city()
+                else:
+                    blit(last_extra)
+                return True
+            if slot == SLOT_FILE and skip == FILE_LOAD:
+                _apply_load()
+                return True
+            if slot == SLOT_OPTIONS and skip == OPT_MUSIC:
+                options.music = not options.music
+                blit(
+                    f"{_eng_skip(ctx.eng, 56, 0, 'Music is')} "
+                    f"{on_off(ctx.eng, options.music)}"
+                    + (" — XMI not in host" if options.music else "")
+                )
+                return True
+            if slot == SLOT_OPTIONS and skip == OPT_SOUND:
+                options.sound = not options.sound
+                blit(
+                    f"{_eng_skip(ctx.eng, 56, 1, 'Sounds are')} "
+                    f"{on_off(ctx.eng, options.sound)}"
+                )
+                return True
+            if slot == SLOT_OPTIONS and skip == OPT_ANIM:
+                options.animations = not options.animations
+                blit(
+                    f"{_eng_skip(ctx.eng, 56, 5, 'Animations are')} "
+                    f"{on_off(ctx.eng, options.animations)}"
+                )
+                return True
+            if slot == SLOT_OPTIONS and skip == OPT_YEAR:
+                options.auto_save = not options.auto_save
+                blit(
+                    f"{_eng_skip(ctx.eng, 56, 9, 'Auto-Save is')} "
+                    f"{on_off(ctx.eng, options.auto_save)}"
+                    + " — host does not write lastyear.sav"
+                )
+                return True
+            if slot == SLOT_OPTIONS and skip == OPT_CENSUS:
+                _open_report(census_report(ctx.city.tiles, eng=ctx.eng))
+                return True
+            if slot == SLOT_SPEED and skip == SPD_PAUSE:
                 apply_speed("speed_play" if ctx.sim.paused else "speed_pause")
                 return True
-            if slot == 2 and skip == 1:
-                apply_speed("speed_play")
+            if slot == SLOT_SPEED and skip == SPD_GAME:
+                apply_speed(next_game_speed(ctx.sim))
+                return True
+            if slot == SLOT_SPEED and skip == SPD_SCROLL:
+                options.scroll_step = cycle_scroll(options.scroll_step)
+                blit(
+                    f"{_eng_skip(ctx.eng, 11, 2, 'Adjusting scroll speed')}  "
+                    f"{options.scroll_step}x"
+                )
+                return True
+            if slot == SLOT_HELP and skip == HLP_ABOUT:
+                _open_report(about_report(ctx.eng))
+                return True
+            if slot == SLOT_HELP and skip == HLP_HINTS:
+                _open_report(
+                    help_topic_excerpt(
+                        game, HELP_TOPIC_HINTS, _eng_skip(ctx.eng, 3, 1, "Hints and Tips")
+                    )
+                )
+                return True
+            if slot == SLOT_HELP and skip == HLP_GAME:
+                _open_report(
+                    help_topic_excerpt(
+                        game, HELP_TOPIC_GAME, _eng_skip(ctx.eng, 3, 2, "Game Help")
+                    )
+                )
+                return True
+            if slot == SLOT_HELP and skip == HLP_HISTORY:
+                _open_report(
+                    help_topic_excerpt(
+                        game, HELP_TOPIC_HISTORY, _eng_skip(ctx.eng, 3, 3, "History")
+                    )
+                )
+                return True
+            if slot == SLOT_HELP and skip == HLP_ICONS:
+                _open_report(
+                    help_topic_excerpt(
+                        game, HELP_TOPIC_ICONS, _eng_skip(ctx.eng, 3, 4, "Icons")
+                    )
+                )
                 return True
             blit(f"{lab} — ainda não")
             return True
         title = _menu_title_at(layout, x, y)
         if title is not None:
             menu_open = None if menu_open == title else title
+            menu_report = None
             blit(last_extra)
             return True
         if menu_open is not None:
             menu_open = None
+            blit(last_extra)
+            return True
+        if menu_report is not None:
+            if report_contains(x, y):
+                return True
+            menu_report = None
             blit(last_extra)
             return True
         return False
@@ -1388,19 +1783,24 @@ def show(ctx: BootContext, *, game: Path) -> None:
     def on_press(event: tk.Event) -> None:  # type: ignore[type-arg]
         nonlocal drag, pending_click, press_on_chrome, cam_x, cam_y
         nonlocal band_start, band_cur
+        if forum_state is not None:
+            pending_click = (event.x, event.y)
+            drag = None
+            press_on_chrome = True
+            return
         if not map_mode or current_canvas() is None:
             return
         if event.y < TOP_BAR_H or (
             menu_open is not None
             and _menu_item_at(
-                top_menu_layout(ctx.eng, _hud_font()),
+                _menu_layout(),
                 menu_open,
                 event.x,
                 event.y,
                 _hud_font(),
             )
             is not None
-        ):
+        ) or (menu_report is not None and report_contains(event.x, event.y)):
             pending_click = (event.x, event.y)
             drag = None
             press_on_chrome = True
@@ -1524,6 +1924,15 @@ def show(ctx: BootContext, *, game: Path) -> None:
             return
         if _menu_click(event.x, event.y):
             return
+        if forum_state is not None:
+            msg = click_forum(forum_state, event.x, event.y, ctx.sim, eng=ctx.eng)
+            if msg == "exit":
+                _leave_forum()
+            else:
+                blit(msg if msg else last_extra)
+            return
+        if menu_report is not None and report_contains(event.x, event.y):
+            return
         ox = chrome_ox(win_w)
         if overlay_flyout:
             picked_ov = flyout_item_at(event.x, event.y, ox)
@@ -1559,13 +1968,23 @@ def show(ctx: BootContext, *, game: Path) -> None:
         if tool is not None and not chrome.covers(event.x, event.y, ox=ox):
             place_at(event.x, event.y)
             return
+        if tool is None and not chrome.covers(event.x, event.y, ox=ox):
+            cell = tile_at(event.x, event.y)
+            if cell is not None:
+                tid = ctx.city.tile(cell[0], cell[1]).terrain_id
+                if is_forum_building(tid):
+                    _enter_forum()
+                    return
         if place_dlg is not None:
             place_dlg = None
             blit(last_extra)
 
     def on_right(event: tk.Event) -> None:  # type: ignore[type-arg]
         nonlocal tool, band_start, band_cur, pending_click, drag, menu_open
-        nonlocal overlay_flyout, place_dlg
+        nonlocal overlay_flyout, place_dlg, menu_report
+        if forum_state is not None:
+            _forum_back()
+            return
         if not map_mode:
             return
         aborted = band_start is not None
@@ -1574,6 +1993,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
         pending_click = None
         drag = None
         menu_open = None
+        menu_report = None
         overlay_flyout = False
         palette.close()
         # EXE 0x329EF / overlay Cancel: right-click drops the build tool.

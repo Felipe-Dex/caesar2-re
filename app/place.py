@@ -345,6 +345,17 @@ class StampSpec:
 
 # Occupancy +4 from Achea / D.SAV / 20230610 origins. Sheet = +3 & 0x1C.
 _STAMPS: dict[str, StampSpec] = {}
+_FACTORY_GOODS = 0
+
+
+def set_factory_goods(nibble: int) -> None:
+    """Origin ``+19`` lo-nibble (factory.md). Bakery=0 … Fish=15."""
+    global _FACTORY_GOODS
+    _FACTORY_GOODS = int(nibble) & 0xF
+
+
+def factory_goods() -> int:
+    return _FACTORY_GOODS
 
 
 def _reg(spec: StampSpec) -> StampSpec:
@@ -1208,6 +1219,8 @@ def _write_stamp(city: CityMap, ox: int, oy: int, spec: StampSpec) -> list[tuple
         elif spec.tid2:
             piece = ((dy % (spec.h // 2)) * spec.w + dx) & 0xF
         extra = spec.extra19 if (dx, dy) == (0, 0) else None
+        if spec.tool == TOOL_FACTORY and (dx, dy) == (0, 0):
+            extra = factory_goods()
         _write_building(
             city, x, y, tid, spec.flags, draw, variant,
             piece=piece, special=extra,
@@ -1448,6 +1461,11 @@ def try_place(
         )
 
     if tool in _STAMPS and tool not in _CIVIC_1X1:
+        from app.unlocks import unlock_refuse
+
+        locked = unlock_refuse(tool, sim)
+        if locked:
+            return PlaceResult(False, locked)
         spec = _STAMPS[tool]
         cells = footprint_rect(x, y, spec.w, spec.h)
         skip = [c for c in cells if _kind_for_tool(city, c[0], c[1], tool) == "skip"]
@@ -2003,6 +2021,10 @@ def try_place_span(
         )
 
     if tool in _CIVIC_1X1:
+        if tool == TOOL_AQUEDUCT and not any(
+            aqueduct_connects(city, x, y) for x, y in preview.stamp
+        ):
+            return PlaceResult(False, "aqueduto isolado recusado")
         err = _debit(sim, preview.cost)
         if err:
             return PlaceResult(False, err, cost=preview.cost)
@@ -2793,6 +2815,14 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  aqueduct isolado {r.message} {a:#x}")
     else:
         lines.append("ok    Aqueduct isolado recusado")
+    r = try_place_span(city, 50, 40, 53, 40, TOOL_AQUEDUCT, None)
+    if r.ok or any(
+        ID_AQUEDUCT_LO <= city.tiles[city.offset(50 + i, 40)] <= ID_AQUEDUCT_HI
+        for i in range(4)
+    ):
+        lines.append(f"FAIL  aqueduct linha isolada {r.message}")
+    else:
+        lines.append("ok    Aqueduct linha isolada recusada")
     city.tiles[city.offset(16, 15)] = 0x14
     r = try_place(city, 16, 15, TOOL_AQUEDUCT, None)
     a = city.tiles[city.offset(16, 15)]
@@ -3072,6 +3102,14 @@ def selftest() -> list[str]:
 
     _grass_block(10, 2, 4, 8)
     sim.treasury = 2500
+    sim.population = 0
+    sim.pop_peak = 0
+    r = try_place(city, 10, 2, TOOL_CMAXIMUS, sim)
+    if r.ok or city.tiles[city.offset(10, 2)] == ID_CMAX_A:
+        lines.append(f"FAIL  cmax unlocked at pop 0 {r.message}")
+    else:
+        lines.append("ok    C.Maximus leftover at pop 0")
+    sim.pop_peak = 4800
     r = try_place(city, 10, 2, TOOL_CMAXIMUS, sim)
     cmax_a = city.tiles[city.offset(10, 2)]
     cmax_b = city.tiles[city.offset(10, 6)]
@@ -3082,15 +3120,33 @@ def selftest() -> list[str]:
 
     _grass_block(16, 2, 3, 3)
     sim.treasury = 80
+    set_factory_goods(0)
     r = try_place(city, 16, 2, TOOL_FACTORY, sim)
     factory_extra = city.tiles[city.offset(16, 2) + 19]
     if not r.ok or city.tiles[city.offset(16, 2)] != ID_FACTORY or factory_extra != 0:
         lines.append(f"FAIL  factory {r.message} +19={factory_extra}")
     else:
         lines.append("ok    Factory 0xFA 3×3 +19=0 (Bakery)")
+    _grass_block(40, 2, 3, 3)
+    sim.treasury = 80
+    set_factory_goods(1)
+    r = try_place(city, 40, 2, TOOL_FACTORY, sim)
+    winery = city.tiles[city.offset(40, 2) + 19]
+    if not r.ok or winery != 1:
+        lines.append(f"FAIL  winery +19={winery} {r.message}")
+    else:
+        lines.append("ok    Factory type Winery +19=1")
+    set_factory_goods(0)
 
     _grass_block(16, 8, 4, 4)
     sim.treasury = 10
+    sim.pop_peak = 0
+    r = try_place(city, 16, 8, TOOL_PALATINE, sim)
+    if r.ok or city.tiles[city.offset(16, 8)] == ID_PALATINE:
+        lines.append(f"FAIL  palatine unlocked at pop 0 {r.message}")
+    else:
+        lines.append("ok    Palatine leftover at pop 0")
+    sim.pop_peak = 1800
     r = try_place(city, 16, 8, TOOL_PALATINE, sim)
     if not r.ok or city.tiles[city.offset(16, 8)] != ID_PALATINE or sim.treasury != 10:
         lines.append(f"FAIL  palatine {r.message} treas={sim.treasury}")

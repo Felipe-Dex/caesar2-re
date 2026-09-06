@@ -850,6 +850,21 @@ def _paint_iso_tile(
     the origin variant on the other eight cells would stamp extra forts.
     """
     frames, idx = _tile_frames(tile, water_frame, cityfixt, sheets)
+    # Aqueduct CITYFIXT diamonds have transparent arches. Without a grass
+    # underlay the canvas ISO_BG (12,16,28) reads as a solid black box.
+    # Reservoir / fountain stay opaque — do not paint under them.
+    if is_aqueduct_id(tile.terrain_id) and cityfixt is not None:
+        grass_idx = 8 + CITYFIXT_TERRAIN_BIAS
+        _blit_iso(
+            img,
+            cityfixt,
+            grass_idx,
+            sx,
+            sy,
+            tile_w=tile_w,
+            tile_h=tile_h,
+            lift=0,
+        )
     if _blit_iso(
         img,
         frames,
@@ -1513,6 +1528,33 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  aqueduct altura {dests}")
     else:
         lines.append("ok    Aqueduct 0xCB/0xCF/0xD0/0xD1/0xD6 mesma altura extra_rows")
+    grass_img = Image.new("RGBA", (8, 8), (0, 180, 0, 255))
+    aq_img = Image.new("RGBA", (8, 8), (0, 0, 0, 0))
+    aq_img.putpixel((3, 1), (220, 200, 160, 255))
+    fake = [Image.new("RGBA", (8, 8), (0, 0, 0, 0)) for _ in range(0x80)]
+    fake[8 + CITYFIXT_TERRAIN_BIAS] = grass_img
+    fake[0x76] = aq_img
+    under = Image.new("RGBA", (48, 48), (*ISO_BG, 255))
+    _paint_iso_tile(
+        under,
+        aq,
+        16,
+        16,
+        tile_w=8,
+        tile_h=8,
+        water_frame=0,
+        cityfixt=fake,
+        sheets=None,
+    )
+    greens = sum(
+        1
+        for p in under.getdata()
+        if p[1] > 100 and p[1] > p[0] + 40 and p[3] > 0
+    )
+    if greens < 8:
+        lines.append(f"FAIL  aqueduct sem relva por baixo (green={greens})")
+    else:
+        lines.append("ok    Aqueduct arches over grass (not ISO_BG)")
     spr = Image.new("RGBA", (6, 6), (0, 0, 0, 0))
     pix = spr.load()
     pix[1, 1] = (40, 80, 180, 255)

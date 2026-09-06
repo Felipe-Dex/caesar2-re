@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from PIL import Image, ImageDraw, ImageFont
 
 from app.city_map import ID_TERRAIN_MAX, MAP_H, MAP_W, TILE_STRIDE, CityMap
+from app.city_paint import HOUSE_OCCUPANCY, ID_HOUSING_LO
 
 OVERLAY_GEOGRAPHY = 0
 OVERLAY_LAND_VALUE = 1
@@ -115,7 +116,8 @@ OVERLAY_SPLIT_X = 0x25C  # 604 — 4-color / ? cluster on the right
 _FLYOUT_W = 130
 _FLYOUT_ITEM_H = 14
 _DLG_X, _DLG_Y = 16, 40
-_DLG_W, _DLG_H = 300, 168
+_DLG_W, _DLG_H = 420, 280
+_DLG_LINE = 52
 
 
 def overlay_name(overlay_id: int, eng=None) -> str:
@@ -524,14 +526,99 @@ def _fill_names() -> None:
     _BUILDING_NAME.update(names)
 
 
-def building_name(tid: int) -> str:
+def _eng_skip(eng, slot: int, skip: int, fallback: str) -> str:
+    if eng is not None:
+        got = eng.skip(slot, skip)
+        if got:
+            return got.rstrip()
+    return fallback
+
+
+def building_name(tid: int, eng=None) -> str:
+    """C2.ENG official names when present; host table otherwise."""
     _fill_names()
-    if tid in _BUILDING_NAME:
-        return _BUILDING_NAME[tid]
+    if 0x82 <= tid <= 0xA1:
+        grade = tid - 0x82
+        return _eng_skip(eng, 57, 14 + grade, _BUILDING_NAME.get(tid, "Housing"))
+    if 0x78 <= tid <= 0x7B:
+        return _eng_skip(eng, 56, 10, "Gardens")
+    if tid == 0x7C:
+        return _eng_skip(eng, 56, 11, "Plaza")
+    if tid == 0x7D:
+        return _eng_skip(eng, 57, 8, "Plaza")
+    if tid == 0x7E:
+        return _eng_skip(eng, 57, 9, "Plaza with Statue")
     if 0x52 <= tid <= 0x5C:
-        return "Road"
+        return _eng_skip(eng, 56, 15, "Road")
     if 0x4E <= tid <= 0x51:
         return "Bridge"
+    if tid == 0x05:
+        return _eng_skip(eng, 57, 11, "Rubble")
+    if tid == 0x1C:
+        return _eng_skip(eng, 57, 12, "Empty Land")
+    named = {
+        0xBE: (12, 0, "Reservoir"),
+        0xD7: (12, 2, "Well"),
+        0xDB: (12, 3, "Fountain"),
+        0xDC: (12, 3, "Fountain"),
+        0xDD: (12, 3, "Fountain"),
+        0xDE: (12, 3, "Fountain"),
+        0xC0: (13, 0, "Wall"),
+        0xC1: (13, 0, "Wall"),
+        0xC2: (13, 0, "Wall"),
+        0xBF: (13, 1, "Tower"),
+        0xE4: (13, 2, "Barracks"),
+        0xE3: (13, 3, "Praefecture"),
+        0xDF: (14, 0, "Baths"),
+        0xE0: (14, 0, "Baths"),
+        0xE1: (14, 0, "Baths"),
+        0xE2: (14, 0, "Baths"),
+        0xFB: (14, 1, "Hospital"),
+        0xFC: (15, 0, "Market"),
+        0xFD: (15, 0, "Market"),
+        0xFE: (15, 0, "Market"),
+        0xFF: (15, 0, "Market"),
+        0xAF: (19, 0, "Aventine"),
+        0xAE: (19, 0, "Aventine"),
+        0xB0: (19, 0, "Aventine"),
+        0xB2: (19, 1, "Janiculan"),
+        0xB3: (19, 1, "Janiculan"),
+        0xB4: (19, 1, "Janiculan"),
+        0xB7: (19, 2, "Palatine"),
+        0xB6: (19, 2, "Palatine"),
+        0xB8: (19, 2, "Palatine"),
+        0xB9: (19, 2, "Palatine"),
+        0xF3: (20, 0, "Grammaticus"),
+        0xF4: (20, 1, "Rhetor"),
+        0xF5: (20, 2, "Library"),
+        0xA2: (21, 0, "Shrine"),
+        0xA3: (21, 0, "Shrine"),
+        0xA4: (21, 0, "Shrine"),
+        0xA5: (21, 0, "Shrine"),
+        0xA6: (21, 1, "Temple"),
+        0xA7: (21, 1, "Temple"),
+        0xA8: (21, 1, "Temple"),
+        0xAB: (21, 2, "Basilica"),
+        0xAC: (21, 2, "Basilica"),
+        0xE5: (22, 0, "Theater"),
+        0xE6: (22, 1, "Odeum"),
+        0xE7: (22, 2, "Arena"),
+        0xE8: (22, 3, "Coliseum"),
+        0xE9: (22, 4, "Circus"),
+        0xEA: (22, 4, "Circus"),
+        0xEB: (22, 4, "Circus"),
+        0xEC: (22, 4, "Circus"),
+        0xED: (22, 5, "C.Maximus"),
+        0xEE: (22, 5, "C.Maximus"),
+        0xFA: (61, 0, "Factory"),
+    }
+    if tid in named:
+        slot, skip, fb = named[tid]
+        return _eng_skip(eng, slot, skip, fb)
+    if 0xCB <= tid <= 0xD6:
+        return _eng_skip(eng, 12, 1, "Aqueduct")
+    if tid in _BUILDING_NAME:
+        return _BUILDING_NAME[tid]
     if tid < 8:
         return "Water"
     if tid < ID_TERRAIN_MAX:
@@ -549,59 +636,97 @@ class PlaceInfo:
     lines: tuple[str, ...]
 
 
-def query_place(city: CityMap, x: int, y: int) -> PlaceInfo:
-    """Minimal place overlay: name + bytes we already store (no flavor dump)."""
+def query_place(city: CityMap, x: int, y: int, eng=None) -> PlaceInfo:
+    """Full structure box: C2.ENG [60] + tile bytes (not walker quotes)."""
     t = city.tile(x, y)
     tid = t.terrain_id
-    name = building_name(tid)
+    name = building_name(tid, eng)
     if t.is_river and t.is_pad:
         name = "Bridge"
     elif t.is_river:
-        name = "River"
+        name = _eng_skip(eng, 57, 10, "River")
     lines = [
-        f"{name}",
+        name,
         f"tile ({x},{y})  id {tid:#04x}  +1 {t.flags:#04x}",
     ]
+    land = i8(t.industry)
+    if land:
+        lines.append(f"{_eng_skip(eng, 60, 1, 'Land Value is')} {land}")
+    else:
+        lines.append(_eng_skip(eng, 60, 0, "NO Land Value"))
     if t.is_housing:
-        lines.append(f"housing grade +11={t.housing_grade}  land +15={i8(t.industry)}")
+        grade = tid - ID_HOUSING_LO
+        if 0 <= grade < len(HOUSE_OCCUPANCY):
+            lines.append(f"workers {HOUSE_OCCUPANCY[grade]}")
         nibble = t.housing_grade & 0x0F
         if nibble:
-            lines.append(f"unrest nibble {nibble}")
+            lines.append(f"unrest {nibble}")
         ill = t.housing_grade & 0x30
         if ill:
-            lines.append(f"illness bits +11&0x30={ill:#x}")
+            lines.append(f"illness +11&0x30={ill:#x}")
+    splash = t.desirability
+    if splash & 0x04 or splash & 0x02:
+        water = _eng_skip(eng, 60, 2, "Water Supply")
+    elif splash & 0x01:
+        water = _eng_skip(eng, 60, 3, "Primitive Water Supply")
+    else:
+        water = _eng_skip(eng, 60, 4, "NO Water Supply")
+    bits = []
+    if splash & 1:
+        bits.append("small")
+    if splash & 2:
+        bits.append("well/river")
+    if splash & 4:
+        bits.append("reservoir ring")
+    if bits:
+        lines.append(f"{water} ({', '.join(bits)})")
+    else:
+        lines.append(water)
     if tid == 0xBE or (0xCB <= tid <= 0xD6):
         charge = t.coverage & 3
         lines.append(f"pipe +1&0xC0={t.flags & 0xC0:#x}  charge +10&3={charge}")
     if tid == 0xD7 or 0xDB <= tid <= 0xDE:
-        lines.append(f"well/fountain  +13 splash {t.desirability:#04x}")
-        if 0xDB <= tid <= 0xDE and not (t.desirability & 4):
+        if 0xDB <= tid <= 0xDE and not (splash & 4):
             lines.append("fountain dry (needs charged reservoir ring)")
-    splash = t.desirability
-    if splash & 0x07:
-        bits = []
-        if splash & 1:
-            bits.append("small water")
-        if splash & 2:
-            bits.append("well/river")
-        if splash & 4:
-            bits.append("reservoir ring")
-        lines.append("water reach: " + ", ".join(bits))
-    if t.unknown12:
-        lines.append(f"entertainment +12={t.unknown12:#04x}")
-    if splash & 0x30:
-        lines.append(f"education +13&0x30={splash & 0x30:#x}")
     if t.coverage & 0x0C:
-        lines.append(f"tax walker +10&0x0C={t.coverage & 0x0C:#x}")
+        lines.append(_eng_skip(eng, 60, 5, "Forum Access"))
+    else:
+        lines.append(_eng_skip(eng, 60, 6, "NO Forum Access"))
+    sec = t.coverage & 0x30
+    if sec == 0x10:
+        lines.append(_eng_skip(eng, 60, 7, "Internal Security Only"))
+    elif sec == 0x20:
+        lines.append(_eng_skip(eng, 60, 8, "External Security Only"))
+    elif sec == 0x30:
+        lines.append(
+            f"{_eng_skip(eng, 60, 7, 'Internal Security Only')} / "
+            f"{_eng_skip(eng, 60, 8, 'External Security Only')}"
+        )
+    else:
+        lines.append(_eng_skip(eng, 60, 9, "NO Security"))
     if t.coverage & 0xC0:
-        lines.append(f"market walker +10&0xC0={t.coverage & 0xC0:#x}")
-    if t.coverage & 0x30:
-        lines.append(f"security +10&0x30={t.coverage & 0x30:#x}")
-    if t.walker0 or t.walker1:
-        lines.append(f"walkers on tile +7={t.walker0} +8={t.walker1}")
+        lines.append(_eng_skip(eng, 60, 10, "Market Access"))
+    else:
+        lines.append(_eng_skip(eng, 60, 11, "NO Market Access"))
+    edu = splash & 0x30
+    if edu & 0x10:
+        lines.append(_eng_skip(eng, 60, 12, "Grammaticus Access"))
+    else:
+        lines.append(_eng_skip(eng, 60, 13, "NO Grammaticus Access"))
+    if edu & 0x20:
+        lines.append(_eng_skip(eng, 60, 14, "Rhetor Access"))
+    else:
+        lines.append(_eng_skip(eng, 60, 15, "NO Rhetor Access"))
+    lines.append(
+        f"{_eng_skip(eng, 60, 16, 'Entertainment Level')} {t.unknown12}"
+    )
     if t.draw & 0x80:
-        lines.append(f"fire/special +3 bit7  timer +16={t.unknown16}")
-    return PlaceInfo(x, y, name, tid, t.flags, tuple(lines[:10]))
+        lines.append(f"fire risk  +3 bit7  timer +16={t.unknown16}")
+    elif t.unknown16:
+        lines.append(f"fire timer +16={t.unknown16}")
+    else:
+        lines.append("fire risk none")
+    return PlaceInfo(x, y, name, tid, t.flags, tuple(lines))
 
 
 def flyout_rect(ox: int = 0) -> tuple[int, int, int, int]:
@@ -664,8 +789,25 @@ def blit_overlay_chrome(
     return out.convert("RGB")
 
 
+def _wrap_query_line(text: str, width: int = _DLG_LINE) -> list[str]:
+    if len(text) <= width:
+        return [text]
+    out: list[str] = []
+    rest = text
+    while rest:
+        if len(rest) <= width:
+            out.append(rest)
+            break
+        cut = rest.rfind(" ", 0, width)
+        if cut <= 0:
+            cut = width
+        out.append(rest[:cut])
+        rest = rest[cut:].lstrip()
+    return out
+
+
 def place_dialog_contains(x: int, y: int) -> bool:
-    return _DLG_X <= x < _DLG_X + _DLG_W and _DLG_Y <= y < _DLG_Y + _DLG_H
+    return _DLG_X <= x < _DLG_X + _DLG_W and _DLG_Y <= y < _DLG_Y + _DLG_H + 80
 
 
 def blit_place_dialog(frame: Image.Image, info: PlaceInfo) -> Image.Image:
@@ -673,15 +815,19 @@ def blit_place_dialog(frame: Image.Image, info: PlaceInfo) -> Image.Image:
     overlay = Image.new("RGBA", out.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
     font = ImageFont.load_default()
-    x0, y0, w, h = _DLG_X, _DLG_Y, _DLG_W, _DLG_H
+    wrapped: list[str] = []
+    for line in info.lines:
+        wrapped.extend(_wrap_query_line(line))
+    h = max(_DLG_H, 28 + 13 * len(wrapped) + 10)
+    x0, y0, w = _DLG_X, _DLG_Y, _DLG_W
     draw.rectangle((x0, y0, x0 + w - 1, y0 + h - 1), fill=(8, 24, 22, 230))
     draw.rectangle((x0, y0, x0 + w - 1, y0 + h - 1), outline=(200, 180, 90, 255))
-    draw.text((x0 + 8, y0 + 6), "Query", fill=(255, 228, 160, 255), font=font)
+    draw.text((x0 + 8, y0 + 6), "Query", fill=(255, 228, 160, 255), font=font)  # C2.ENG [73]
     y = y0 + 22
-    for line in info.lines:
-        draw.text((x0 + 8, y), line[:42], fill=(220, 230, 210, 255), font=font)
+    for line in wrapped:
+        draw.text((x0 + 8, y), line, fill=(220, 230, 210, 255), font=font)
         y += 13
-        if y > y0 + h - 18:
+        if y > y0 + h - 14:
             break
     return Image.alpha_composite(out, overlay).convert("RGB")
 
@@ -827,10 +973,27 @@ def selftest() -> list[str]:
     city.tiles[city.offset(0, 0)] = 0xBE
     city.tiles[city.offset(0, 0) + 1] = 0x80
     info = query_place(city, 0, 0)
-    if info.name != "Reservoir" or "pipe" not in " ".join(info.lines):
+    joined = " ".join(info.lines)
+    if info.name != "Reservoir" or "pipe" not in joined:
         lines.append(f"FAIL  query {info.name} {info.lines}")
+    elif "Land Value" not in joined or "Water" not in joined:
+        lines.append(f"FAIL  query fields {info.lines}")
+    elif len(info.lines) < 8:
+        lines.append(f"FAIL  query too short {len(info.lines)}")
     else:
-        lines.append("ok    query Reservoir")
+        lines.append("ok    query Reservoir structure box")
+    hoff = city.offset(1, 0)
+    city.tiles[hoff] = 0x82
+    city.tiles[hoff + 13] = 0x05
+    city.tiles[hoff + 15] = 32
+    house = query_place(city, 1, 0)
+    hjoin = " ".join(house.lines)
+    if "workers 2" not in hjoin or "Water Supply" not in hjoin:
+        lines.append(f"FAIL  query house {house.lines}")
+    elif "fire risk" not in hjoin:
+        lines.append(f"FAIL  query house risk {house.lines}")
+    else:
+        lines.append("ok    query housing workers/water/risk")
     if overlay_name(2) != "Water" or overlay_name(10) != "Cancel":
         lines.append("FAIL  names")
     else:

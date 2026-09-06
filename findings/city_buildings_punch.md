@@ -1,6 +1,6 @@
 # Remaining city constructions (punch list)
 
-IDs / footprints / costs from EXE DAT `0x94FE5`, C2MODEL, Achea / D.SAV / 20230610. Host stamps live in `app/place.py` + `app/palette.py`. INT_CITY unused row-2 slots follow **artwork**: **Sanitation** (sprite 21, marble column) then **Industry** (sprite 22, workshop). HELP.ENG Cty Icn lists `industry` then `health` — do not remap the hitbox to that string order. Not a 4th palette row.
+IDs / footprints / costs from EXE DAT `0x94FE5`, C2MODEL, Achea / D.SAV / 20230610. Host stamps live in `app/place.py` + `app/palette.py`. INT_CITY unused row-2 slots follow **decoded frames** (CITY1.256): **Industry** (sprite 21, blue/green bottles) then **Sanitation** (sprite 22, vessel + green cross). HELP.ENG Cty Icn is the same order (`industry` then `health`). Bind flyout **content** to the picture — do not invert again. Not a 4th palette row.
 
 ## Already placeable (City Only host)
 
@@ -43,10 +43,10 @@ N×N>1×1 = **stamp-follow** (um ghost, commit no mouse-up). 1×1 = rect (como G
 | Grammaticus | `0xF3` `+3=0x08` `+4=40,42,41,43` | 2×2 | 250 | Education → Grammaticus |
 | Rhetor | `0xF4` `+4=44,46,49,45,48,4B,47,4A,4C` | 3×3 | 500 | Education → Rhetor |
 | Library | `0xF5` `+4=4D,4F,52,4E,51,54,50,53,55` | 3×3 | 1000 | Education → Library |
-| Baths | `0xDF` `+3=0x08` `+4=20,22,21,23` | 2×2 | 30 | **Sanitation** (INT_CITY sprite 21 / grid 8, coluna) → Baths |
+| Baths | `0xDF` `+3=0x08` `+4=20,22,21,23` | 2×2 | 30 | **Sanitation** (INT_CITY sprite 22 / grid 9, vessel+cross) → Baths |
 | Hospital | `0xFB` `+4=56,58,5B,57,5A,5D,59,5C,5E` | 3×3 | 500 | Sanitation → Hospital |
-| Market | `0xFC` `+4=30,32,31,33` | 2×2 | 40 | **Industry** (INT_CITY sprite 22 / grid 9, oficina) → Market |
-| Factory | `0xFA` `+3=0x0C` `+4=3E…46` `+19=0` | 3×3 | 80 | Industry → Factory (só Bakery; picker de goods fora de âmbito) |
+| Market | `0xFC` `+4=30,32,31,33` | 2×2 | 40 | **Industry** (INT_CITY sprite 21 / grid 8, bottles) → Market |
+| Factory | `0xFA` `+3=0x0C` `+4=3E…46` `+19` goods | 3×3 | 80 | Industry → Factory → type picker (C2.ENG Bakery + 7 named workshops) |
 
 Housing evolve `0x82–0xA1` **não** são botões da paleta. Aventine / Janiculan / Palatine **são** stamps de Forum (não evolve-only).
 
@@ -61,7 +61,7 @@ Place checks: civic recusa rio / prédio ocupado / (na maior parte) estrada. Pla
 | Farms | só província |
 | Housing extras (villa / palace grades) | evolve-only `0x82–0xA1` |
 | Fountain / Well / Garden stages | evolve / runtime, não botões |
-| Factory goods `+19` | só Bakery `0`; picker EXE fora de âmbito |
+| Factory leftover nibbles | gems/iron/clay/marble/silk (4/6/8/10/12) — no UI name |
 | Aqueduct LUT `0xCF–0xD6` completa | autotile parcial (NS/EW/junção) como antes |
 
 Unseen leftovers (não stamp): `0xAE`/`0xB0`, `0xB5`/`0xB6`/`0xB8`, `0xA9`/`0xAA`/`0xAD`, `0xD8–0xDA`, `0xDB`, `0xCC–0xCE`, `0xBC–0xBD`, `0xF1–0xF2`, Circus/C.Max pares `0xE9`/`0xEA` / `0xEF`/`0xF0` (o host carimba `EB+EC` / `ED+EE`).
@@ -69,19 +69,19 @@ Unseen leftovers (não stamp): `0xAE`/`0xB0`, `0xB5`/`0xB6`/`0xB8`, `0xA9`/`0xAA
 ## Paleta / chrome
 
 3 filas do EXE (`build_palette.md` §0) + 2 slots INT_CITY. Arte INT_CITY
-(não a ordem Cty Icn): house, road, forum, water, security, **health**,
-**industry**, entert, temple, educat, gardens. Labels: **Sanitation**
-(Baths / Hospital) no sprite da coluna, **Industry** (Market / Factory)
-no sprite da oficina.
+(decoded PL8 = Cty Icn): house, road, forum, water, security, **industry**,
+**health**, entert, temple, educat, gardens. Labels: **Industry**
+(Market / Factory types) no sprite 21 bottles, **Sanitation**
+(Baths / Hospital) no sprite 22 vessel+cross.
 
 ```
 Row 1: zoom in | clear | Housing | Roads | Forums
-Row 2: zoom out | Water | Security | Sanitation | Industry
+Row 2: zoom out | Water | Security | Industry | Sanitation
 Row 3: Query | Entert'ment | Worship | Education | Amenities
 ```
 
-Sprite 21 / grid 8 = Sanitation (coluna). Sprite 22 / grid 9 = Industry
-(oficina). Do not swap Worship / Entertainment / Education / Forums.
+Sprite 21 / grid 8 = Industry (bottles). Sprite 22 / grid 9 = Sanitation
+(vessel+cross). Do not swap Worship / Entertainment / Education / Forums.
 
 Sprites 4–5 continuam rotate (não páginas da paleta). Não há 4ª fila.
 

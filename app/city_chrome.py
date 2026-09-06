@@ -33,14 +33,18 @@ TOP_BAR_H = 24
 _FLOAT_X0 = 244
 _FLOAT_Y0 = 211
 
-# INT_CITY sprites 13–27 left-to-right, top-to-bottom. Artwork wins over
-# HELP.ENG Cty Icn string order: sprite 21 is the marble column
-# (Sanitation → Baths / Hospital), sprite 22 is the workshop / vessels
-# (Industry → Market / Factory). Keys stay health / commerce.
+# INT_CITY sprites 13–27 left-to-right, top-to-bottom. Decoded frames
+# (CITY1.256): sprite 21 = blue/green bottles → Industry; sprite 22 =
+# dark vessel + green cross → Sanitation. HELP.ENG Cty Icn is the same
+# order (Industry then Sanitation). Bind flyout CONTENT to the picture.
 _ROW1 = ("zoom_in", "clear", "housing", "roads", "forums")
-_ROW2 = ("zoom_out", "water", "security", "health", "commerce")
+_ROW2 = ("zoom_out", "water", "security", "commerce", "health")
 _ROW3 = ("query", "entertainment", "worship", "education", "amenities")
 _GRID_ACTIONS: tuple[str, ...] = _ROW1 + _ROW2 + _ROW3
+# sprite index 13+i → action. Proof dump for the crossed-menu bug.
+SPRITE_GRID = tuple(
+    (13 + i, _GRID_ACTIONS[i]) for i in range(15)
+)
 
 # First of the 3×5 in INT_CITY (sprite 13).
 _GRID_SPRITE0 = 13
@@ -50,6 +54,12 @@ _SPEED_SPRITE_ACTIONS: dict[int, str] = {
     6: "speed_pause",
     7: "speed_play",
     8: "speed_fast",
+}
+# INT_CITY 10–12 — city / people (Forum advisor) / province. 52×26 at y=235.
+_VIEW_SPRITE_ACTIONS: dict[int, str] = {
+    10: "view_city",
+    11: "view_forum",
+    12: "view_province",
 }
 
 _LABEL = {
@@ -72,6 +82,9 @@ _LABEL = {
     "speed_pause": "Pause",
     "speed_play": "Play",
     "speed_fast": "Faster",
+    "view_city": "City",
+    "view_forum": "Forum",
+    "view_province": "Province",
 }
 
 _PLACEABLE = {
@@ -111,7 +124,9 @@ class CityChrome:
         hits = _hits_from_records(packed)
         if not hits:
             return cls._fallback(frames=frames, dests=dests, source="int_city+fallback-hits")
+        hits = _expand_grid_hits(hits)
         hits = _with_speed_hits(hits, packed)
+        hits = _with_view_hits(hits, packed)
         hits = _with_overlay_well(hits)
         return cls(frames=frames, dests=dests, hits=hits, source="int_city.pl8")
 
@@ -134,6 +149,7 @@ class CityChrome:
                     ChromeHit(action, _LABEL.get(action, action), (x, y, w, h))
                 )
         hits = _with_speed_fallback(hits)
+        hits = _with_view_fallback(hits)
         hits = _with_overlay_well(hits)
         return cls(frames=frames or [], dests=dests or [], hits=hits, source=source)
 
@@ -143,6 +159,7 @@ class CityChrome:
         return x >= SIDEBAR_X + ox and y < SCREEN_H
 
     def hit_test(self, x: int, y: int, ox: int = 0) -> ChromeHit | None:
+        """Hitboxes live in native 640 space. ``ox`` is the maximize slide."""
         nx = x - ox
         for hit in self.hits:
             rx, ry, rw, rh = hit.rect
@@ -231,6 +248,30 @@ def _hits_from_records(
     return hits
 
 
+def _expand_grid_hits(hits: list[ChromeHit]) -> list[ChromeHit]:
+    """Tile the 3×5 so maximize / ``ox`` clicks hit the picture, not a gap."""
+    grid = [h for h in hits if h.action in _GRID_ACTIONS]
+    extra = [h for h in hits if h.action not in _GRID_ACTIONS]
+    if len(grid) != 15:
+        return hits
+    xs = [h.rect[0] for h in grid]
+    ys = [h.rect[1] for h in grid]
+    x1 = max(h.rect[0] + h.rect[2] for h in grid)
+    y1 = max(h.rect[1] + h.rect[3] for h in grid)
+    x0, y0 = min(xs), min(ys)
+    cw = max(1, x1 - x0)
+    ch = max(1, y1 - y0)
+    grown: list[ChromeHit] = []
+    for i, hit in enumerate(grid):
+        col, row = i % 5, i // 5
+        rx = x0 + (col * cw) // 5
+        ry = y0 + (row * ch) // 3
+        rw = x0 + ((col + 1) * cw) // 5 - rx
+        rh = y0 + ((row + 1) * ch) // 3 - ry
+        grown.append(ChromeHit(hit.action, hit.label, (rx, ry, max(1, rw), max(1, rh))))
+    return extra + grown
+
+
 def _with_speed_hits(
     hits: list[ChromeHit], packed: list[tuple[Image.Image, int, int]]
 ) -> list[ChromeHit]:
@@ -257,6 +298,36 @@ def _with_speed_fallback(hits: list[ChromeHit]) -> list[ChromeHit]:
     for i, action in enumerate(("speed_pause", "speed_play", "speed_fast")):
         extra.append(
             ChromeHit(action, _LABEL[action], (x0 + i * 32, y0, 30, 22))
+        )
+    return extra + hits
+
+
+def _with_view_hits(
+    hits: list[ChromeHit], packed: list[tuple[Image.Image, int, int]]
+) -> list[ChromeHit]:
+    dx = SIDEBAR_X - _FLOAT_X0
+    dy = SIDEBAR_Y - _FLOAT_Y0
+    extra: list[ChromeHit] = []
+    for idx, action in _VIEW_SPRITE_ACTIONS.items():
+        if idx >= len(packed):
+            continue
+        img, sx, sy = packed[idx]
+        extra.append(
+            ChromeHit(
+                action,
+                _LABEL.get(action, action),
+                (sx + dx, sy + dy, img.width, img.height),
+            )
+        )
+    return extra + hits
+
+
+def _with_view_fallback(hits: list[ChromeHit]) -> list[ChromeHit]:
+    extra: list[ChromeHit] = []
+    x0, y0 = SIDEBAR_X + 6, SIDEBAR_Y + 28
+    for i, action in enumerate(("view_city", "view_forum", "view_province")):
+        extra.append(
+            ChromeHit(action, _LABEL[action], (x0 + i * 52, y0, 50, 22))
         )
     return extra + hits
 
@@ -293,5 +364,5 @@ def action_for_tool(tool: str | None) -> str | None:
 
 
 def grid_action_at(index: int) -> str:
-    """INT_CITY 3×5 cell. 8 = Sanitation (sprite 21 column), 9 = Industry (sprite 22)."""
+    """INT_CITY 3×5 cell. 8 = Industry (sprite 21 bottles), 9 = Sanitation (sprite 22)."""
     return _GRID_ACTIONS[index]

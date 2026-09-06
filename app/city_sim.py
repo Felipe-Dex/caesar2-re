@@ -207,6 +207,7 @@ class SimState:
     treasury: int = 0
     ratings_seed: int = 0
     tax_rate: int = 5
+    industrial_tax: int = 5
     history: bytearray = field(default_factory=lambda: bytearray(4000))
     # sim_tick_due 0x3E4B9 / view_frame catch-up. Original starts unpaused.
     paused: bool = False
@@ -214,7 +215,38 @@ class SimState:
     catchup: int = 0  # [0xC45A0] 0 → 1 pulse; ≠0 → 4
     tick_acc: int = 0  # [0x117ACC] ms accumulator
     population: int = 0  # [0x102AB0] — emit needs >= 2
+    pop_peak: int = 0  # FAQ latch: unlocks stay after pop drops
     flood_dir: int = 0  # [0x102678] 0…3
+    # Forum / PLEBS — chunks 52 / 54 / 55 / 56. Oracle 286–289 + avg 46.
+    # New City Only: forum.init_city_only_labor (0x563E2 / 0x346F6 / 0x3FCA0).
+    plebs_ready: int = 0
+    plebs_estimate: int = 0
+    plebs_last: int = 0
+    welfare: int = 0
+    labor_index: int = 1  # [0x1025C8] = skill*2+1 (0x346F6)
+    labor_assigned: list = field(default_factory=lambda: [0] * 7)
+    labor_need: list = field(default_factory=lambda: [0] * 7)
+    employed_pct: int = 0
+    tax_wealth: int = 0  # [0x1028EC] market-served housing
+    ind_wealth: int = 0  # [0x102934] factory stock×70
+    factory_count: int = 0  # 0xFA origins; av-bill stand-in for [0x10279c]
+    tribute: int = 0  # chunk 157; City Only stays 0
+    tax_ytd: int = 0  # [0x102924] raw pop-tax accumulator
+    tax_months: int = 0  # [0x1028E4]
+    ind_tax_ytd: int = 0  # [0x102908]
+    ind_tax_months: int = 0  # [0x1028F4]
+    operating_ytd: int = 0  # [0x102A60] welfare already spent this year
+    construct_ytd: int = 0  # [0x102A2C]
+    surplus_last: int = 0
+    pop_tax_last: int = 0
+    ind_tax_last: int = 0
+    construct_last: int = 0
+    operating_last: int = 0
+    rating_empire: int = 0
+    rating_peace: int = 0
+    rating_prosperity: int = 0
+    rating_culture: int = 0
+    rating_avg: int = 0
 
     @property
     def date(self) -> GameDate:
@@ -273,6 +305,9 @@ def load_sim_from_sav(
     treasury = 0
     if len(chunks) > 28 and len(chunks[28]) >= 4:
         treasury = _chunk_i32(chunks, 28, 0)
+    assigned, need = _load_labor_table(chunks)
+    skill = _chunk_i32(chunks, 16, 0)
+    city_only = _chunk_i32(chunks, 406, 0)
     return SimState(
         phase=phase,
         row=_chunk_i32(chunks, ROW_CHUNK, 0),
@@ -280,8 +315,45 @@ def load_sim_from_sav(
         month=month,
         week_gate=_chunk_i32(chunks, WEEK_GATE_CHUNK, 0),
         source=path.name,
+        skill=skill,
+        city_only=city_only,
         treasury=treasury,
+        tax_rate=_chunk_i32(chunks, 29, 5),
+        industrial_tax=_chunk_i32(chunks, 30, 5),
+        labor_index=max(0, min(4, skill)) * 2 + 1,
+        population=_chunk_i32(chunks, 32, 0),
+        employed_pct=_chunk_i32(chunks, 31, 0),
+        plebs_ready=_chunk_i32(chunks, 52, 0),
+        plebs_estimate=_chunk_i32(chunks, 55, 0),
+        plebs_last=_chunk_i32(chunks, 52, 0),
+        welfare=_chunk_i32(chunks, 54, 0),
+        labor_assigned=assigned,
+        labor_need=need,
+        tribute=0 if city_only else _chunk_i32(chunks, 157, 0),
+        surplus_last=_chunk_i32(chunks, 33, 0),
+        pop_tax_last=_chunk_i32(chunks, 34, 0),
+        ind_tax_last=_chunk_i32(chunks, 35, 0),
+        construct_last=_chunk_i32(chunks, 36, 0),
+        operating_last=_chunk_i32(chunks, 37, 0),
+        rating_empire=_chunk_i32(chunks, 286, 0),
+        rating_peace=_chunk_i32(chunks, 287, 0),
+        rating_prosperity=_chunk_i32(chunks, 288, 0),
+        rating_culture=_chunk_i32(chunks, 289, 0),
+        rating_avg=_chunk_i32(chunks, 46, 0),
     )
+
+
+def _load_labor_table(chunks: Sequence[memoryview]) -> tuple[list[int], list[int]]:
+    """Chunk 56: 8 pairs assigned/need (last pair = idle / pad)."""
+    assigned = [0] * 7
+    need = [0] * 7
+    if len(chunks) <= 56 or len(chunks[56]) < 56:
+        return assigned, need
+    raw = chunks[56]
+    for i in range(7):
+        assigned[i] = struct.unpack_from("<i", raw, i * 8)[0]
+        need[i] = struct.unpack_from("<i", raw, i * 8 + 4)[0]
+    return assigned, need
 
 
 def _decay_coverage(tiles: bytearray, off: int) -> None:
@@ -476,8 +548,10 @@ def _has_pad_neighbor(tiles: bytearray, x: int, y: int) -> bool:
     return False
 
 
-def house_stay_reason(tiles: bytearray, x: int, y: int) -> str:
+def house_stay_reason(tiles: bytearray, x: int, y: int, *, population: int = 0) -> str:
     """Why this origin did not (or would not) change grade this pulse."""
+    from app.city_paint import housing_cap_detail, service_target_lv
+
     off = _off(x, y)
     hid = tiles[off]
     if not (ID_HOUSING_LO <= hid <= ID_HOUSING_HI):
@@ -489,7 +563,15 @@ def house_stay_reason(tiles: bytearray, x: int, y: int) -> str:
     water = tiles[off + 13] & 0x03
     plus17 = i8(tiles[off + 17])
     stay_lo, stay_hi = EVOLVE_MIN[grade], EVOLVE_MAX[grade]
-    bits = [f"id={hid:#x}", f"+15={lv}", f"stay={stay_lo}..{stay_hi}"]
+    cap, gate = housing_cap_detail(tiles, x, y, population=population)
+    target = service_target_lv(lv, cap)
+    bits = [
+        f"id={hid:#x}",
+        f"+15={lv}",
+        f"target={target}",
+        f"stay={stay_lo}..{stay_hi}",
+        f"cap={cap}",
+    ]
     if water == 0:
         bits.append("no-water +13")
     else:
@@ -498,6 +580,9 @@ def house_stay_reason(tiles: bytearray, x: int, y: int) -> str:
         bits.append("no-road")
     if plus17:
         bits.append(f"+17={plus17}")
+    bits.append(gate)
+    if hid < 0x8E:
+        bits.append(f"need-insula cap>=24 (have {cap})")
     if lv < stay_lo:
         bits.append("would-down")
     elif lv > stay_hi:
@@ -507,7 +592,9 @@ def house_stay_reason(tiles: bytearray, x: int, y: int) -> str:
     return " ".join(bits)
 
 
-def diagnose_housing_row(tiles: bytearray, y: int, *, limit: int = 4) -> list[str]:
+def diagnose_housing_row(
+    tiles: bytearray, y: int, *, limit: int = 4, population: int = 0
+) -> list[str]:
     out: list[str] = []
     if not (0 <= y < MAP_H):
         return out
@@ -517,14 +604,20 @@ def diagnose_housing_row(tiles: bytearray, y: int, *, limit: int = 4) -> list[st
             continue
         hid = tiles[off]
         if ID_HOUSING_LO <= hid <= ID_HOUSING_HI:
-            out.append(f"({x},{y}) {house_stay_reason(tiles, x, y)}")
+            out.append(
+                f"({x},{y}) {house_stay_reason(tiles, x, y, population=population)}"
+            )
             if len(out) >= limit:
                 break
     return out
 
 
-def evolve_row(tiles: bytearray, y: int, *, decay: bool = True) -> tuple[int, int, int]:
+def evolve_row(
+    tiles: bytearray, y: int, *, decay: bool = True, population: int = 0
+) -> tuple[int, int, int]:
     """city_buildings_evolve_row 0x42360 for one map row. Housing only."""
+    from app.city_paint import housing_cap_detail, service_target_lv
+
     up = down = merge = 0
     if not (0 <= y < MAP_H):
         return 0, 0, 0
@@ -539,11 +632,16 @@ def evolve_row(tiles: bytearray, y: int, *, decay: bool = True) -> tuple[int, in
             continue
         grade = hid - 0x82
         if grade >= 30:
-            lv = _block_lv(tiles, x, y, 3)
+            raw = _block_lv(tiles, x, y, 3)
         elif grade >= 26:
-            lv = _block_lv(tiles, x, y, 2)
+            raw = _block_lv(tiles, x, y, 2)
         else:
-            lv = i8(tiles[off + 15])
+            raw = i8(tiles[off + 15])
+        cap, _gate = housing_cap_detail(tiles, x, y, population=population)
+        raised = service_target_lv(raw, cap)
+        lv = raised if raised > raw else raw
+        if lv != raw:
+            tiles[off + 15] = lv & 0xFF
         if lv < EVOLVE_MIN[grade]:
             if _evolve_down(tiles, x, y, grade):
                 down += 1
@@ -557,15 +655,36 @@ def evolve_row(tiles: bytearray, y: int, *, decay: bool = True) -> tuple[int, in
     return up, down, merge
 
 
-def evolve_all_rows(tiles: bytearray, *, decay: bool = True) -> tuple[int, int, int]:
+def evolve_all_rows(
+    tiles: bytearray, *, decay: bool = True, population: int = 0
+) -> tuple[int, int, int]:
     """Host-only: all 80 evolve rows. Not one EXE pulse."""
     up = down = merge = 0
     for y in range(MAP_H):
-        u, d, m = evolve_row(tiles, y, decay=decay)
+        u, d, m = evolve_row(tiles, y, decay=decay, population=population)
         up += u
         down += d
         merge += m
     return up, down, merge
+
+
+def diagnose_hut_insula(tiles: bytearray, *, population: int = 0, limit: int = 4) -> list[str]:
+    """Why 0x83–0x8D origins have not reached primitive insula 0x8E."""
+    out: list[str] = []
+    for y in range(MAP_H):
+        for x in range(MAP_W):
+            off = _off(x, y)
+            if tiles[off + 5] & 0xF:
+                continue
+            hid = tiles[off]
+            if 0x83 <= hid < 0x8E:
+                out.append(
+                    f"hut-not-insula ({x},{y}) "
+                    f"{house_stay_reason(tiles, x, y, population=population)}"
+                )
+                if len(out) >= limit:
+                    return out
+    return out
 
 
 def _phase_wrap(state: SimState) -> bool:
@@ -669,15 +788,23 @@ def city_sim_phase(
     can = len(tiles) >= MAP_W * MAP_H * TILE_STRIDE
 
     if can:
-        state.population = recount_population(tiles)
+        from app.unlocks import note_population
+
+        note_population(state, recount_population(tiles))
 
     if 1 <= phase <= 0x50:
         row = phase - 1
         state.row = row
         if can:
-            up, down, merge = evolve_row(tiles, row, decay=state.wrap3 == 0)
-            state.population = recount_population(tiles)
-            stays = diagnose_housing_row(tiles, row)
+            up, down, merge = evolve_row(
+                tiles, row, decay=state.wrap3 == 0, population=state.population
+            )
+            from app.unlocks import note_population
+
+            note_population(state, recount_population(tiles))
+            stays = diagnose_housing_row(
+                tiles, row, population=state.population
+            )
             if stays:
                 note = f"n={len(stays)} " + "; ".join(stays)
     elif phase == 0x51 and can:
@@ -717,13 +844,25 @@ def city_sim_phase(
         state.row = y0
         painted = cap_housing_plus15(tiles, y0, n, population=state.population)
         note = f"capped={painted} pop={state.population}"
+        if painted:
+            stalls = diagnose_hut_insula(tiles, population=state.population, limit=2)
+            if stalls:
+                note += " " + "; ".join(stalls)
     elif 0x8E <= phase <= 0x9D and can:
         y0, n = _band20(phase, 0x8E if phase <= 0x91 else (
             0x92 if phase <= 0x95 else (0x96 if phase <= 0x99 else 0x9A)
         ))
         state.row = y0
+        if phase <= 0x91:
+            kinds = "forum"
+        elif phase <= 0x95:
+            kinds = "tower"
+        elif phase <= 0x99:
+            kinds = "security"
+        else:
+            kinds = "market"
         spawned = emit_walkers(
-            tiles, walkers, y0, n, population=state.population
+            tiles, walkers, y0, n, population=state.population, kinds=kinds
         )
         note = wt.LAST_EMIT_NOTE or f"pop={state.population}"
     elif 0xA2 <= phase <= 0xC1 and can:
@@ -792,6 +931,18 @@ def city_sim_phase(
             f"{state.date_label}  WRAP  pop={state.population}  "
             f"houses={{{house_bits}}}  walkers={_walker_live_count(walkers)}"
         )
+        if can:
+            from app.city_paint import housing_tax_wealth, industry_tax_wealth
+
+            state.tax_wealth = housing_tax_wealth(tiles)
+            state.ind_wealth = industry_tax_wealth(tiles)
+            for line in diagnose_hut_insula(
+                tiles, population=state.population, limit=4
+            ):
+                write(f"{state.date_label}  {line}")
+        from app.forum import collect_monthly_tax
+
+        collect_monthly_tax(state)
 
     return PhaseResult(
         phase=phase,
@@ -1114,6 +1265,48 @@ def selftest() -> list[str]:
     )
 
     tiles = _blank_tiles()
+    toff = _off(8, 9)
+    tiles[toff] = 0x82
+    tiles[toff + 1] = 0x01
+    tiles[toff + 13] = 0x01
+    from app.city_paint import cap_housing_plus15, housing_cap_detail
+
+    cap, gate = housing_cap_detail(tiles, 8, 9, population=2)
+    cap_housing_plus15(tiles, 8, 2, population=2)
+    ids = []
+    for _ in range(4):
+        evolve_row(tiles, 9, decay=False, population=2)
+        ids.append(tiles[toff])
+    ok = cap == 6 and tiles[toff] >= 0x85 and tiles[toff + 15] >= 6
+    lines.append(
+        f"watered tent climbs huts (no market): {'ok' if ok else 'FAIL'} "
+        f"ids={[hex(i) for i in ids]} +15={tiles[toff + 15]} cap={cap} {gate}"
+    )
+
+    tiles = _blank_tiles()
+    foff = _off(8, 8)
+    tiles[foff] = 0xDD
+    tiles[foff + 1] = 0x01
+    tiles[foff + 13] = 4
+    for dx, dy in ((0, 1), (1, 1), (1, 0)):
+        h = _off(8 + dx, 8 + dy)
+        tiles[h] = 0x83
+        tiles[h + 1] = 0x01
+        tiles[h + 13] = 0x01
+    from app.city_paint import paint_land_value
+
+    paint_land_value(tiles, 8, 2)
+    cap_housing_plus15(tiles, 8, 2, population=12)
+    lv_grid = [tiles[_off(8 + dx, 8 + dy) + 15] for dy in range(1, 2) for dx in range(2)]
+    evolve_row(tiles, 9, decay=False, population=12)
+    hid_grid = [tiles[_off(8 + dx, 9) ] for dx in range(2)]
+    ok = all(v >= 6 for v in lv_grid) and all(h >= 0x84 for h in hid_grid)
+    lines.append(
+        f"dense huts not pinned at +15=2: {'ok' if ok else 'FAIL'} "
+        f"+15={lv_grid} ids={[hex(h) for h in hid_grid]}"
+    )
+
+    tiles = _blank_tiles()
     foff = _off(8, 8)
     tiles[foff] = 0xDD
     tiles[foff + 1] = 0x01
@@ -1163,6 +1356,34 @@ def selftest() -> list[str]:
     )
 
     tiles = _blank_tiles()
+    for dy in range(2):
+        for dx in range(2):
+            moff = _off(20 + dx, 20 + dy)
+            tiles[moff] = 0xFC
+            tiles[moff + 1] = 0x01
+            tiles[moff + 5] = dy * 2 + dx
+    tiles[_off(20, 22)] = 0x52
+    tiles[_off(20, 22) + 1] = 0x20
+    tiles[_off(21, 22)] = 0x52
+    tiles[_off(21, 22) + 1] = 0x20
+    walkers = []
+    nsp = emit_walkers(tiles, walkers, 20, 3, population=4, kinds="market")
+    live = live_walkers(walkers)
+    sid = live[0].sprite_id if live else -1
+    ok = (
+        nsp >= 1
+        and len(live) >= 1
+        and live[0].type == 2
+        and live[0].next_state == 4
+        and 0x1B <= sid < 0x1B + 27
+    )
+    lines.append(
+        f"market emit type 2: {'ok' if ok else 'FAIL'} "
+        f"n={nsp} live={len(live)} type={live[0].type if live else 0} "
+        f"next={live[0].next_state if live else -1} sprite={sid}"
+    )
+
+    tiles = _blank_tiles()
     toff = _off(8, 9)
     tiles[toff] = 0x82
     tiles[toff + 1] = 0x01
@@ -1190,9 +1411,39 @@ def selftest() -> list[str]:
         f"walkers={len(live)} water={water:#x} {state.date_label}"
     )
 
+    tiles = _blank_tiles()
+    toff = _off(8, 9)
+    tiles[toff] = 0x82
+    tiles[toff + 1] = 0x01
+    tiles[_off(9, 9)] = 0x52
+    tiles[_off(9, 9) + 1] = 0x20
+    roff = _off(10, 8)
+    tiles[roff] = 0xBE
+    tiles[roff + 1] = 0x80
+    tiles[roff + 10] = 3
+    foff = _off(8, 8)
+    tiles[foff] = 0xDD
+    tiles[foff + 1] = 0x01
+    state = SimState(phase=1, year_raw=-300, month=0, city_only=1)
+    for _ in range(4):
+        city_sim_until_wrap(tiles, state)
+    reason = house_stay_reason(tiles, 8, 9, population=state.population)
+    ok = (
+        tiles[toff] >= 0x85
+        and tiles[toff] < 0x8E
+        and "no-food" in reason
+        and "need-insula" in reason
+    )
+    lines.append(
+        f"4 months water-only stops before insula: {'ok' if ok else 'FAIL'} "
+        f"id={tiles[toff]:#x} +15={tiles[toff + 15]} {reason}"
+    )
+
     from app.walker_tick import selftest as walker_selftest
+    from app.walker_quotes import selftest as quote_selftest
 
     lines.extend(walker_selftest())
+    lines.extend(quote_selftest())
 
     from app.sim_log import LOG_PATH, last_line
 

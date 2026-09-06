@@ -1,10 +1,10 @@
 """City build flyouts — Water / Security / Amenities plus remaining menus.
 
-English labels match HELP.ENG. INT_CITY artwork (not Cty Icn string
-order) puts Sanitation on the marble-column sprite then Industry on
-the workshop sprite — ``health`` then ``commerce``. Arena stays stub
-(no SAV origin). Senate / farms are not city stamps. INT_CITY 3×5
-hitboxes stay in ``city_chrome``.
+Decoded INT_CITY frames bind content to the picture: sprite 21 bottles
+→ Industry (Market / Factory types), sprite 22 vessel+cross → Sanitation
+(Baths / Hospital). HELP.ENG Cty Icn is the same order. Title and items
+stay paired. Arena stays leftover (no SAV origin). Factory opens the
+goods picker (HELP: eight kinds of Business; C2.ENG [61] Bakery).
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from PIL import Image, ImageDraw, ImageFont
 
 from app.city_chrome import SIDEBAR_X, action_for_tool as _chrome_action
+from app.unlocks import POP_UNLOCK, peak_population
 from app.place import (
     TOOL_AQUEDUCT,
     TOOL_AVENTINE,
@@ -47,6 +48,7 @@ from app.place import (
     TOOL_TOWER,
     TOOL_WALL,
     TOOL_WELL,
+    set_factory_goods,
 )
 
 # Direct grid buttons (no flyout).
@@ -124,8 +126,23 @@ _TOOL_HINT = {
     TOOL_BATHS: "Baths 0xDF 2×2 (custo 30; stamp-follow)",
     TOOL_HOSPITAL: "Hospital 0xFB 3×3 (custo 500; stamp-follow)",
     TOOL_MARKET: "Market 0xFC 2×2 (custo 40; stamp-follow)",
-    TOOL_FACTORY: "Factory 0xFA 3×3 (custo 80; +19=0 Bakery)",
+    TOOL_FACTORY: "Factory 0xFA 3×3 (custo 80; goods picker +19)",
 }
+
+
+# HELP.ENG: "Markets, and eight kinds of Business." C2.ENG [61] Bakery.
+# Other UI names from factory.md (origin +19, Achea / D.SAV / 20230610).
+# Leftover EXE nibbles 4/6/8/10/12 (gems/iron/clay/marble/silk) have no UI name.
+FACTORY_KINDS: tuple[tuple[int, str], ...] = (
+    (0, "Bakery"),
+    (1, "Winery"),
+    (2, "Butcher"),
+    (3, "Tailor"),
+    (5, "Lead Works"),
+    (7, "Copper Works"),
+    (9, "Glass Works"),
+    (11, "Stone Works"),
+)
 
 
 @dataclass(frozen=True)
@@ -134,6 +151,7 @@ class FlyoutItem:
     label: str
     tool: str | None
     hint: str
+    goods: int | None = None
 
 
 # Nested names from build_palette.md §0. tool=None → ainda não.
@@ -183,7 +201,17 @@ _FLYOUTS: dict[str, tuple[FlyoutItem, ...]] = {
     ),
     "commerce": (
         FlyoutItem("market", "Market", TOOL_MARKET, _TOOL_HINT[TOOL_MARKET]),
-        FlyoutItem("factory", "Factory", TOOL_FACTORY, _TOOL_HINT[TOOL_FACTORY]),
+        FlyoutItem("factory", "Factory", None, "Factory 0xFA — choose goods type"),
+    ),
+    "factory_types": tuple(
+        FlyoutItem(
+            f"factory_{nibble}",
+            name,
+            TOOL_FACTORY,
+            f"Factory 0xFA 3×3 +19={nibble} {name}",
+            goods=nibble,
+        )
+        for nibble, name in FACTORY_KINDS
     ),
 }
 
@@ -214,11 +242,18 @@ class PaletteState:
     open: str | None = None
     hits: list[FlyoutHit] = field(default_factory=list)
     _anchor: tuple[int, int, int, int] | None = None
+    pop_peak: int = 0
+    factory_goods: int = 0
 
     def close(self) -> None:
         self.open = None
         self.hits = []
         self._anchor = None
+
+    def sync_unlocks(self, sim) -> None:
+        self.pop_peak = peak_population(sim)
+        if self.open is not None:
+            self._rebuild_hits()
 
     def hit_test(self, x: int, y: int, ox: int = 0) -> FlyoutHit | None:
         nx = x - ox
@@ -231,13 +266,34 @@ class PaletteState:
     def covers(self, x: int, y: int, ox: int = 0) -> bool:
         return self.hit_test(x, y, ox=ox) is not None
 
+    def _items_for(self, action: str) -> tuple[FlyoutItem, ...]:
+        items = _FLYOUTS.get(action)
+        if not items:
+            return ()
+        out: list[FlyoutItem] = []
+        for it in items:
+            need = POP_UNLOCK.get(it.key, 0)
+            if need and self.pop_peak < need:
+                out.append(
+                    FlyoutItem(
+                        it.key,
+                        it.label,
+                        None,
+                        f"leftover — pop {need} (FAQ / C2MODEL)",
+                        it.goods,
+                    )
+                )
+            else:
+                out.append(it)
+        return tuple(out)
+
     def click_grid(self, action: str, anchor: tuple[int, int, int, int] | None = None) -> ClickResult:
         if action in _DIRECT:
             self.close()
             tool = _DIRECT[action]
             return ClickResult(tool, f"ferramenta: {_TOOL_HINT[tool]}")
-        items = _FLYOUTS.get(action)
-        if items is None:
+        items = self._items_for(action)
+        if not items and action not in _FLYOUTS:
             self.close()
             return ClickResult(None, f"{action} — ainda não")
         if self.open == action:
@@ -254,8 +310,13 @@ class PaletteState:
             if hit.key != key:
                 continue
             item = hit.item
+            if key == "factory":
+                return self.click_grid("factory_types", self._anchor)
             if item.tool is None:
                 return ClickResult(None, item.hint, keep_tool=True)
+            if item.goods is not None:
+                self.factory_goods = item.goods & 0xF
+                set_factory_goods(self.factory_goods)
             return ClickResult(item.tool, f"ferramenta: {item.hint}")
         return ClickResult(None, "flyout", keep_tool=True)
 
@@ -263,7 +324,7 @@ class PaletteState:
         self.hits = []
         if self.open is None:
             return
-        items = _FLYOUTS.get(self.open)
+        items = self._items_for(self.open)
         if not items:
             return
         ax, ay, _aw, _ah = self._anchor or (SIDEBAR_X, 208, 30, 24)
@@ -311,6 +372,7 @@ _LABEL = {
     "education": "Education",
     "health": "Sanitation",
     "commerce": "Industry",
+    "factory_types": "Factory",
 }
 
 
@@ -400,20 +462,46 @@ def selftest() -> list[str]:
     else:
         lines.append("ok    Sanitation → Baths 0xDF")
     r = pal.click_grid("commerce", (478, 330, 30, 24))
-    r = pal.click_item("factory")
-    if r.tool != TOOL_FACTORY:
-        lines.append(f"FAIL  commerce {r.message}")
+    if pal.open != "commerce" or "Market" not in r.message or "Factory" not in r.message:
+        lines.append(f"FAIL  industry items {r.message}")
     else:
-        lines.append("ok    Industry → Factory 0xFA")
-    from app.city_chrome import grid_action_at
+        lines.append("ok    Industry title + Market/Factory items")
+    r = pal.click_item("factory")
+    if pal.open != "factory_types" or r.tool is not None:
+        lines.append(f"FAIL  factory picker {r.message} open={pal.open}")
+    else:
+        lines.append("ok    Factory abre type picker")
+    r = pal.click_item("factory_1")
+    if r.tool != TOOL_FACTORY or pal.factory_goods != 1:
+        lines.append(f"FAIL  winery {r.message} goods={pal.factory_goods}")
+    else:
+        lines.append("ok    Factory type Winery +19=1")
+    pal.pop_peak = 0
+    r = pal.click_grid("forums", (478, 280, 30, 24))
+    r = pal.click_item("palatine")
+    if r.tool is not None or "leftover" not in r.message:
+        lines.append(f"FAIL  palatine locked {r.message}")
+    else:
+        lines.append("ok    Palatine leftover at pop 0")
+    pal.pop_peak = 1800
+    pal.close()
+    r = pal.click_grid("forums", (478, 280, 30, 24))
+    r = pal.click_item("palatine")
+    if r.tool != TOOL_PALATINE:
+        lines.append(f"FAIL  palatine unlock {r.message}")
+    else:
+        lines.append("ok    Palatine unlock at pop 1800")
+    from app.city_chrome import SPRITE_GRID, grid_action_at
 
-    if grid_action_at(8) != "health" or grid_action_at(9) != "commerce":
+    if grid_action_at(8) != "commerce" or grid_action_at(9) != "health":
         lines.append(
             f"FAIL  row2 extras {grid_action_at(8)}/{grid_action_at(9)} "
-            "(want health/commerce = column Sanitation then workshop Industry)"
+            "(want commerce/health = sprite 21 bottles Industry then 22 vessel Sanitation)"
         )
+    elif SPRITE_GRID[8] != (21, "commerce") or SPRITE_GRID[9] != (22, "health"):
+        lines.append(f"FAIL  sprite dump {SPRITE_GRID[8]} {SPRITE_GRID[9]}")
     else:
-        lines.append("ok    sprite 21 Sanitation / sprite 22 Industry")
+        lines.append("ok    sprite 21 Industry bottles / sprite 22 Sanitation vessel")
     if _LABEL.get("health") != "Sanitation" or _LABEL.get("commerce") != "Industry":
         lines.append("FAIL  flyout labels")
     else:

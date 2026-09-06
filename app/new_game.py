@@ -27,6 +27,7 @@ from app.city_map import (
 )
 from app.city_sim import SimState
 from app.config import find_file
+from app.forum import init_city_only_labor
 from app.walkers import Walker
 
 # C2.ENG [42] / [43]: Novice … Impossible!  chunk 16 = 0…4
@@ -443,7 +444,13 @@ def start_city_assignment(
         treasury=treasury,
         ratings_seed=ratings,
         tax_rate=5,
+        industrial_tax=5,
         history=bytearray(SAV_HISTORY_BYTES),
+    )
+    init_city_only_labor(sim)
+    notes.append(
+        f"labor_init 0x563E2: ready={sim.plebs_ready} welfare={sim.welfare} "
+        f"assigned={list(sim.labor_assigned)}"
     )
     return NewCity(
         city=city,
@@ -501,4 +508,12 @@ def selftest(*, seed: int = 1) -> list[str]:
         lines.append("FAIL  rubble 0x05 on the map")
     if zero == MAP_W * MAP_H:
         lines.append("FAIL  80x80 still zeros")
+    fresh = start_city_assignment(skill=2, rng=ExeRng.from_seed(seed))
+    if fresh.sim.plebs_ready != 42 or fresh.sim.labor_assigned[0] != 20:
+        lines.append(
+            f"FAIL  labor init ready={fresh.sim.plebs_ready} "
+            f"asg={fresh.sim.labor_assigned}"
+        )
+    else:
+        lines.append("ok    City Only Normal labor ready 42 assigned 20/12/4/4")
     return lines

@@ -31,19 +31,20 @@ python -m app --new --city-only --no-audio
 | Sprite 3 | `(478,368)` 162×112 | relevo de pedra (fundo; **não** é o minimapa) |
 | Sprites 13–27 | xy flutuante `(245,287)`… | os 15 ícones da grelha, origem de autor `(244,211)` |
 
-As 3 filas (`build_palette.md`). HELP.ENG Cty Icn lista industry then
-health; a **arte** de INT_CITY (sprite 21 = coluna de mármore, sprite 22
-= oficina / vasos) é a fonte para o clique:
+As 3 filas (`build_palette.md`). HELP.ENG Cty Icn e os frames
+decodificados de INT_CITY coincidem: sprite 21 = garrafas (Industry),
+sprite 22 = vaso + cruz verde (Sanitation):
 
 ```
 Row 1: zoom in | clear | Housing | Roads | Forums
-Row 2: zoom out | Water | Security | Sanitation | Industry
+Row 2: zoom out | Water | Security | Industry | Sanitation
 Row 3: Query | Entert'ment | Worship | Education | Amenities
 ```
 
-Sprite 21 / grid 8 = Sanitation (Baths / Hospital) — coluna. Sprite 22 /
-grid 9 = Industry (Market / Factory) — oficina. Labels HELP; hitbox pela
-arte. `ox` (janela > 640) desloca o strip 162 px e os rects no clique.
+Sprite 21 / grid 8 = Industry (Market / Factory) — garrafas. Sprite 22 /
+grid 9 = Sanitation (Baths / Hospital) — vaso+cruz. Title e items no
+mesmo click path. `ox` (janela > 640) desloca o strip 162 px e os rects
+no clique (hitboxes da 3×5 preenchidas, sem gaps).
 
 C2.ENG: **[23]** `Tent`, **[73]** `Query`, **[29]** `Treasury`, **[51]** `Cost: `. Housing / Roads / Water **não** são slots ENG (EXE / HELP). **[12]** `Reservoir` é o 1º do flyout Water — o host **já** carimba `0xBE` (3×3 NO).
 
@@ -68,7 +69,8 @@ Tabela **0x98B34** (18 B, `u16 id` + `u32 handler`) é o **overlay de relatório
 - **Praefecture** `0xE3` 1×1 HOUSES1 `+4=0x50`.
 - **Aqueduct** isolado → stub `0xCB`; NS → `0xD0`; EW → `0xD1`; cruzamento → `0xD6`. `+1=0x40` (junção `0x60`). Sem débito. LUT completa `0xCF–0xD6` **não** portada.
 - Clique paleta / clique mapa / direito cancela. Esc = sair.
-- **Speed** (INT_CITY sprites 6–8 remapeados no painel, acima da 3×5): **Pause** / **Play** (triângulo azul) / **Faster** (amarelo). Menu topo **Speed → Pause** (toggle) e **Game Speed** (play). Default **unpaused** (play, 1 pulso / due, scalar 70 → 200 ms). Faster = 4 pulsos (`[0xC45A0]`). HUD date (chunks 25/26) actualiza no wrap. **M** ainda fecha um mês. Sem economia.
+- **Top menus** (`C2.ENG` [0]…[3], `app/menus.py`). **File:** New Game = City Only de novo (`Start a New Game?` [9]+1, mesma skill; sem Campaign). Load = diálogo `*.sav` no install (não redistribui). Save **desligado** — `sav_write` 0x70174 precisa dos 500 chunks BSS; HUD `FILE ERROR -- Save Canceled`. Quit = `Exit to DOS?` [9]+0. **Options:** Music / Sound / Animations ON|OFF ([56]); End of Year = `Auto-Save is` (sem `lastyear.sav`); **Census** = painel [74] pop + origens Tent…Mansion. **Speed:** Pause toggle; Game Speed cicla Play↔Faster (INT_CITY 7–8); Scroll Speed = 1×/2×/3× do pan. **Help:** título + 1ª frase HELP.ENG (Hints 119 / Help 0 / History 2 / Icons 91); About = [10] versão + [56]+13. Sem ecrãs Career.
+- **Speed** (INT_CITY sprites 6–8 remapeados no painel, acima da 3×5): **Pause** / **Play** (triângulo azul) / **Faster** (amarelo). Default **unpaused** (play, 1 pulso / due, scalar 70 → 200 ms). Faster = 4 pulsos (`[0xC45A0]`). HUD date (chunks 25/26) actualiza no wrap. **M** ainda fecha um mês. Sem economia.
 - Clique-arrasta: preview (diamantes) até ao mouse-up; direito aborta sem stamp. Estrada = linha recta (eixo dominante). Casa/Clear = bbox. Tesouro do arrasto de tendas é **atómico** (tudo ou nada).
 - Cache iso: `blit_dirty_tiles` nas células tocadas (não rebuild 80×80).
 - **Minimapa** 80×80 (1 px = 1 tile) no poço vazio **acima** da paleta. Ver § Minimapa.

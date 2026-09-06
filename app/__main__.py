@@ -304,6 +304,8 @@ def main(argv: list[str] | None = None) -> int:
             print("FAILED        : place selftest")
             return 1
         from app.city_overlay import selftest as overlay_selftest
+        from app.forum import selftest as forum_selftest
+        from app.menus import selftest as menu_selftest
 
         print("-- overlay selftest --")
         overlay_fail = 0
@@ -313,6 +315,24 @@ def main(argv: list[str] | None = None) -> int:
                 overlay_fail += 1
         if overlay_fail:
             print("FAILED        : overlay selftest")
+            return 1
+        print("-- menu selftest --")
+        menu_fail = 0
+        for line in menu_selftest():
+            print(f"  {line}")
+            if "FAIL" in line:
+                menu_fail += 1
+        if menu_fail:
+            print("FAILED        : menu selftest")
+            return 1
+        print("-- forum selftest --")
+        forum_fail = 0
+        for line in forum_selftest():
+            print(f"  {line}")
+            if "FAIL" in line:
+                forum_fail += 1
+        if forum_fail:
+            print("FAILED        : forum selftest")
             return 1
         if args.new:
             from app.new_game import river_tile_count
