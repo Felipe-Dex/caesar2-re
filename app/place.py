@@ -26,9 +26,12 @@ caps ``0xCB–0xCE``, NS ``0xCF``, EW ``0xD0``, corners ``0xD1–0xD4``,
 T/cross ``0xD5``/``0xD6`` (``+1=0x60``). Road ``0x52–0x5C`` is allowed
 (Gate analog): LUT ``0x94E37`` ×2 writes ``0xD5`` (NS pipe) / ``0xD6``
 (EW pipe), ``+1=0x60``, ``+3=0x90``. Dry ``+9`` from 20230610 / FELIPE.
-Charge (``rebuild_pipe_charge``) only from a river-fed reservoir, then
-walk the ``+1 & 0xC0`` graph — isolated / disconnected aqueduct stays
-dry. Clear wipes grass ``0xCB–0xD6`` to rubble ``0x05``; road-combo
+Charge (``rebuild_pipe_charge``) only from a river-fed reservoir
+(cardinal ``+1&0x18``), then three ``FUN_0002a498`` hops along the
+``+1&0xC0`` graph: write 3 through aqueducts onto the next ``0xBE``,
+then 2, then 1. Fourth reservoir stays wet (charge 1); fifth is dry.
+Isolated / disconnected aqueduct stays dry.
+Clear wipes grass ``0xCB–0xD6`` to rubble ``0x05``; road-combo
 (``+3&0x80``) restores the road. Reservoir ``+9`` from LUT ``0x94E7F``
 (inlet on the tank wall when a pipe is cardinal).
 Tower ``0xBF`` autotile: standalone sprite when no Wall ``0xC1``/``0xC2``
@@ -49,7 +52,9 @@ Clear of a tall building still sets ``flush_iso``. Tent / civic-rect drag
 is **atomic** if treasury < cost×N. N×N>1×1 (forum / temple / theater /
 barracks / …) is stamp-follow; Circus 6×3 EW (0xEB+0xEC) / 3×6 NS
 (0xE9+0xEA) and C.Maximus 4×8 / 8×4 are one paired ghost — odd facing
-swaps the long axis. Plaza is 1×1 rect on/next to a road. Wall is a road-style
+swaps the long axis. Paint remaps +4 along that W×H at facing 1–3
+(leftover pair at odd facing) so extra_rows still meet after rotate.
+Plaza is 1×1 rect on/next to a road. Wall is a road-style
 line (gate when the line hits a road).
 
 Not the full EXE stamp. Tent 6 is observed (sav_c), not C2MODEL. City
@@ -459,6 +464,10 @@ _CMAX_EW_VAR2 = (
     0x54, 0x56, 0x59, 0x5D, 0x55, 0x58, 0x5C, 0x60,
     0x57, 0x5B, 0x5F, 0x62, 0x5A, 0x5E, 0x61, 0x63,
 )
+_CIRCUS_EW_VAR = _STAMPS[TOOL_CIRCUS].variants
+_CIRCUS_EW_VAR2 = _STAMPS[TOOL_CIRCUS].variants2
+_CMAX_NS_VAR = _STAMPS[TOOL_CMAXIMUS].variants
+_CMAX_NS_VAR2 = _STAMPS[TOOL_CMAXIMUS].variants2
 _reg(StampSpec(TOOL_GRAMMATICUS, "Grammaticus", ID_GRAMMATICUS, 2, 2, COST_GRAMMATICUS, 0x01, 0x08,
                (0x40, 0x42, 0x41, 0x43), frozenset({0xF3})))
 _reg(StampSpec(TOOL_RHETOR, "Rhetor", ID_RHETOR, 3, 3, COST_RHETOR, 0x01, 0x08,
@@ -779,6 +788,120 @@ def is_long_pair_building(tid: int) -> bool:
     return 0xE9 <= (int(tid) & 0xFF) <= 0xF0
 
 
+def long_pair_rect(city: CityMap, x: int, y: int) -> tuple[int, int, int, int] | None:
+    """NW origin + W×H of a complete Circus / C.Max pair, else None."""
+    if not in_map(x, y) or not is_long_pair_building(city.tiles[city.offset(x, y)]):
+        return None
+    cells = building_group_cells(city, x, y)
+    if len(cells) not in (18, 32):
+        return None
+    xs = [c[0] for c in cells]
+    ys = [c[1] for c in cells]
+    ox, oy = min(xs), min(ys)
+    w = max(xs) - ox + 1
+    h = max(ys) - oy + 1
+    if w * h != len(cells):
+        return None
+    return ox, oy, w, h
+
+
+def _pair_tables(tid: int) -> tuple[tuple, tuple] | None:
+    """(ew_spec, ns_spec) — each (w, h, tid, vars, tid2, vars2)."""
+    t = int(tid) & 0xFF
+    if 0xE9 <= t <= 0xEC:
+        return (
+            (6, 3, ID_CIRCUS_C, _CIRCUS_EW_VAR, ID_CIRCUS_D, _CIRCUS_EW_VAR2),
+            (3, 6, ID_CIRCUS_A, _CIRCUS_NS_VAR, ID_CIRCUS_B, _CIRCUS_NS_VAR2),
+        )
+    if 0xED <= t <= 0xF0:
+        return (
+            (8, 4, ID_CMAX_C, _CMAX_EW_VAR, ID_CMAX_D, _CMAX_EW_VAR2),
+            (4, 8, ID_CMAX_A, _CMAX_NS_VAR, ID_CMAX_B, _CMAX_NS_VAR2),
+        )
+    return None
+
+
+def _pair_spec_for_wh(tid: int, w: int, h: int):
+    tables = _pair_tables(tid)
+    if tables is None:
+        return None
+    for spec in tables:
+        if spec[0] == w and spec[1] == h:
+            return spec
+    return None
+
+
+def _pair_piece(
+    w: int,
+    h: int,
+    lx: int,
+    ly: int,
+    tid1: int,
+    vars1: tuple[int, ...],
+    tid2: int,
+    vars2: tuple[int, ...],
+) -> tuple[int, int] | None:
+    """(tid, +4) at local (lx, ly) of a paired W×H stamp."""
+    if not (0 <= lx < w and 0 <= ly < h):
+        return None
+    hw = w // 2 if w > h else w
+    if w > h:
+        bank, col = (vars1, lx) if lx < hw else (vars2, lx - hw)
+        tid = tid1 if lx < hw else tid2
+        idx = ly * hw + col
+    else:
+        hh = h // 2
+        bank, row = (vars1, ly) if ly < hh else (vars2, ly - hh)
+        tid = tid1 if ly < hh else tid2
+        idx = row * hw + lx
+    if idx >= len(bank):
+        return None
+    return tid, bank[idx]
+
+
+def long_pair_paint_local(
+    lx: int, ly: int, w: int, h: int, facing: int
+) -> tuple[int, int, int, int]:
+    """Paint W×H and local +4 slot for a world cell of a long pair.
+
+    Odd facing swaps to the leftover axis (6×3 ↔ 3×6, 4×8 ↔ 8×4) so the
+    visual-north diamond keeps the origin piece. Facing 2 stays on the
+    authored axis and flips 180°.
+    """
+    f = int(facing) & 3
+    if f == 1:
+        return h, w, h - 1 - ly, lx
+    if f == 2:
+        return w, h, w - 1 - lx, h - 1 - ly
+    if f == 3:
+        return h, w, ly, w - 1 - lx
+    return w, h, lx, ly
+
+
+def long_pair_paint_art(
+    city: CityMap, wx: int, wy: int, facing: int
+) -> tuple[int, int] | None:
+    """(tid, +4) to blit at ``(wx, wy)`` for a Circus / C.Max pair.
+
+    Square N×N remap of each half stamps the origin on one end of the
+    oval. Treat the pair as one W×H and ride +4 along that long axis
+    (leftover orientation at odd facing) so extra_rows / iso dest meet.
+    Does not write the map. None → caller keeps identity / square remap.
+    """
+    f = int(facing) & 3
+    if f == 0:
+        return None
+    rect = long_pair_rect(city, wx, wy)
+    if rect is None:
+        return None
+    ox, oy, w, h = rect
+    pw, ph, plx, ply = long_pair_paint_local(wx - ox, wy - oy, w, h, f)
+    spec = _pair_spec_for_wh(city.tiles[city.offset(ox, oy)], pw, ph)
+    if spec is None:
+        return None
+    return _pair_piece(pw, ph, plx, ply, spec[2], spec[3], spec[4], spec[5])
+
+
 def stamp_wh(tool: str, facing: int = 0) -> tuple[int, int]:
     spec = _STAMPS.get(tool)
     if spec is not None:
@@ -981,35 +1104,58 @@ def _is_river_fed_reservoir(city: CityMap, x: int, y: int) -> bool:
     return is_reservoir(city, x, y) and _is_water_source_adj(city, x, y)
 
 
+def _pipe_charge_hop(
+    city: CityMap, cells: list[tuple[int, int]], need: int, write: int
+) -> None:
+    """One ``FUN_0002a498`` pass.
+
+    From every pipe whose ``+10&3 == need``, flood cardinal ``+1&0xC0``
+    neighbours writing ``write``. Aqueducts continue; a reservoir takes
+    the charge and stops that ray (``FUN_0002a635``). Skip when the tile
+    already holds ``>= write``. Aqueduct length does not add hops — only
+    tank-to-tank crossings do.
+    """
+    starts = [
+        (x, y)
+        for x, y in cells
+        if (city.tiles[city.offset(x, y) + 10] & 3) == need
+    ]
+    seen = set(starts)
+    stack = list(starts)
+    while stack:
+        x, y = stack.pop()
+        for nx, ny in _neighbor_ring(x, y):
+            if (nx, ny) in seen or not is_pipe(city, nx, ny):
+                continue
+            if not _apply_pipe_charge(city, nx, ny, write):
+                seen.add((nx, ny))
+                continue
+            seen.add((nx, ny))
+            if city.tiles[city.offset(nx, ny) + 1] & FLAG_RESERVOIR:
+                continue
+            stack.append((nx, ny))
+
+
 def rebuild_pipe_charge(city: CityMap, seeds: list[tuple[int, int]]) -> list[tuple[int, int]]:
     """Place/Clear stand-in for FUN_00029e36.
 
-    Dry every pipe in the component (``+4 = +9``), then charge 3 only from
-    a river-fed reservoir and walk the ``+1 & 0xC0`` graph. Isolated or
-    disconnected aqueduct stays dry — do not seed from an aqueduct that
-    merely touches river.
+    Dry every pipe in the component (``+4 = +9``), inject charge 3 only
+    on a river-fed reservoir (``FUN_0002a407`` + ``FUN_0002a18c``), then
+    the three EXE hops: ``2a498(3,1)`` write 3, ``2a498(3,0)`` write 2,
+    ``2a498(2,0)`` write 1. Isolated or disconnected aqueduct stays dry
+    — do not seed from an aqueduct that merely touches river.
     """
     cells = _pipe_component(city, seeds)
     if not cells:
         return []
     for x, y in cells:
         _reset_pipe_tile(city, x, y)
-    sources: list[tuple[int, int]] = []
     for x, y in cells:
         if _is_river_fed_reservoir(city, x, y):
             _apply_pipe_charge(city, x, y, 3)
-            sources.append((x, y))
-    seen = set(sources)
-    stack = list(sources)
-    while stack:
-        x, y = stack.pop()
-        for nx, ny in _neighbor_ring(x, y):
-            if (nx, ny) in seen or not is_pipe(city, nx, ny):
-                continue
-            _apply_pipe_charge(city, nx, ny, 3)
-            seen.add((nx, ny))
-            if not (city.tiles[city.offset(nx, ny) + 1] & FLAG_RESERVOIR):
-                stack.append((nx, ny))
+    _pipe_charge_hop(city, cells, 3, 3)
+    _pipe_charge_hop(city, cells, 3, 2)
+    _pipe_charge_hop(city, cells, 2, 1)
     return cells
 
 
@@ -1502,7 +1648,8 @@ def _write_stamp(
 ) -> list[tuple[int, int]]:
     dirty: list[tuple[int, int]] = []
     # Square N×N keeps facing-0 +4 in world bytes (paint remaps). Paired
-    # long stamps write the orientation pair for this facing (no paint remap).
+    # long stamps write the orientation pair for this facing; paint remaps
+    # +4 along the combined W×H at facing 1–3 (leftover pair when odd).
     write_face = facing if spec.tid2 else 0
     w, h = stamp_wh(spec.tool, write_face)
     for dx, dy, tid, draw, variant in stamp_ghost_pieces(spec.tool, write_face):
@@ -3372,6 +3519,38 @@ def selftest() -> list[str]:
         )
     else:
         lines.append("ok    Reservoir interior enche via aqueduto")
+
+    # FUN_00029e36 hops: river BE + three 2a498 passes (3, then 2, then 1).
+    # Fourth 0xBE stays wet; fifth is dry. Aqueduct length is not a hop.
+    hop = CityMap()
+    hop.source = "pipe-hops"
+    # y=10: river, BE0, AQ×3, BE1, AQ, BE2, AQ, BE3, AQ, BE4
+    hop.tiles[hop.offset(2, 10)] = 0x1E
+    hop.tiles[hop.offset(2, 10) + 1] = FLAG_RIVER
+    chain_x = (3, 7, 9, 11, 13)
+    for x in range(3, 14):
+        off = hop.offset(x, 10)
+        if x in chain_x:
+            hop.tiles[off] = ID_RESERVOIR
+            hop.tiles[off + 1] = FLAG_RESERVOIR
+            hop.tiles[off + 4] = VAR_RESERVOIR
+            hop.tiles[off + 9] = VAR_RESERVOIR
+        else:
+            hop.tiles[off] = 0xD0
+            hop.tiles[off + 1] = FLAG_PIPE
+            hop.tiles[off + 4] = 0x76
+            hop.tiles[off + 9] = 0x76
+    rebuild_pipe_charge(hop, [(3, 10)])
+    hop_got = [hop.tile(x, 10).coverage & 3 for x in chain_x]
+    if hop_got != [3, 3, 2, 1, 0]:
+        lines.append(f"FAIL  reservoir hops +10={hop_got} want [3,3,2,1,0]")
+    else:
+        lines.append("ok    Reservoir hops 3-2-1; 4o molhado, 5o seco")
+    long_aq = [hop.tile(x, 10).coverage & 3 for x in (4, 5, 6)]
+    if long_aq != [3, 3, 3]:
+        lines.append(f"FAIL  aqueduct length counted as hop +10={long_aq}")
+    else:
+        lines.append("ok    Aqueduct longo não gasta hop (carga 3 até o 2º)")
 
     # Isolated aqueduct (manual stub) must stay dry; Clear wipes 0xCB–0xD6.
     iso_off = city.offset(62, 40)
