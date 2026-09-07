@@ -942,8 +942,9 @@ def show(ctx: BootContext, *, game: Path) -> None:
         if ensure_watch(ctx.sim).status_alert and status:
             shown = status
             extra_alert = True
-        if take_status_sfx(ctx.sim):
-            _sfx("click_no")
+        sfx_key = take_status_sfx(ctx.sim)
+        if sfx_key == "need_plebs":
+            _sfx("need_plebs")
         prev = current_preview()
         if prev is not None:
             shown = f"{prev.message}  tesouro {ctx.sim.treasury}"

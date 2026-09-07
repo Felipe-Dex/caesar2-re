@@ -4,7 +4,7 @@ EXE table @ VA 0x9A5BC (14-byte 8.3 names). Indexer 0x59248:
 ``lea eax, [esi-0x50]`` then ``eax * 14`` — ESI is enqueue EAX
 (official C2.ENG slot + 1). Stem = table[slot - 79].
 
-Slots below 79 (Need More Plebs [7]+14 / Idle Plebs [35]+26) are
+Slots below 79 (Need more plebs! [7]+14 / Idle Plebs [35]+26) are
 confirm-pack status-bar toasts — sound + red HUD text, no talking-head.
 ``null.smk`` means no clip. C2.ENG [60] is Query overlay, not a 58c87
 slot — do not play a clip for it.

@@ -2,9 +2,11 @@
 
 EXE: EAX = official C2.ENG slot + 1, 16-deep queue. Title is the official
 string; body is the next packed NUL ([slot]+1). Slots below 79 are
-confirm-pack / status-bar toasts (Need More Plebs!!! [7]+14, Idle Plebs
-[35]+26): red HUD line + SFX, not a talking-head. Fire [81] only after a
-real 69A37 housing ignite (timer 10), not leftover +3 bit7 / +11 0x30.
+confirm-pack / status-bar toasts (Need more plebs! [7]+14, Idle Plebs
+[35]+26): red HUD line + SFX, not a talking-head. Official C2.ENG [7]+14
+is ``Need More Plebs!!!``; the HUD line the original shouts is
+``Need more plebs!``. Fire [81] only after a real 69A37 housing ignite
+(timer 10), not leftover +3 bit7 / +11 0x30.
 
 City Only only. Career banners (Emperor letters [115]+, invasion [82]/[90–95],
 cohorts, Empire Expands, Stern Warning) stay skipped. C2.ENG [60] is the
@@ -26,6 +28,8 @@ ID_HOUSING_LO = 0x82
 ID_HOUSING_HI = 0xA1
 # Confirm-pack / labor allocate — status bar, not 58c87 (slots < 79).
 STATUS_BAR_KEYS = frozenset({"need_plebs", "idle"})
+# User-verified HUD (C2.ENG [7]+14 is Title Case + !!!).
+NEED_PLEBS_HUD = "Need more plebs!"
 # Shrine / Temple / Basilica origins — Hail / Stolen copy.
 TEMPLE_LO, TEMPLE_HI = 0xA2, 0xAC
 
@@ -53,7 +57,7 @@ POP_MILESTONE: tuple[tuple[int, int], ...] = (
 )
 
 _FB = {
-    7: {11: "Click to Continue", 14: "Need More Plebs!!!"},
+    7: {11: "Click to Continue", 14: NEED_PLEBS_HUD},
     35: {26: "Idle Plebs"},
     78: {0: "Right Click to remove this message."},
     79: {
@@ -122,7 +126,7 @@ class MessageWatch:
     last_staffed: tuple[bool, ...] | None = None
     status_line: str = ""
     status_alert: bool = False
-    status_sfx: bool = False
+    status_sfx: str = ""
 
 
 def _eng(eng, slot: int, skip: int, fallback: str) -> str:
@@ -176,10 +180,10 @@ def post_labor_status(sim, key: str, eng=None) -> str:
     if key == "idle":
         text = _line(eng, 35, 26)
     else:
-        text = _line(eng, 7, 14)
+        text = NEED_PLEBS_HUD
     watch.status_line = text
     watch.status_alert = True
-    watch.status_sfx = True
+    watch.status_sfx = key if key in STATUS_BAR_KEYS else "need_plebs"
     return text
 
 
@@ -187,12 +191,12 @@ def peek_status(sim) -> str:
     return ensure_watch(sim).status_line
 
 
-def take_status_sfx(sim) -> bool:
+def take_status_sfx(sim) -> str:
+    """Pop the pending labor SFX event (``need_plebs`` / ``idle``), or ``""``."""
     watch = ensure_watch(sim)
-    if not watch.status_sfx:
-        return False
-    watch.status_sfx = False
-    return True
+    key = watch.status_sfx
+    watch.status_sfx = ""
+    return key
 
 
 def is_status_bar_key(key: str) -> bool:
@@ -212,11 +216,10 @@ def seed_watch_from_city(sim, tiles: bytearray) -> MessageWatch:
     watch.pending.clear()
     watch.status_line = ""
     watch.status_alert = False
-    watch.status_sfx = False
+    watch.status_sfx = ""
     if not getattr(sim, "city_only", 0):
         return watch
 
-    from app.forum import labor_idle_of, labor_row_staffed
     from app.unlocks import note_population, peak_population
 
     pop = int(getattr(sim, "population", 0))
@@ -225,12 +228,7 @@ def seed_watch_from_city(sim, tiles: bytearray) -> MessageWatch:
     _houses, temples, fires, _ = _city_counts(tiles)
     staffed = _staffed(sim)
     ready = max(0, int(getattr(sim, "plebs_ready", 0)))
-    idle = labor_idle_of(sim)
-    asg = list(getattr(sim, "labor_assigned", None) or [0])
-    need = list(getattr(sim, "labor_need", None) or [20])
-    constr_short = not labor_row_staffed(asg[0] if asg else 0, need[0] if need else 20)
-    any_short = any(not ok for ok in staffed)
-    idle_short = idle > 0 and any_short and not constr_short
+    need_more, idle_short = _labor_toasts(sim)
     treas = int(getattr(sim, "treasury", 0))
 
     watch.hail_done = True
@@ -247,8 +245,8 @@ def seed_watch_from_city(sim, tiles: bytearray) -> MessageWatch:
     watch.on_fire = fires > 0
     if fires > 0:
         watch.seen.add("fire")
-    watch.construction_short = constr_short
-    if constr_short:
+    watch.construction_short = need_more
+    if need_more:
         watch.seen.add("need_plebs")
     watch.idle_short = idle_short
     if idle_short:
@@ -317,7 +315,7 @@ def _city_counts(tiles: bytearray) -> tuple[int, int, int, int]:
 
 
 def _staffed(sim) -> tuple[bool, ...]:
-    from app.forum import LABOR_ROWS, labor_row_staffed
+    from app.forum import CREW, LABOR_CONSTRUCTION, LABOR_ROWS, labor_row_staffed
 
     asg = list(getattr(sim, "labor_assigned", None) or [0] * LABOR_ROWS)
     need = list(getattr(sim, "labor_need", None) or [0] * LABOR_ROWS)
@@ -325,7 +323,26 @@ def _staffed(sim) -> tuple[bool, ...]:
         asg.append(0)
     while len(need) < LABOR_ROWS:
         need.append(0)
+    asg[LABOR_CONSTRUCTION] = CREW
+    need[LABOR_CONSTRUCTION] = CREW
     return tuple(labor_row_staffed(asg[i], need[i]) for i in range(LABOR_ROWS))
+
+
+def _labor_toasts(sim) -> tuple[bool, bool]:
+    """Need more plebs! vs Idle Plebs.
+
+    Construction assigned stays locked at 20. Need More fires when a row
+    cannot be staffed (no idle). Idle fires only when idle > 0 *and* a
+    row is below need — not merely because leftover plebs exist.
+    """
+    from app.forum import labor_idle_of
+
+    any_short = any(not ok for ok in _staffed(sim))
+    if not any_short:
+        return False, False
+    if labor_idle_of(sim) > 0:
+        return False, True
+    return True, False
 
 
 def scan_city_messages(
@@ -348,7 +365,6 @@ def scan_city_messages(
 
         refresh_labor_need(sim, tiles)
 
-    from app.forum import labor_idle_of, labor_row_staffed
     from app.unlocks import peak_population
 
     pop = int(getattr(sim, "population", 0))
@@ -356,10 +372,7 @@ def scan_city_messages(
     _houses, temples, fires, _ = _city_counts(tiles)
     staffed = _staffed(sim)
     ready = max(0, int(getattr(sim, "plebs_ready", 0)))
-    idle = labor_idle_of(sim)
-    asg = list(getattr(sim, "labor_assigned", None) or [0])
-    need = list(getattr(sim, "labor_need", None) or [20])
-    constr_short = not labor_row_staffed(asg[0] if asg else 0, need[0] if need else 20)
+    need_more, idle_short = _labor_toasts(sim)
     any_short = any(not ok for ok in staffed)
     treas = int(getattr(sim, "treasury", 0))
 
@@ -390,11 +403,11 @@ def scan_city_messages(
             fired.append("fire")
     watch.on_fire = fires > 0
 
-    if constr_short and not watch.construction_short:
+    if need_more and not watch.construction_short:
         watch.seen.discard("need_plebs")
         post_labor_status(sim, "need_plebs", eng)
         fired.append("need_plebs")
-    watch.construction_short = constr_short
+    watch.construction_short = need_more
 
     if watch.last_ready >= 0 and ready < watch.last_ready and any_short:
         if "services_cut" not in watch.seen:
@@ -405,7 +418,6 @@ def scan_city_messages(
     else:
         watch.last_ready = ready
 
-    idle_short = idle > 0 and any_short and not constr_short
     if idle_short and not watch.idle_short:
         watch.seen.discard("idle")
         post_labor_status(sim, "idle", eng)
@@ -479,17 +491,18 @@ def selftest() -> list[str]:
 
     sim = SimState(city_only=1, population=20, treasury=100, labor_assigned=list(LABOR_ASSIGNED_INIT))
     init_city_only_labor(sim)
-    sim.labor_assigned[0] = 0
-    sim.labor_need = [20, 0, 0, 0, 0, 0, 0]
+    sim.labor_assigned = [20, 0, 0, 0, 0, 0, 0]
+    sim.labor_need = [20, 8, 0, 0, 0, 0, 0]
+    sim.plebs_ready = 20
     got = scan_city_messages(sim, tiles)
     if "need_plebs" not in got:
         lines.append(f"FAIL  need plebs {got}")
-    elif peek_status(sim) != "Need More Plebs!!!":
+    elif peek_status(sim) != NEED_PLEBS_HUD:
         lines.append(f"FAIL  need plebs status {peek_status(sim)!r}")
     elif any(m.key == "need_plebs" for m in ensure_watch(sim).pending):
-        lines.append("FAIL  Need More Plebs must not enqueue 58c87")
+        lines.append("FAIL  Need more plebs! must not enqueue 58c87")
     else:
-        lines.append("ok    Need More Plebs!!! status-bar when construction short")
+        lines.append("ok    Need more plebs! status-bar when a row is short and idle=0")
 
     sim = SimState(city_only=1, population=20, treasury=100)
     init_city_only_labor(sim)
@@ -505,6 +518,17 @@ def selftest() -> list[str]:
         lines.append("FAIL  Idle Plebs must not enqueue 58c87")
     else:
         lines.append("ok    Idle Plebs status-bar when surplus + a short row")
+
+    sim = SimState(city_only=1, population=20, treasury=100)
+    init_city_only_labor(sim)
+    sim.labor_assigned = list(LABOR_ASSIGNED_INIT)
+    sim.labor_need = [20, 0, 0, 0, 0, 0, 0]
+    sim.plebs_ready = 42
+    got = scan_city_messages(sim, tiles)
+    if "idle" in got or "need_plebs" in got:
+        lines.append(f"FAIL  all-staffed leftover idle {got}")
+    else:
+        lines.append("ok    leftover idle with every row at need stays quiet")
 
     from app.forum import apply_month_labor
 
@@ -671,8 +695,10 @@ def selftest() -> list[str]:
         return lines
     if eng.skip(7, 14) != "Need More Plebs!!!":
         lines.append(f"FAIL  [7]+14 {eng.skip(7, 14)!r}")
+    elif NEED_PLEBS_HUD != "Need more plebs!":
+        lines.append(f"FAIL  HUD {NEED_PLEBS_HUD!r}")
     else:
-        lines.append("ok    C2.ENG Need More Plebs!!!")
+        lines.append("ok    C2.ENG [7]+14 Need More Plebs!!! / HUD Need more plebs!")
     if eng.skip(81, 0) != "Fire Alert!":
         lines.append(f"FAIL  [81] {eng.skip(81, 0)!r}")
     else:

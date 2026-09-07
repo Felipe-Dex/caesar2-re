@@ -19,6 +19,9 @@ Pinned play/bind sites (mapped VA):
   EXE's every-8-tick loop)
 - ``forum.wav`` is copied in ``city_sfx_bind_wavs`` ``0x12F2A`` (ambience
   table). Host plays it once on Forum enter.
+- ``unused.wav`` bind ``0x129B2`` / str ``0x90448`` — Need more plebs!
+  HUD cue (“Plebs are needed”). Not ``negcl2.wav``. File may be absent
+  on a flat 1.1A tree (then the toast stays silent).
 - ``gardenb.wav``…``temple1.wav`` in that bind table are looping
   building ambience — do not start those loops.
 """
@@ -49,6 +52,7 @@ EVENT_WAV: dict[str, str] = {
     "destroy_l": "lrgrub.wav",
     "overlay": "a09.wav",
     "forum": "forum.wav",
+    "need_plebs": "unused.wav",
 }
 
 
@@ -282,6 +286,7 @@ def selftest(game: Path | None = None) -> list[str]:
         "destroy_l": "lrgrub.wav",
         "overlay": "a09.wav",
         "forum": "forum.wav",
+        "need_plebs": "unused.wav",
     }
     if EVENT_WAV != want:
         lines.append(f"FAIL  EVENT_WAV {EVENT_WAV}")
