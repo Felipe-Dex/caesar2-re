@@ -4,8 +4,8 @@ Play path paints visible iso diamonds into the camera well — never the
 ~4640×2400 world bitmap. Walker / water ticks dirty that well only
 (``video_blit_dirty`` 0x29849 stand-in). City Only keys follow
 C2MANUAL.DOC p.48 (P pause, C census, A faster, Space cancel build,
-F/F2 forum, F1 city, F3 province, F4/F5 load/save, 1/2/3 zoom, Esc
-dismiss). Off-map debug: 1 title, 2 CITYFIXT, 3 enter map, Space/T sim
+F/F2 forum, F1 city, F3 province, F4 load, F5 save list then last slot,
+1/2/3 zoom, Esc dismiss). Off-map debug: 1 title, 2 CITYFIXT, 3 enter map, Space/T sim
 slot, A audio. Arrow keys pan. Housing / Roads / Clear / Aqueduct
 rubber-band on drag. +/- zoom 0/1/2.
 """
@@ -844,6 +844,11 @@ def show(ctx: BootContext, *, game: Path) -> None:
     forum_state: ForumState | None = None
     menu_report: MenuReport | None = None
     load_picks: list[Path] | None = None
+    save_picks: list[Path] | None = None
+    save_typed = ""
+    save_typing = False
+    save_picked_this_session = False
+    save_slot_name: str | None = None
     options = HostOptions(sound=bool(getattr(ctx, "play_audio", True)))
     sfx = audio.SfxPlayer(game, enabled=options.sound)
     city_skill = int(ctx.sim.skill) if getattr(ctx.sim, "city_only", 0) else 2
@@ -1567,12 +1572,15 @@ def show(ctx: BootContext, *, game: Path) -> None:
 
     def _enter_forum() -> None:
         nonlocal forum_state, place_dlg, overlay_flyout, tool, menu_report
-        nonlocal load_picks
+        nonlocal load_picks, save_picks, save_typed, save_typing
         place_dlg = None
         _set_advisor(None)
         overlay_flyout = False
         menu_report = None
         load_picks = None
+        save_picks = None
+        save_typed = ""
+        save_typing = False
         palette.close()
         tool = None
         forum_state = open_forum(ctx.sim, ctx.city.tiles, game)
@@ -1609,20 +1617,28 @@ def show(ctx: BootContext, *, game: Path) -> None:
         return bool(messagebox.askyesno(root.title(), question, parent=root))
 
     def _close_report() -> None:
-        nonlocal menu_report, load_picks
+        nonlocal menu_report, load_picks, save_picks, save_typed, save_typing
         menu_report = None
         load_picks = None
+        save_picks = None
+        save_typed = ""
+        save_typing = False
 
     def _open_report(
         report: MenuReport,
         extra: str | None = None,
         *,
         picks: list[Path] | None = None,
+        save_slots: list[Path] | None = None,
     ) -> None:
-        nonlocal menu_report, place_dlg, load_picks
+        nonlocal menu_report, place_dlg, load_picks, save_picks
+        nonlocal save_typed, save_typing
         place_dlg = None
         menu_report = report
         load_picks = picks
+        save_picks = save_slots
+        save_typed = ""
+        save_typing = False
         blit(extra if extra is not None else report.title)
 
     def _maybe_annual_summary(ph) -> None:
@@ -1644,14 +1660,14 @@ def show(ctx: BootContext, *, game: Path) -> None:
             return
         _open_report(census_report(ctx.city.tiles, eng=ctx.eng))
 
-    def _file_save() -> None:
+    def _write_city_sav(dest: Path, *, picked: bool = False) -> None:
+        nonlocal save_picked_this_session, save_slot_name
         from app.forum import sync_labor
-        from app.sav import dest_path, write_sav
+        from app.sav import write_sav
         from app.sim_log import write
 
         if forum_state is not None:
             sync_labor(forum_state.labor, ctx.city.tiles, ctx.sim)
-        dest = dest_path(game, ctx.city, ctx.sim)
         try:
             write_sav(dest, ctx.city, ctx.walkers, ctx.sim, game=game)
         except (OSError, ValueError):
@@ -1659,15 +1675,100 @@ def show(ctx: BootContext, *, game: Path) -> None:
             return
         ctx.city.source = dest.name
         ctx.sim.source = dest.name
+        if picked:
+            save_picked_this_session = True
+            save_slot_name = dest.name
         n = dest.stat().st_size
         write(f"sav_write  {dest}  {n} B")
         blit(
             f"{_eng_skip(ctx.eng, 0, 3, 'Save')}  sav/{dest.name}  {n} B"
         )
 
+    def _refresh_save_picker() -> None:
+        nonlocal menu_report
+        from app.sav import save_picker_lines
+
+        if save_picks is None:
+            return
+        title = (
+            menu_report.title
+            if menu_report is not None
+            else _eng_skip(ctx.eng, 38, 3, "Select a file name to SAVE")
+        )
+        menu_report = MenuReport(
+            title,
+            save_picker_lines(save_picks, save_typed, typing=save_typing),
+        )
+        blit()
+
+    def _commit_save_dest(dest: Path) -> None:
+        if dest.exists() and not _confirm(f"Overwrite {dest.name}?"):
+            return
+        _close_report()
+        _write_city_sav(dest, picked=True)
+
+    def _commit_save_name(stem: str) -> None:
+        from app.sav import dest_path, dos83_stem
+
+        clean = dos83_stem(stem)
+        if not clean:
+            return
+        _commit_save_dest(dest_path(game, ctx.city, ctx.sim, name=clean))
+
+    def _apply_save() -> None:
+        """File→Save — always show `{repo}/sav/*.SAV` plus [ new ]."""
+        from app.sav import save_picker_entries, save_picker_lines
+
+        picks = save_picker_entries()
+        title = _eng_skip(ctx.eng, 38, 3, "Select a file name to SAVE")
+        _open_report(
+            MenuReport(title, save_picker_lines(picks)),
+            save_slots=picks,
+        )
+
+    def _f5_save() -> None:
+        """First F5 this session: list. After a pick, overwrite that slot."""
+        from app.sav import dest_path
+
+        if save_picked_this_session and save_slot_name:
+            _write_city_sav(dest_path(game, name=save_slot_name))
+            return
+        _apply_save()
+
+    def _on_save_picker_key(event: tk.Event) -> bool:  # type: ignore[type-arg]
+        """Type an 8.3 stem while the Save list is open. No OS dialog."""
+        nonlocal save_typed, save_typing
+        from app.sav import dos83_stem
+
+        if save_picks is None:
+            return False
+        key = event.keysym.lower()
+        if key in {"escape"}:
+            return False
+        if key in {"return", "kp_enter", "f5"}:
+            stem = dos83_stem(save_typed)
+            if stem:
+                _commit_save_name(stem)
+            return True
+        if key in {"backspace"}:
+            save_typing = True
+            save_typed = save_typed[:-1]
+            _refresh_save_picker()
+            return True
+        ch = getattr(event, "char", "") or ""
+        if len(ch) == 1 and (
+            ("a" <= ch.lower() <= "z") or ("0" <= ch <= "9")
+        ):
+            save_typed = dos83_stem(save_typed + ch)
+            save_typing = True
+            _refresh_save_picker()
+            return True
+        return True
+
     def _load_sav(dest: Path) -> None:
         nonlocal city_skill, tool, overlay_id, overlay_flyout, place_dlg
-        nonlocal menu_report, forum_state, load_picks
+        nonlocal menu_report, forum_state, load_picks, save_picks
+        nonlocal save_typed, save_typing
         from app.city_map import load_chunk_sizes, load_city_from_sav
         from app.city_sim import load_sim_from_sav
         from app.sim_log import write
@@ -1701,6 +1802,9 @@ def show(ctx: BootContext, *, game: Path) -> None:
         place_dlg = None
         menu_report = None
         load_picks = None
+        save_picks = None
+        save_typed = ""
+        save_typing = False
         forum_state = None
         invalidate_iso([], flush=True)
         _set_advisor(None)
@@ -1725,7 +1829,8 @@ def show(ctx: BootContext, *, game: Path) -> None:
 
     def _apply_new_city() -> None:
         nonlocal city_skill, tool, overlay_id, overlay_flyout, place_dlg
-        nonlocal menu_report, forum_state, load_picks
+        nonlocal menu_report, forum_state, load_picks, save_picks
+        nonlocal save_typed, save_typing
         from app.new_game import start_city_assignment
         from app.walkers import drawable_walkers
 
@@ -1740,6 +1845,9 @@ def show(ctx: BootContext, *, game: Path) -> None:
         place_dlg = None
         menu_report = None
         load_picks = None
+        save_picks = None
+        save_typed = ""
+        save_typing = False
         forum_state = None
         invalidate_iso([], flush=True)
         show_city_map(reset_cam=True, hail=True)
@@ -1929,6 +2037,12 @@ def show(ctx: BootContext, *, game: Path) -> None:
     def _dismiss_city_ui() -> bool:
         """Esc — exit current screen/panel/menu. City Only does not quit here."""
         nonlocal menu_report, menu_open, overlay_flyout, place_dlg
+        nonlocal save_typing, save_typed
+        if menu_report is not None and save_picks is not None and save_typing:
+            save_typing = False
+            save_typed = ""
+            _refresh_save_picker()
+            return True
         if menu_report is not None:
             _close_report()
             blit(last_extra)
@@ -1970,6 +2084,8 @@ def show(ctx: BootContext, *, game: Path) -> None:
                 return
             if not map_mode:
                 on_close()
+            return
+        if _on_save_picker_key(event):
             return
         if key in {"q"}:
             on_close()
@@ -2036,7 +2152,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
             _apply_load()
             return
         if key in {"f5"}:
-            _file_save()
+            _f5_save()
             return
         if key in {"1"}:
             set_zoom(0)
@@ -2246,7 +2362,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
         return True
 
     def _menu_click(x: int, y: int) -> bool:
-        nonlocal menu_open, menu_report, load_picks
+        nonlocal menu_open, menu_report, load_picks, save_typing
         font = _hud_font()
         layout = _menu_layout()
         item = _menu_item_at(layout, menu_open, x, y, font)
@@ -2263,7 +2379,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
                     blit(last_extra)
                 return True
             if slot == SLOT_FILE and skip == FILE_SAVE:
-                _file_save()
+                _apply_save()
                 return True
             if slot == SLOT_FILE and skip == FILE_NEW:
                 q = _eng_skip(ctx.eng, 9, 1, "Start a New Game?")
@@ -2381,6 +2497,14 @@ def show(ctx: BootContext, *, game: Path) -> None:
                         dest = load_picks[idx]
                         _close_report()
                         _load_sav(dest)
+                elif save_picks is not None:
+                    idx = report_line_at(x, y, len(save_picks) + 1)
+                    if idx is not None:
+                        if idx < len(save_picks):
+                            _commit_save_dest(save_picks[idx])
+                        else:
+                            save_typing = True
+                            _refresh_save_picker()
                 return True
             _close_report()
             blit(last_extra)
@@ -2630,6 +2754,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
     def on_right(event: tk.Event) -> None:  # type: ignore[type-arg]
         nonlocal tool, band_start, band_cur, pending_click, drag, menu_open
         nonlocal overlay_flyout, place_dlg, menu_report, load_picks
+        nonlocal save_picks, save_typed, save_typing
         if forum_state is not None:
             _forum_back()
             return
@@ -2648,6 +2773,9 @@ def show(ctx: BootContext, *, game: Path) -> None:
         menu_open = None
         menu_report = None
         load_picks = None
+        save_picks = None
+        save_typed = ""
+        save_typing = False
         overlay_flyout = False
         palette.close()
         # EXE 0x329EF / overlay Cancel: right-click drops the build tool.

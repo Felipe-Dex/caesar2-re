@@ -83,11 +83,15 @@ PROVINCE_LINKS_CHUNK = 276
 _NAMED_FLAGS = (0, 4, 0, 0)
 _LASTYEAR_FLAGS = (0, 0, 1, 0x01)
 
-# Host File→Save / F5: {repo}/sav/{8.3}.SAV — no OS picker. Retail {game}
+# Host File→Save / F5: in-game list of `{repo}/sav/*.SAV` (click to
+# overwrite) or a typed 8.3 stem. No OS file dialog. Retail {game}
 # stays for PL8 / ENG / videos. Original loader accepts DOS 8.3 names
 # (CITY.SAV, FELIPE01.SAV, CAESAR2.SAV).
 SAV_SUBDIR = "sav"
 DEFAULT_SAV_NAME = "CITY.SAV"
+SAVE_NEW_LABEL = "[ new ]"
+# MenuReport fits ~12 lines; keep one for [ new ].
+SAVE_PICKER_LIMIT = 11
 
 # 500 writer sizes from PS.EXE SavChunk[500] (notes/ps_sav_chunks.tsv).
 # Embedded so save works when the gitignored TSV is absent.
@@ -258,6 +262,47 @@ def load_picker_entries(saves: list[Path], *, limit: int = 12) -> list[Path]:
     return list(saves[:limit])
 
 
+def list_host_saves() -> list[Path]:
+    """`{repo}/sav/*.SAV` only — File→Save never offers retail install slots."""
+    folder = host_sav_dir(create=True)
+    found: list[Path] = []
+    seen: set[str] = set()
+    for pat in ("*.SAV", "*.sav"):
+        for path in sorted(folder.glob(pat)):
+            if not path.is_file():
+                continue
+            key = path.name.upper()
+            if key in seen:
+                continue
+            seen.add(key)
+            found.append(path)
+    return found
+
+
+def save_picker_entries(
+    saves: list[Path] | None = None, *, limit: int = SAVE_PICKER_LIMIT
+) -> list[Path]:
+    """File→Save / first F5 names. Always a list — UI adds [ new ]."""
+    if saves is None:
+        saves = list_host_saves()
+    return list(saves[:limit])
+
+
+def save_picker_lines(
+    picks: Sequence[Path],
+    typed: str = "",
+    *,
+    typing: bool = False,
+) -> tuple[str, ...]:
+    """Load-style labels plus a [ new ] row (cursor while typing)."""
+    labels = [f"{SAV_SUBDIR}/{path.name}" for path in picks]
+    if typing:
+        labels.append(f"{SAV_SUBDIR}/{dos83_stem(typed)}_.SAV")
+    else:
+        labels.append(SAVE_NEW_LABEL)
+    return tuple(labels)
+
+
 def sav_dir(root: Path | None = None, *, create: bool = False) -> Path:
     """`{root}/sav/`. Default root is the repo, not `{game}`."""
     folder = (Path(root) if root is not None else REPO_ROOT) / SAV_SUBDIR
@@ -282,7 +327,7 @@ def resolve_sav_path(sav: Path, game: Path) -> Path:
     return path
 
 
-def _dos83_stem(raw: str) -> str:
+def dos83_stem(raw: str) -> str:
     """Uppercase A–Z / 0–9, max 8 chars — original C2 file-dialog names."""
     out: list[str] = []
     for ch in raw.upper():
@@ -291,6 +336,18 @@ def _dos83_stem(raw: str) -> str:
         if len(out) >= 8:
             break
     return "".join(out)
+
+
+def sav_filename(raw: str | None, *, default: str | None = DEFAULT_SAV_NAME) -> str | None:
+    """Sanitize to an 8.3 `.SAV` name. Junk / empty → ``default`` (or None)."""
+    if not raw:
+        return default
+    text = str(raw).strip()
+    stem_src = Path(text).stem if text.lower().endswith(".sav") else text
+    stem = dos83_stem(stem_src)
+    if stem:
+        return f"{stem}.SAV"
+    return default
 
 
 def slot_name(city: CityMap | None = None, sim: SimState | None = None) -> str:
@@ -304,9 +361,9 @@ def slot_name(city: CityMap | None = None, sim: SimState | None = None) -> str:
         text = str(raw).strip()
         if not text.lower().endswith(".sav"):
             continue
-        stem = _dos83_stem(Path(text).stem)
-        if stem:
-            return f"{stem}.SAV"
+        name = sav_filename(text, default=None)
+        if name:
+            return name
     return DEFAULT_SAV_NAME
 
 
@@ -316,13 +373,18 @@ def dest_path(
     sim: SimState | None = None,
     *,
     root: Path | None = None,
+    name: str | None = None,
 ) -> Path:
     """`{repo}/sav/{slot}.SAV`. Creates `sav/` if missing.
 
     `game` is unused (assets stay on the install). Pass `root=` in tests.
+    ``name=`` is a typed or clicked 8.3 stem (sanitized).
     """
     del game
     folder = sav_dir(root, create=True)
+    if name is not None:
+        fname = sav_filename(name) or DEFAULT_SAV_NAME
+        return folder / fname
     return folder / slot_name(city, sim)
 
 
@@ -614,4 +676,28 @@ def selftest() -> list[str]:
         lines.append("FAIL  F4 picker list")
     else:
         lines.append("ok    F4 picker lists host .SAV names (even one)")
+    if dos83_stem("my_city-01!") != "MYCITY01":
+        lines.append(f"FAIL  dos83_stem {dos83_stem('my_city-01!')!r}")
+    elif sav_filename("foo.sav") != "FOO.SAV" or sav_filename("...") != DEFAULT_SAV_NAME:
+        lines.append("FAIL  sav_filename sanitize")
+    elif sav_filename("...", default=None) is not None:
+        lines.append("FAIL  sav_filename empty default")
+    else:
+        lines.append("ok    8.3 SAV stem sanitize")
+    if save_picker_entries([]):
+        lines.append("FAIL  F5 picker should stay empty without slots")
+    elif save_picker_entries(one) != one:
+        lines.append("FAIL  F5 picker list")
+    elif save_picker_lines(one) != (f"{SAV_SUBDIR}/CITY.SAV", SAVE_NEW_LABEL):
+        lines.append(f"FAIL  save picker lines {save_picker_lines(one)}")
+    elif save_picker_lines([], "ab", typing=True) != (f"{SAV_SUBDIR}/AB_.SAV",):
+        lines.append("FAIL  save picker typed cursor")
+    else:
+        lines.append("ok    F5 picker lists host .SAV + [ new ]")
+    with tempfile.TemporaryDirectory() as tmp:
+        named = dest_path(name="my city!", root=Path(tmp))
+        if named != Path(tmp) / SAV_SUBDIR / "MYCITY.SAV":
+            lines.append(f"FAIL  dest_path name= {named}")
+        else:
+            lines.append("ok    dest_path name= sanitizes 8.3")
     return lines

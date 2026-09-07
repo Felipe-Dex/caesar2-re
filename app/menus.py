@@ -1,7 +1,9 @@
 """City Only top menu — File / Options / Speed / Help (C2.ENG [0]…[3]).
 
 Actions match 1.1A City Only strings. No Career empire / Forum PERSONAL.
-File→Save / F5 writes `{repo}/sav/{8.3}.SAV` (owned chunks live, rest zero).
+File→Save always lists `{repo}/sav/*.SAV` (click to overwrite, or type a
+new 8.3). First F5 this session shows that list; later F5 overwrites the
+last picked slot. No OS file dialog. Owned chunks live, rest zero.
 Census is Options+5 (Census Panel [74]), not an overlay-filter.
 Keyboard table: C2MANUAL.DOC p.48 — see CITY_ONLY_KEYS / CITY_ONLY_LEFTOVERS.
 """
@@ -567,8 +569,10 @@ def selftest() -> list[str]:
         lines.append("ok    City Only key table has < > rotate")
     if report_line_at(_REPORT_X + 8, _REPORT_Y + 24, 3) != 0:
         lines.append("FAIL  report_line_at first line")
+    elif report_line_at(_REPORT_X + 8, _REPORT_Y + 24 + 13, 2) != 1:
+        lines.append("FAIL  report_line_at [ new ] row")
     else:
-        lines.append("ok    report_line_at first line")
+        lines.append("ok    report_line_at first line + [ new ]")
     from app.messages import AdvisorMessage
 
     demo = AdvisorMessage(
@@ -615,8 +619,12 @@ def selftest() -> list[str]:
             lines.append(f"FAIL  C2.ENG [72]+3 {eng.skip(72, 3)!r}")
         elif eng.skip(56, 6) != "Annual Summary ":
             lines.append(f"FAIL  C2.ENG [56]+6 {eng.skip(56, 6)!r}")
+        elif eng.skip(38, 2) != "Select a saved game to LOAD":
+            lines.append(f"FAIL  C2.ENG [38]+2 {eng.skip(38, 2)!r}")
+        elif eng.skip(38, 3) != "Select a file name to SAVE":
+            lines.append(f"FAIL  C2.ENG [38]+3 {eng.skip(38, 3)!r}")
         else:
-            lines.append("ok    C2.ENG [72] Annual Summary + Options toggle")
+            lines.append("ok    C2.ENG [72] Annual + [38] Load/Save titles")
     except (OSError, ValueError, ImportError):
         lines.append("ok    HELP.ENG skipped (no install)")
     return lines
