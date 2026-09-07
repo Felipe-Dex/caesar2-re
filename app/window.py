@@ -1297,7 +1297,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
         cam_x = int(fx * new_wh[0] - win_w / 2)
         cam_y = int(fy * new_wh[1] - win_h / 2)
 
-    def show_city_map(*, reset_cam: bool = False) -> None:
+    def show_city_map(*, reset_cam: bool = False, hail: bool = False) -> None:
         nonlocal map_mode
         from app.walkers import drawable_walkers
 
@@ -1311,7 +1311,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
             center_camera()
         _invalidate_live()
         if getattr(ctx.sim, "city_only", 0):
-            _scan_city_events(hail=True)
+            _scan_city_events(hail=hail)
         blit(map_status(n_walkers, None if zoom in pl8_sheets else None))
 
     def _advisor_has_video() -> bool:
@@ -1599,8 +1599,10 @@ def show(ctx: BootContext, *, game: Path) -> None:
             blit(_eng_skip(ctx.eng, 38, 4, "FILE ERROR -- Load Canceled"))
             return
         from app.forum import apply_saved_plebs
+        from app.messages import seed_watch_from_city
 
         apply_saved_plebs(sim, city.tiles)
+        seed_watch_from_city(sim, city.tiles)
         ctx.city = city
         ctx.walkers = walkers
         ctx.sim = sim
@@ -1615,6 +1617,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
         load_picks = None
         forum_state = None
         invalidate_iso([], flush=True)
+        _set_advisor(None)
         show_city_map(reset_cam=True)
         write(f"sav_read  {dest}  {dest.stat().st_size} B")
         blit(
@@ -1653,7 +1656,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
         load_picks = None
         forum_state = None
         invalidate_iso([], flush=True)
-        show_city_map(reset_cam=True)
+        show_city_map(reset_cam=True, hail=True)
         blit(
             f"{_eng_skip(ctx.eng, 0, 1, 'New Game')}  "
             f"{fresh.skill_name}  tesouro {ctx.sim.treasury}  "
@@ -2608,7 +2611,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
     root.protocol("WM_DELETE_WINDOW", on_close)
     if ctx.start_in_map:
         root.title("Caesar II — City Only")
-        show_city_map(reset_cam=True)
+        show_city_map(reset_cam=True, hail=True)
     else:
         blit(ctx.audio_status)
     water_after = root.after(WATER_FRAME_MS, on_water)

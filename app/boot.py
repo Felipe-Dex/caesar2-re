@@ -161,6 +161,11 @@ def run_boot(
                     notes.append(f"walkers load failed: {exc}")
                 try:
                     sim = load_sim_from_sav(sav_path, sizes, game=game)
+                    from app.forum import apply_saved_plebs
+                    from app.messages import seed_watch_from_city
+
+                    apply_saved_plebs(sim, city.tiles)
+                    seed_watch_from_city(sim, city.tiles)
                     notes.append(
                         f"city_sim: {sav_path.name} phase={sim.phase:#x} "
                         f"({sim.date_label}) - Space = one slot then walkers"

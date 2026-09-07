@@ -163,6 +163,67 @@ def pending_count(sim) -> int:
     return len(ensure_watch(sim).pending)
 
 
+def seed_watch_from_city(sim, tiles: bytearray) -> MessageWatch:
+    """After a successful SAV load, latch edges so scan does not dump.
+
+    ``seen`` / peak / Hail / fire / labor / theft live in RAM only — not
+    in the file. Treating the deserialized city as rising edges re-fires
+    Hail, pop milestones, unlocks, Fire Alert, Idle / Need More Plebs,
+    Stolen, and No Denarii. Original C2 does not dump the 58c87 queue
+    on F4. Hail stays New Game / new-map City Only.
+    """
+    watch = ensure_watch(sim)
+    watch.pending.clear()
+    if not getattr(sim, "city_only", 0):
+        return watch
+
+    from app.forum import labor_idle_of, labor_row_staffed
+    from app.unlocks import note_population, peak_population
+
+    pop = int(getattr(sim, "population", 0))
+    note_population(sim, pop)
+    peak = peak_population(sim)
+    _houses, temples, fires, _ = _city_counts(tiles)
+    staffed = _staffed(sim)
+    ready = max(0, int(getattr(sim, "plebs_ready", 0)))
+    idle = labor_idle_of(sim)
+    asg = list(getattr(sim, "labor_assigned", None) or [0])
+    need = list(getattr(sim, "labor_need", None) or [20])
+    constr_short = not labor_row_staffed(asg[0] if asg else 0, need[0] if need else 20)
+    any_short = any(not ok for ok in staffed)
+    idle_short = idle > 0 and any_short and not constr_short
+    treas = int(getattr(sim, "treasury", 0))
+
+    watch.hail_done = True
+    watch.seen.add("hail")
+    watch.peak = peak
+    watch.pop = pop
+    for gate in UNLOCK_LABEL:
+        if gate <= peak:
+            watch.seen.add(f"unlock:{gate}")
+    for thresh, _slot in POP_MILESTONE:
+        if thresh <= pop:
+            watch.seen.add(f"pop:{thresh}")
+
+    watch.on_fire = fires > 0
+    if fires > 0:
+        watch.seen.add("fire")
+    watch.construction_short = constr_short
+    if constr_short:
+        watch.seen.add("need_plebs")
+    watch.idle_short = idle_short
+    if idle_short:
+        watch.seen.add("idle")
+    watch.last_ready = ready
+    watch.last_staffed = staffed
+    if temples == 0 and pop > 0:
+        watch.seen.add("theft")
+    watch.broke = treas < 0
+    if treas < 0:
+        watch.seen.add("broke")
+    return watch
+
+
 def _make(eng, key: str, slot: int, *, extra: str = "") -> AdvisorMessage:
     title = _line(eng, slot, 0)
     if slot == 7:
@@ -180,6 +241,19 @@ def _off(x: int, y: int) -> int:
     return y * MAP_W * TILE_STRIDE + x * TILE_STRIDE
 
 
+def _is_burning(tid: int, draw: int, timer: int) -> bool:
+    """Real ignite leftover: housing/rubble +3 bit7 and +16 countdown.
+
+    +3 ``0x80`` is also prefecture, aqueduct-over-road, and stamp leftovers
+    on ``0x9E–0xA1`` villas — those have timer 0 and are not a fire.
+    """
+    if not (draw & DRAW_FIRE) or timer == 0:
+        return False
+    if tid < 8:
+        return True
+    return ID_HOUSING_LO <= tid <= ID_HOUSING_HI
+
+
 def _city_counts(tiles: bytearray) -> tuple[int, int, int, int]:
     """houses, temples, fires, max housing id."""
     houses = temples = fires = max_id = 0
@@ -190,7 +264,7 @@ def _city_counts(tiles: bytearray) -> tuple[int, int, int, int]:
         for x in range(MAP_W):
             off = _off(x, y)
             tid = tiles[off]
-            if tiles[off + 3] & DRAW_FIRE:
+            if _is_burning(tid, tiles[off + 3], tiles[off + 16]):
                 fires += 1
             if tiles[off + 5] & 0xF:
                 continue
@@ -269,12 +343,13 @@ def scan_city_messages(
                     fired.append(f"pop:{thresh}")
         watch.pop = pop
 
-    wait = fire_ignited > 0 or fires > 0
-    if wait and not watch.on_fire:
+    # Alert on this-pass 69A37 only. +3 bit7 tiles already on the map
+    # (deserialized fire, prefecture, villa leftover) do not re-queue [81].
+    if fire_ignited > 0 and not watch.on_fire:
         watch.seen.discard("fire")
         if enqueue(sim, _make(eng, "fire", 81)):
             fired.append("fire")
-    watch.on_fire = wait
+    watch.on_fire = fire_ignited > 0 or fires > 0
 
     if constr_short and not watch.construction_short:
         watch.seen.discard("need_plebs")
@@ -429,7 +504,65 @@ def selftest() -> list[str]:
     else:
         lines.append("ok    Fire Alert! on ignite")
 
+    tiles_pf = bytearray(MAP_W * MAP_H * TILE_STRIDE)
+    poff = 14 * MAP_W * TILE_STRIDE + 14 * TILE_STRIDE
+    tiles_pf[poff] = 0xE3
+    tiles_pf[poff + 3] = DRAW_FIRE
+    tiles_pf[poff + 5] = 0
+    villa = 16 * MAP_W * TILE_STRIDE + 16 * TILE_STRIDE
+    tiles_pf[villa] = 0x9E
+    tiles_pf[villa + 3] = DRAW_FIRE
+    tiles_pf[villa + 5] = 0
+    sim = SimState(city_only=1, population=8, treasury=100)
+    init_city_only_labor(sim)
+    got = scan_city_messages(sim, tiles_pf)
+    if "fire" in got:
+        lines.append(f"FAIL  prefecture/villa +3 bit7 is not fire {got}")
+    else:
+        lines.append("ok    prefecture / 0x9E leftover +3 bit7 is not Fire Alert")
+
+    tiles_load = bytearray(MAP_W * MAP_H * TILE_STRIDE)
+    tiles_load[hoff] = 0x82
+    tiles_load[hoff + 3] = DRAW_FIRE
+    tiles_load[hoff + 5] = 0
+    tiles_load[hoff + 16] = 10
+    sim = SimState(
+        city_only=1,
+        population=2400,
+        pop_peak=2400,
+        treasury=500,
+        labor_assigned=list(LABOR_ASSIGNED_INIT),
+        labor_need=[20, 8, 4, 4, 0, 0, 0],
+        plebs_ready=42,
+    )
+    init_city_only_labor(sim)
+    sim.population = 2400
+    sim.pop_peak = 2400
+    sim.labor_assigned = [20, 0, 4, 4, 0, 0, 0]
+    sim.labor_need = [20, 8, 4, 4, 0, 0, 0]
+    sim.plebs_ready = 42
+    seed_watch_from_city(sim, tiles_load)
+    got = scan_city_messages(sim, tiles_load, hail=True, month_wrapped=True)
+    if got:
+        lines.append(f"FAIL  load seed re-fired {got}")
+    else:
+        lines.append("ok    Load seed: no Hail / pop / unlock / fire / labor / theft")
+    got = scan_city_messages(sim, tiles_load, fire_ignited=1)
+    if "fire" in got:
+        lines.append(f"FAIL  load re-alerted existing fire {got}")
+    else:
+        lines.append("ok    Load seed: Fire Alert only on a later new ignite")
+
     tiles3 = bytearray(MAP_W * MAP_H * TILE_STRIDE)
+    sim_fresh = SimState(city_only=1, population=8, treasury=100)
+    init_city_only_labor(sim_fresh)
+    seed_watch_from_city(sim_fresh, tiles3)
+    got = scan_city_messages(sim_fresh, tiles3, fire_ignited=1)
+    if "fire" not in got:
+        lines.append(f"FAIL  new ignite after load seed {got}")
+    else:
+        lines.append("ok    Fire Alert! on new ignite after load")
+
     tiles3[hoff] = 0x82
     tiles3[hoff + 5] = 0
     sim = SimState(city_only=1, population=8, treasury=100)
