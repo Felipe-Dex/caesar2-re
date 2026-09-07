@@ -9,10 +9,10 @@ other player at 0x596DE and always load ``message.smk``. ``null.smk``
 means no clip.
 
 City Only start Hail [79] is the “build your city” briefing. The EXE
-table still names ``congrat.smk`` there, but that clip’s audio is the
-rank/promotion fanfare (same file as pop milestones / New Structure).
-The host shows ``message.smk`` and stays muted for Hail only.
-``promote.smk`` is Career kind 5, not this banner.
+table names ``congrat.smk`` there (same talking-head as pop milestones
+/ New Structure). The host plays that clip **muted** so the promotion
+fanfare does not fire on map-open. Pop / unlock still play audio when
+Sound is on. ``promote.smk`` is Career kind 5, not this banner.
 
 Search (mp4 only, case-insensitive):
 1. ``{root}/videos_new/{stem}.mp4``
@@ -111,11 +111,8 @@ def video_stem_for_slot(slot: int) -> str | None:
 
 
 def video_stem_for_message(msg) -> str | None:
-    """Clip on disk. Hail uses the generic talker, not congrat/promote."""
+    """Clip on disk. Hail [79] is congrat (muted separately)."""
     slot = int(getattr(msg, "slot", -1))
-    key = str(getattr(msg, "key", "") or "")
-    if key == "hail" or slot == 79:
-        return "message"
     return video_stem_for_slot(slot)
 
 
@@ -569,7 +566,7 @@ class AdvisorClip:
 def hosted_city_stems() -> dict[str, str | None]:
     """City Only banner keys → stem (None = no clip)."""
     return {
-        "hail": "message",
+        "hail": video_stem_for_slot(79),
         "need_plebs": video_stem_for_slot(7),
         "idle": video_stem_for_slot(35),
         "water": video_stem_for_slot(60),
@@ -597,13 +594,18 @@ def selftest(game: Path | None = None) -> list[str]:
     else:
         lines.append("ok    EXE table [79] congrat.smk")
     hail = type("M", (), {"slot": 79, "key": "hail"})()
+    pop200 = type("M", (), {"slot": 103, "key": "pop:200"})()
     unlock = type("M", (), {"slot": 114, "key": "unlock"})()
-    if video_stem_for_message(hail) != "message":
+    if video_stem_for_message(hail) != "congrat":
         lines.append(f"FAIL  hail clip {video_stem_for_message(hail)!r}")
     elif advisor_plays_audio(hail):
         lines.append("FAIL  Hail must stay silent (no congrat fanfare)")
     else:
-        lines.append("ok    Hail [79] -> message, muted")
+        lines.append("ok    Hail [79] -> congrat, muted")
+    if video_stem_for_message(pop200) != "congrat" or not advisor_plays_audio(pop200):
+        lines.append("FAIL  pop [103] should play congrat audio")
+    else:
+        lines.append("ok    [103] Good Going! may play congrat")
     if not advisor_plays_audio(unlock):
         lines.append("FAIL  unlock [114] should play congrat audio")
     else:

@@ -45,7 +45,7 @@ python -m app --new --city-only --skill 0 --no-audio
 python -m app --new --city-only --check --no-audio
 ```
 
-Hail on map enter is text + ``message`` talking-head, **muted** (EXE table [79] is ``congrat.smk``, but that file’s audio is the promotion fanfare). Other advisor clips play mp4 audio unless Options Sound is off or you pass ``--no-audio``. Do not copy game mp4s into git.
+Hail on map enter is text + ``congrat`` talking-head, **muted** (EXE table [79] is ``congrat.smk``; that file’s audio is the promotion fanfare, so Hail stays silent). Pop milestones and New Structure play the same clip **with** audio when Sound is on. Other advisor clips play mp4 audio unless Options Sound is off or you pass ``--no-audio``. Do not copy game mp4s into git.
 
 Plano das fatias seguintes (placement, água, Forum…): `findings/city_only.md`. **Não** há `--career` nesta versão.
 
