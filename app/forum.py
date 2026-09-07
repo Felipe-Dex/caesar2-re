@@ -864,7 +864,9 @@ def _in_rect(x: int, y: int, r: tuple[int, int, int, int]) -> bool:
     return rx <= x < rx + rw and ry <= y < ry + rh
 
 
-def apply_plebs_hit(labor: LaborState, action: str, sim: SimState) -> None:
+def apply_plebs_hit(labor: LaborState, action: str, sim: SimState) -> str:
+    """Apply a PLEBS hit. Returns ``need_plebs`` when allocate has no idle."""
+    blocked = False
     if action == "welfare-":
         labor.welfare = max(0, labor.welfare - 1)
     elif action == "welfare+":
@@ -875,8 +877,11 @@ def apply_plebs_hit(labor: LaborState, action: str, sim: SimState) -> None:
             labor.assigned[i] -= 1
     elif action.endswith("+") and action.startswith("row"):
         i = int(action[3:-1])
-        if 0 <= i < LABOR_ROWS and i != LABOR_CONSTRUCTION and labor.idle > 0:
-            labor.assigned[i] += 1
+        if 0 <= i < LABOR_ROWS and i != LABOR_CONSTRUCTION:
+            if labor.idle > 0:
+                labor.assigned[i] += 1
+            else:
+                blocked = True
     elif "=" in action and action.startswith("row"):
         left, _, raw = action.partition("=")
         i = int(left[3:])
@@ -894,6 +899,12 @@ def apply_plebs_hit(labor: LaborState, action: str, sim: SimState) -> None:
     sim.labor_assigned = list(labor.assigned)
     sim.plebs_ready = labor.ready
     forecast_ready(labor, sim)
+    if blocked:
+        from app.messages import post_labor_status
+
+        post_labor_status(sim, "need_plebs")
+        return "need_plebs"
+    return ""
 
 
 def click_forum(
@@ -934,8 +945,7 @@ def click_forum(
     if state.kind == KIND_PLEBS:
         action = hit_plebs(mx, my, state.labor)
         if action:
-            apply_plebs_hit(state.labor, action, sim)
-            return ""
+            return apply_plebs_hit(state.labor, action, sim)
         return ""
 
     if state.kind == KIND_TREASURER:
@@ -1614,11 +1624,13 @@ def selftest() -> list[str]:
     else:
         lines.append("ok    construction +/- do nothing, still 20 Need 20")
     fire0 = labor.assigned[1]
-    apply_plebs_hit(labor, "row1+", sim)
+    got = apply_plebs_hit(labor, "row1+", sim)
     if labor.assigned[0] != CREW:
         lines.append(f"FAIL  fire+ stole construction {labor.assigned}")
     elif labor.assigned[1] != fire0:
         lines.append(f"FAIL  fire+ from idle 0 {labor.assigned}")
+    elif got != "need_plebs":
+        lines.append(f"FAIL  allocate toast {got!r}")
     else:
         lines.append("ok    construction 20 reserved; Fire cannot steal it")
     # 0x56440 / 0x5660B: Normal index 5, ready 42, welfare 8 → next month 44.

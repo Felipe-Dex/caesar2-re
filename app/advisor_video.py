@@ -4,10 +4,10 @@ EXE table @ VA 0x9A5BC (14-byte 8.3 names). Indexer 0x59248:
 ``lea eax, [esi-0x50]`` then ``eax * 14`` — ESI is enqueue EAX
 (official C2.ENG slot + 1). Stem = table[slot - 79].
 
-Slots below 79 (Need More Plebs / Idle) go through the other player
-at 0x596DE and always load ``message.smk``. ``null.smk`` means no clip.
-C2.ENG [60] is Query overlay, not a 58c87 slot — do not play a clip
-for it.
+Slots below 79 (Need More Plebs [7]+14 / Idle Plebs [35]+26) are
+confirm-pack status-bar toasts — sound + red HUD text, no talking-head.
+``null.smk`` means no clip. C2.ENG [60] is Query overlay, not a 58c87
+slot — do not play a clip for it.
 
 City Only start Hail [79] is the “build your city” briefing. The EXE
 table names ``congrat.smk`` there (same talking-head as pop milestones
@@ -101,7 +101,7 @@ _CONGRAT_AUDIO_SLOTS = frozenset(range(103, 112)) | {114, 115}
 def video_stem_for_slot(slot: int) -> str | None:
     """Retail SMK stem for an official C2.ENG slot, or None if no clip."""
     if slot < TABLE_BASE_SLOT:
-        return "message"
+        return None
     idx = slot - TABLE_BASE_SLOT
     if idx < 0 or idx >= len(_STEM_TABLE):
         return "message"
@@ -571,8 +571,6 @@ def hosted_city_stems() -> dict[str, str | None]:
     """City Only banner keys → stem (None = no clip)."""
     return {
         "hail": video_stem_for_slot(79),
-        "need_plebs": video_stem_for_slot(7),
-        "idle": video_stem_for_slot(35),
         "fire": video_stem_for_slot(81),
         "services_cut": video_stem_for_slot(84),
         "theft": video_stem_for_slot(88),
@@ -625,10 +623,10 @@ def selftest(game: Path | None = None) -> list[str]:
         lines.append(f"FAIL  unlock stem {video_stem_for_slot(114)!r}")
     else:
         lines.append("ok    [114] New Structure -> congrat")
-    if video_stem_for_slot(7) != "message":
-        lines.append(f"FAIL  need_plebs stem {video_stem_for_slot(7)!r}")
+    if video_stem_for_slot(7) is not None or video_stem_for_slot(35) is not None:
+        lines.append(f"FAIL  labor toast stem {video_stem_for_slot(7)!r}")
     else:
-        lines.append("ok    slot < 79 -> message")
+        lines.append("ok    slot < 79 status-bar, no talking-head")
     if video_stem_for_slot(116) is not None:
         lines.append("FAIL  null.smk must skip")
     else:

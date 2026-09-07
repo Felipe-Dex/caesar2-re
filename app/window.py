@@ -148,6 +148,9 @@ HUD_TREASURY_Y = 6
 HUD_TREASURY_SUFFIX = " Dn"
 HUD_GOLD = (255, 228, 160, 255)
 HUD_TREASURY_NEG = (255, 120, 90, 255)
+# Confirm-pack labor toasts ([7]+14 / [35]+26): red status bar, not cyan debug.
+HUD_STATUS_CYAN = (180, 220, 255, 255)
+HUD_STATUS_RED = (255, 64, 48, 255)
 # C2.ENG [0] File · [1] Options · [2] Speed · [3] Help
 _MENU_SLOTS = (0, 1, 2, 3)
 _MENU_FALLBACK = ("File", "Options", "Speed", "Help")
@@ -623,6 +626,7 @@ def compose_city_hud(
     menu_open: int | None = None,
     options: HostOptions | None = None,
     report: MenuReport | None = None,
+    extra_alert: bool = False,
 ) -> Image.Image:
     """File/Options/Speed/Help + date + Dn on the INT_CITY top bar (0x6189D)."""
     out = frame.convert("RGBA")
@@ -654,8 +658,9 @@ def compose_city_hud(
     draw.text((HUD_TREASURY_X, HUD_TREASURY_Y), money, fill=fill, font=font)
     if extra:
         extra_right = fw - SIDEBAR_W - 8
+        fill = HUD_STATUS_RED if extra_alert else HUD_STATUS_CYAN
         draw.rectangle((6, fh - 28, extra_right, fh - 7), fill=(0, 0, 0, 170))
-        draw.text((14, fh - 24), extra[:88], fill=(180, 220, 255, 255), font=font)
+        draw.text((14, fh - 24), extra[:88], fill=fill, font=font)
     hud = Image.alpha_composite(out, overlay).convert("RGB")
     if report is not None:
         hud = blit_menu_report(hud, report)
@@ -706,6 +711,7 @@ def compose_frame(
     *,
     view: Image.Image | None = None,
     map_mode: bool = False,
+    extra_alert: bool = False,
 ) -> Image.Image:
     if view is not None:
         base = view.convert("RGBA")
@@ -728,12 +734,11 @@ def compose_frame(
             overlay = Image.new("RGBA", (bw, bh), (0, 0, 0, 0))
             draw = ImageDraw.Draw(overlay)
             font = _hud_font()
+            fill = HUD_STATUS_RED if extra_alert else HUD_STATUS_CYAN
             draw.rectangle(
                 (6, bh - 28, bw - SIDEBAR_W - 8, bh - 7), fill=(0, 0, 0, 170)
             )
-            draw.text(
-                (14, bh - 24), extra[:88], fill=(180, 220, 255, 255), font=font
-            )
+            draw.text((14, bh - 24), extra[:88], fill=fill, font=font)
             return Image.alpha_composite(base, overlay).convert("RGB")
         return base.convert("RGB")
     overlay = Image.new("RGBA", (SCREEN_W, SCREEN_H), (0, 0, 0, 0))
@@ -745,8 +750,9 @@ def compose_frame(
         draw.text((14, y), line, fill=HUD_GOLD, font=font)
         y += 13
     if extra:
+        fill = HUD_STATUS_RED if extra_alert else HUD_STATUS_CYAN
         draw.rectangle((6, SCREEN_H - 28, SCREEN_W - 7, SCREEN_H - 7), fill=(0, 0, 0, 170))
-        draw.text((14, SCREEN_H - 24), extra[:88], fill=(180, 220, 255, 255), font=font)
+        draw.text((14, SCREEN_H - 24), extra[:88], fill=fill, font=font)
     return Image.alpha_composite(base, overlay).convert("RGB")
 
 
@@ -926,9 +932,19 @@ def show(ctx: BootContext, *, game: Path) -> None:
             last_extra = extra
         ox = chrome_ox(win_w)
         shown = extra if extra is not None else last_extra
+        extra_alert = False
+        from app.messages import ensure_watch, peek_status, take_status_sfx
+
+        status = peek_status(ctx.sim)
+        if ensure_watch(ctx.sim).status_alert and status:
+            shown = status
+            extra_alert = True
+        if take_status_sfx(ctx.sim):
+            _sfx("click_no")
         prev = current_preview()
         if prev is not None:
             shown = f"{prev.message}  tesouro {ctx.sim.treasury}"
+            extra_alert = False
         if forum_state is not None:
             frame = blit_forum((win_w, win_h), forum_state, ctx.sim, eng=ctx.eng)
             frame = compose_city_hud(
@@ -938,6 +954,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
                 menu_open=menu_open,
                 options=options,
                 report=menu_report,
+                extra_alert=extra_alert,
             )
             _set_layer(well_item, None, "well")
             _set_layer(front_item, None, "front")
@@ -945,7 +962,9 @@ def show(ctx: BootContext, *, game: Path) -> None:
             _prof_note(t0)
             return
         if not map_mode:
-            frame = compose_frame(ctx, shown, view=None, map_mode=False)
+            frame = compose_frame(
+                ctx, shown, view=None, map_mode=False, extra_alert=extra_alert
+            )
             _set_layer(well_item, None, "well")
             _set_layer(front_item, None, "front")
             _set_layer(ui_item, frame.convert("RGB"), "ui")
@@ -1071,13 +1090,9 @@ def show(ctx: BootContext, *, game: Path) -> None:
         if shown:
             draw = ImageDraw.Draw(well)
             ey = max(0, win_h - 28 - wy0)
+            fill = HUD_STATUS_RED[:3] if extra_alert else HUD_STATUS_CYAN[:3]
             draw.rectangle((6, ey, well.width - 8, ey + 21), fill=(0, 0, 0))
-            draw.text(
-                (14, ey + 4),
-                shown[:88],
-                fill=(180, 220, 255),
-                font=_hud_font(),
-            )
+            draw.text((14, ey + 4), shown[:88], fill=fill, font=_hud_font())
         if overlays:
             frame = ui_cache.copy()
             frame.paste(well, (wx0, wy0))
@@ -1110,6 +1125,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
                     menu_open=menu_open,
                     options=options,
                     report=menu_report,
+                    extra_alert=extra_alert,
                 )
             if ctx.sim.paused:
                 pause_spr = chrome.frames[6] if len(chrome.frames) > 6 else None
@@ -2498,6 +2514,8 @@ def show(ctx: BootContext, *, game: Path) -> None:
             if msg == "exit":
                 _sfx("click")
                 _leave_forum()
+            elif msg == "need_plebs":
+                blit()
             elif msg:
                 _sfx("click")
                 blit(msg)

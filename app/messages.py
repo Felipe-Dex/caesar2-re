@@ -1,8 +1,10 @@
 """City Only advisor / event banners — FUN_00058c87 stand-in.
 
 EXE: EAX = official C2.ENG slot + 1, 16-deep queue. Title is the official
-string; body is the next packed NUL ([slot]+1). Confirm-pack toasts
-(Need More Plebs!!! [7]+14) use the same host box.
+string; body is the next packed NUL ([slot]+1). Slots below 79 are
+confirm-pack / status-bar toasts (Need More Plebs!!! [7]+14, Idle Plebs
+[35]+26): red HUD line + SFX, not a talking-head. Fire [81] only after a
+real 69A37 housing ignite (timer 10), not leftover +3 bit7 / +11 0x30.
 
 City Only only. Career banners (Emperor letters [115]+, invasion [82]/[90–95],
 cohorts, Empire Expands, Stern Warning) stay skipped. C2.ENG [60] is the
@@ -22,6 +24,8 @@ QUEUE_CAP = 16
 DRAW_FIRE = 0x80
 ID_HOUSING_LO = 0x82
 ID_HOUSING_HI = 0xA1
+# Confirm-pack / labor allocate — status bar, not 58c87 (slots < 79).
+STATUS_BAR_KEYS = frozenset({"need_plebs", "idle"})
 # Shrine / Temple / Basilica origins — Hail / Stolen copy.
 TEMPLE_LO, TEMPLE_HI = 0xA2, 0xAC
 
@@ -116,6 +120,9 @@ class MessageWatch:
     hail_done: bool = False
     last_ready: int = -1
     last_staffed: tuple[bool, ...] | None = None
+    status_line: str = ""
+    status_alert: bool = False
+    status_sfx: bool = False
 
 
 def _eng(eng, slot: int, skip: int, fallback: str) -> str:
@@ -163,17 +170,49 @@ def pending_count(sim) -> int:
     return len(ensure_watch(sim).pending)
 
 
+def post_labor_status(sim, key: str, eng=None) -> str:
+    """Confirm-pack labor toast: red status bar, no 58c87 queue."""
+    watch = ensure_watch(sim)
+    if key == "idle":
+        text = _line(eng, 35, 26)
+    else:
+        text = _line(eng, 7, 14)
+    watch.status_line = text
+    watch.status_alert = True
+    watch.status_sfx = True
+    return text
+
+
+def peek_status(sim) -> str:
+    return ensure_watch(sim).status_line
+
+
+def take_status_sfx(sim) -> bool:
+    watch = ensure_watch(sim)
+    if not watch.status_sfx:
+        return False
+    watch.status_sfx = False
+    return True
+
+
+def is_status_bar_key(key: str) -> bool:
+    return key in STATUS_BAR_KEYS
+
+
 def seed_watch_from_city(sim, tiles: bytearray) -> MessageWatch:
     """After a successful SAV load, latch edges so scan does not dump.
 
     ``seen`` / peak / Hail / fire / labor / theft live in RAM only — not
     in the file. Treating the deserialized city as rising edges re-fires
-    Hail, pop milestones, unlocks, Fire Alert, Idle / Need More Plebs,
+    Hail, pop milestones, unlocks, Fire Alert, labor status-bar toasts,
     Stolen, and No Denarii. Original C2 does not dump the 58c87 queue
     on F4. Hail stays New Game / new-map City Only.
     """
     watch = ensure_watch(sim)
     watch.pending.clear()
+    watch.status_line = ""
+    watch.status_alert = False
+    watch.status_sfx = False
     if not getattr(sim, "city_only", 0):
         return watch
 
@@ -343,25 +382,18 @@ def scan_city_messages(
                     fired.append(f"pop:{thresh}")
         watch.pop = pop
 
-    # Alert on this-pass 69A37 only. +3 bit7 tiles already on the map
-    # (deserialized fire, prefecture, villa leftover) do not re-queue [81].
-    if fire_ignited > 0 and not watch.on_fire:
+    # [81] only when 69A37 painted a real fire this pass (timer != 0).
+    # Leftover +3 bit7 / +11 0x30 / fire_ignited-without-paint stay quiet.
+    if fire_ignited > 0 and fires > 0 and not watch.on_fire:
         watch.seen.discard("fire")
         if enqueue(sim, _make(eng, "fire", 81)):
             fired.append("fire")
-    watch.on_fire = fire_ignited > 0 or fires > 0
+    watch.on_fire = fires > 0
 
     if constr_short and not watch.construction_short:
         watch.seen.discard("need_plebs")
-        msg = AdvisorMessage(
-            key="need_plebs",
-            title=_line(eng, 7, 14),
-            body=_line(eng, 100, 1),
-            slot=7,
-            dismiss=_line(eng, 78, 0),
-        )
-        if enqueue(sim, msg):
-            fired.append("need_plebs")
+        post_labor_status(sim, "need_plebs", eng)
+        fired.append("need_plebs")
     watch.construction_short = constr_short
 
     if watch.last_ready >= 0 and ready < watch.last_ready and any_short:
@@ -376,15 +408,8 @@ def scan_city_messages(
     idle_short = idle > 0 and any_short and not constr_short
     if idle_short and not watch.idle_short:
         watch.seen.discard("idle")
-        msg = AdvisorMessage(
-            key="idle",
-            title=_line(eng, 35, 26),
-            body=_line(eng, 100, 1),
-            slot=35,
-            dismiss=_line(eng, 78, 0),
-        )
-        if enqueue(sim, msg):
-            fired.append("idle")
+        post_labor_status(sim, "idle", eng)
+        fired.append("idle")
     watch.idle_short = idle_short
 
     if (
@@ -459,8 +484,12 @@ def selftest() -> list[str]:
     got = scan_city_messages(sim, tiles)
     if "need_plebs" not in got:
         lines.append(f"FAIL  need plebs {got}")
+    elif peek_status(sim) != "Need More Plebs!!!":
+        lines.append(f"FAIL  need plebs status {peek_status(sim)!r}")
+    elif any(m.key == "need_plebs" for m in ensure_watch(sim).pending):
+        lines.append("FAIL  Need More Plebs must not enqueue 58c87")
     else:
-        lines.append("ok    Need More Plebs!!! when construction short")
+        lines.append("ok    Need More Plebs!!! status-bar when construction short")
 
     sim = SimState(city_only=1, population=20, treasury=100)
     init_city_only_labor(sim)
@@ -470,8 +499,12 @@ def selftest() -> list[str]:
     got = scan_city_messages(sim, tiles)
     if "idle" not in got:
         lines.append(f"FAIL  idle {got}")
+    elif peek_status(sim) != "Idle Plebs":
+        lines.append(f"FAIL  idle status {peek_status(sim)!r}")
+    elif any(m.key == "idle" for m in ensure_watch(sim).pending):
+        lines.append("FAIL  Idle Plebs must not enqueue 58c87")
     else:
-        lines.append("ok    Idle Plebs when surplus + a short row")
+        lines.append("ok    Idle Plebs status-bar when surplus + a short row")
 
     from app.forum import apply_month_labor
 
@@ -496,6 +529,7 @@ def selftest() -> list[str]:
     tiles2[hoff] = 0x82
     tiles2[hoff + 5] = 0
     tiles2[hoff + 3] = DRAW_FIRE
+    tiles2[hoff + 16] = 10
     sim = SimState(city_only=1, population=8, treasury=100, fire_ignited=1)
     init_city_only_labor(sim)
     got = scan_city_messages(sim, tiles2, fire_ignited=1)
@@ -503,6 +537,15 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  fire {got}")
     else:
         lines.append("ok    Fire Alert! on ignite")
+
+    tiles_flag = bytearray(MAP_W * MAP_H * TILE_STRIDE)
+    sim = SimState(city_only=1, population=8, treasury=100)
+    init_city_only_labor(sim)
+    got = scan_city_messages(sim, tiles_flag, fire_ignited=1)
+    if "fire" in got:
+        lines.append(f"FAIL  fire_ignited without paint queued [81] {got}")
+    else:
+        lines.append("ok    fire_ignited without painted fire is not [81]")
 
     tiles_pf = bytearray(MAP_W * MAP_H * TILE_STRIDE)
     poff = 14 * MAP_W * TILE_STRIDE + 14 * TILE_STRIDE
@@ -558,10 +601,19 @@ def selftest() -> list[str]:
     init_city_only_labor(sim_fresh)
     seed_watch_from_city(sim_fresh, tiles3)
     got = scan_city_messages(sim_fresh, tiles3, fire_ignited=1)
+    if "fire" in got:
+        lines.append(f"FAIL  load seed fire_ignited without paint {got}")
+    else:
+        lines.append("ok    load seed: fire_ignited without paint stays quiet")
+    tiles3[hoff] = 0x82
+    tiles3[hoff + 3] = DRAW_FIRE
+    tiles3[hoff + 5] = 0
+    tiles3[hoff + 16] = 10
+    got = scan_city_messages(sim_fresh, tiles3, fire_ignited=1)
     if "fire" not in got:
         lines.append(f"FAIL  new ignite after load seed {got}")
     else:
-        lines.append("ok    Fire Alert! on new ignite after load")
+        lines.append("ok    Fire Alert! on new painted ignite after load")
 
     tiles3[hoff] = 0x82
     tiles3[hoff + 5] = 0
@@ -578,8 +630,17 @@ def selftest() -> list[str]:
     got = scan_city_messages(sim, tiles3, month_wrapped=True)
     if "theft" not in got:
         lines.append(f"FAIL  theft {got}")
+    elif "hail" in got or "fire" in got:
+        lines.append(f"FAIL  year wrap dumped Hail/Fire {got}")
     else:
         lines.append("ok    Stolen! on wrap with gold and no temples")
+    wrap_sim = SimState(city_only=1, population=0, treasury=12000, month=0)
+    init_city_only_labor(wrap_sim)
+    got = scan_city_messages(wrap_sim, tiles3, hail=False, month_wrapped=True)
+    if "hail" in got or "fire" in got:
+        lines.append(f"FAIL  Dec wrap must not Hail/Fire {got}")
+    else:
+        lines.append("ok    year wrap does not Hail or dump Fire Alert")
 
     sim = SimState(city_only=1, population=20, treasury=-3)
     init_city_only_labor(sim)
