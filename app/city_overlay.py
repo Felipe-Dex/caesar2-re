@@ -32,6 +32,7 @@ from app.city_paint import (
     SECURITY_COV_BITS,
     civic_edge_access,
     civic_stamp_origin,
+    factory_type_name,
     hospital_cover_percent,
     library_cover_percent,
     tile_inside_walls,
@@ -719,6 +720,12 @@ def query_place(city: CityMap, x: int, y: int, eng=None) -> PlaceInfo:
     if tid == 0xBE or (0xCB <= tid <= 0xD6):
         charge = t.coverage & 3
         lines.append(f"pipe +1&0xC0={t.flags & 0xC0:#x}  charge +10&3={charge}")
+    if tid == 0xFA:
+        kind = factory_type_name(t.special)
+        stock = (t.overlay_anim & 0xF0) >> 4
+        lines.append(f"{kind}  +19={t.special & 0xF}  stock {stock}")
+        if t.draw & 0x80:
+            lines.append("goods label (flag80)")
     if tid == 0xD7 or 0xDB <= tid <= 0xDE:
         if 0xDB <= tid <= 0xDE and not (splash & 4):
             lines.append("fountain dry (needs charged reservoir ring)")
@@ -1341,6 +1348,18 @@ def selftest() -> list[str]:
         lines.append("FAIL  markets factory")
     else:
         lines.append("ok    markets factory -> 0x96")
+
+    city_fac = CityMap()
+    foff = city_fac.offset(4, 4)
+    city_fac.tiles[foff] = 0xFA
+    city_fac.tiles[foff + 3] = 0x8C
+    city_fac.tiles[foff + 19] = 1
+    qfac = query_place(city_fac, 4, 4)
+    joined_fac = " ".join(qfac.lines)
+    if "Winery" not in joined_fac:
+        lines.append(f"FAIL  query factory type {qfac.lines}")
+    else:
+        lines.append("ok    query Factory Winery +19=1")
 
     city = CityMap()
     city.tiles[city.offset(0, 0)] = 0xBE

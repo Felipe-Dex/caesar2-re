@@ -147,6 +147,13 @@ PL8_BUILD1B = "BUILD1B"
 PL8_BUILD1C = "BUILD1C"
 PL8_BUILD1D = "BUILD1D"
 PL8_CITYFIXT = "CITYFIXT"
+PL8_CITYTOP = "CITYTOP"
+# city_tile_draw_flag80 0x37F80: CITYTOP[(+19&0xF)+9] at LUT 0x9410C/0x9413C.
+FACTORY_FLAG80_DEST: tuple[tuple[int, int], ...] = (
+    (32, -18),
+    (16, -9),
+    (8, -4),
+)
 
 # Zoom-0 column of each 4-byte LUT record (variant*4 + (zoom>>1), zoom==0).
 # HOUSES1 0x97158 (174), BUILD1A 0x97410 (124), BUILD1B 0x97600 (164),
@@ -1102,6 +1109,46 @@ def building_sprite_image(
     return spr
 
 
+def factory_flag80_dest(zoom: int = 0) -> tuple[int, int]:
+    z = 0 if zoom < 0 else 2 if zoom > 2 else zoom
+    return FACTORY_FLAG80_DEST[z]
+
+
+def factory_label_frame(special: int) -> int:
+    return (special & 0xF) + 9
+
+
+def _paint_factory_flag80(
+    img: Image.Image,
+    tile: Tile,
+    sx: int,
+    sy: int,
+    *,
+    zoom: int,
+    sheets: dict[str, Sequence[Image.Image]] | None,
+) -> None:
+    """0x37E0F origin path: CITYTOP frame = (+19 & 0xF) + 9 when +3 bit7."""
+    if tile.terrain_id != 0xFA:
+        return
+    if tile.spawn_packed & 0xF:
+        return
+    if not (tile.draw & 0x80):
+        return
+    if sheets is None:
+        return
+    citytop = sheets.get(PL8_CITYTOP)
+    if citytop is None:
+        return
+    frame = factory_label_frame(tile.special)
+    if not (0 <= frame < len(citytop)):
+        return
+    spr = citytop[frame]
+    if spr.mode != "RGBA":
+        spr = spr.convert("RGBA")
+    dx, dy = factory_flag80_dest(zoom)
+    img.paste(spr, (sx + dx, sy + dy), spr)
+
+
 def _paint_iso_tile(
     img: Image.Image,
     tile: Tile,
@@ -1114,6 +1161,7 @@ def _paint_iso_tile(
     cityfixt: Sequence[Image.Image] | None,
     sheets: dict[str, Sequence[Image.Image]] | None,
     facing: int = 0,
+    zoom: int = 0,
 ) -> None:
     """Blit this cell's own LUT sprite at ``(sx, sy)``.
 
@@ -1147,6 +1195,7 @@ def _paint_iso_tile(
         tile_w=tile_w,
         tile_h=tile_h,
     ):
+        _paint_factory_flag80(img, tile, sx, sy, zoom=zoom, sheets=sheets)
         return
     _draw_diamond(img, sx, sy, _fallback_color(tile), tile_w=tile_w, tile_h=tile_h)
 
@@ -1309,6 +1358,7 @@ def render_iso(
                 cityfixt=cityfixt,
                 sheets=sheets,
                 facing=facing,
+                zoom=zoom,
             )
     return img
 
@@ -1375,6 +1425,7 @@ def render_iso_view(
                 cityfixt=cityfixt,
                 sheets=sheets,
                 facing=facing,
+                zoom=z,
             )
     return img, cx, cy
 
@@ -1596,6 +1647,7 @@ def blit_water_tiles(
             cityfixt=cityfixt,
             sheets=sheets,
             facing=facing,
+            zoom=z,
         )
         n += 1
     img.paste(crop, (x0, y0))
@@ -1865,6 +1917,13 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  grass sprite {g0}/{g1}, want {8 + CITYFIXT_TERRAIN_BIAS}")
     else:
         lines.append("ok    grass ignore water_frame")
+    if factory_label_frame(1) != 10 or factory_flag80_dest(0) != (32, -18):
+        lines.append(
+            f"FAIL  factory flag80 frame={factory_label_frame(1)} "
+            f"dest={factory_flag80_dest(0)}"
+        )
+    else:
+        lines.append("ok    factory flag80 CITYTOP frame +19+9 dest (32,-18)")
     f18 = [flag18.cityfixt_index(f) for f in range(WATER_FRAMES)]
     if f18 != [0x18 + CITYFIXT_TERRAIN_BIAS] * WATER_FRAMES:
         lines.append(f"FAIL  0x18 flag tile {f18}, want static grass")

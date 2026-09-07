@@ -451,9 +451,16 @@ def start_city_assignment(
         history=bytearray(SAV_HISTORY_BYTES),
     )
     init_city_only_labor(sim)
+    from app.city_paint import seed_city_only_industry
+
+    seed_city_only_industry(sim)
     notes.append(
         f"labor_init 0x563E2 (New Game only): ready={sim.plebs_ready} "
         f"welfare={sim.welfare} assigned={list(sim.labor_assigned)}"
+    )
+    notes.append(
+        "city-only industry: seeded goods +24/+28 and factory_labor "
+        f"{sim.factory_labor} (no province farms; 41b33 cap 4)"
     )
     return NewCity(
         city=city,
@@ -539,4 +546,13 @@ def selftest(*, seed: int = 1) -> list[str]:
         )
     else:
         lines.append("ok    City Only Normal labor ready 42 assigned 20/12/4/4")
+    from app.city_paint import CITY_ONLY_LABOR, GOODS_RAW, goods_i32
+
+    if fresh.sim.factory_labor < CITY_ONLY_LABOR or goods_i32(fresh.sim.goods, 0, GOODS_RAW) <= 0:
+        lines.append(
+            f"FAIL  city-only industry labor={fresh.sim.factory_labor} "
+            f"raw0={goods_i32(fresh.sim.goods, 0, GOODS_RAW)}"
+        )
+    else:
+        lines.append("ok    City Only goods table + factory_labor seeded")
     return lines

@@ -192,6 +192,46 @@ GOODS_SUPPLIED = 24
 GOODS_RAW = 28
 FACTORY_OCC_R = 2
 FACTORY_OCC_EXTRA = 2
+# City Only stand-in: EXE 0x43F05 zeros +24/+28; campaign-only 0x43F5A
+# reseeds supplied. Farms are province so raw stays 0. Sandbox fills the
+# table the 41b33 City Only cap (province_links<=0 → prod 4) already
+# expects. raw=500 is the 0x191…0x258 band (no extra labor penalty).
+CITY_ONLY_SUPPLIED = 100
+CITY_ONLY_RAW = 500
+CITY_ONLY_LABOR = 4
+# Overlay: city_tile_draw_flag80 0x37F80. Origin frame = (+19 & 0xF) + 9.
+FACTORY_LABEL_FRAME_BASE = 9
+# EXE debug strings 0x90FB5 + UI names from factory.md.
+FACTORY_TYPE_NAMES: tuple[str, ...] = (
+    "Bakery",
+    "Winery",
+    "Butcher",
+    "Tailor",
+    "Gems",
+    "Lead Works",
+    "Iron",
+    "Copper Works",
+    "Clay",
+    "Glass Works",
+    "Marble",
+    "Stone Works",
+    "Silk",
+    "Spice Dealer",
+    "Ivory Dealer",
+    "Fish Monger",
+)
+
+
+def factory_type_name(nibble: int) -> str:
+    idx = nibble & 0xF
+    if 0 <= idx < len(FACTORY_TYPE_NAMES):
+        return FACTORY_TYPE_NAMES[idx]
+    return "Factory"
+
+
+def factory_label_frame(nibble: int) -> int:
+    """CITYTOP frame for the origin goods etiqueta."""
+    return (nibble & 0xF) + FACTORY_LABEL_FRAME_BASE
 
 
 def goods_i32(goods: bytes | bytearray | None, nibble: int, off: int) -> int:
@@ -201,6 +241,36 @@ def goods_i32(goods: bytes | bytearray | None, nibble: int, off: int) -> int:
     if goods is None or base + 4 > len(goods):
         return 0
     return int.from_bytes(goods[base : base + 4], "little", signed=True)
+
+
+def goods_set_i32(goods: bytearray, nibble: int, off: int, value: int) -> None:
+    idx = nibble & 0xF
+    base = idx * GOODS_RECORD + off
+    if base + 4 > len(goods):
+        return
+    goods[base : base + 4] = int(value).to_bytes(4, "little", signed=True)
+
+
+def seed_city_only_good(goods: bytearray, nibble: int) -> None:
+    """Sandbox raw+supplied so 41b33 can write +9 (no province farms)."""
+    goods_set_i32(goods, nibble, 0, 1)
+    goods_set_i32(goods, nibble, GOODS_SUPPLIED, CITY_ONLY_SUPPLIED)
+    goods_set_i32(goods, nibble, GOODS_RAW, CITY_ONLY_RAW)
+
+
+def seed_city_only_industry(sim, nibble: int | None = None) -> None:
+    """Fill chunk 339 for City Only. ``nibble`` None = all 16 goods."""
+    goods = getattr(sim, "goods", None)
+    if not isinstance(goods, bytearray) or len(goods) < GOODS_COUNT * GOODS_RECORD:
+        sim.goods = bytearray(GOODS_COUNT * GOODS_RECORD)
+        goods = sim.goods
+    if nibble is None:
+        for i in range(GOODS_COUNT):
+            seed_city_only_good(goods, i)
+    else:
+        seed_city_only_good(goods, nibble)
+    if int(getattr(sim, "factory_labor", 0) or 0) < CITY_ONLY_LABOR:
+        sim.factory_labor = CITY_ONLY_LABOR
 
 
 def housing_occupancy_box(
@@ -249,11 +319,14 @@ def factory_produce(
     goods: bytes | bytearray | None = None,
     labor: int = 0,
     province_links: int = 0,
+    city_only: bool = False,
 ) -> int:
     """FUN_00041b33 — write +9 hi stock nibble (0–7) on a 0xFA origin.
 
     Indexes goods_16x48 by origin +19 lo. Raw dword +28 ≤ 0 or supplied %
-    +24 ≤ 0 → stock 0. Does not invent raw and does not consume the table.
+    +24 ≤ 0 → stock 0 unless ``city_only`` already seeded the table.
+    City Only with no nearby houses uses stage 1 (workshop cycle) so a
+    picked type is not stuck at stock 0 after the player places it.
     """
     if not _in_map(x, y):
         return 0
@@ -269,6 +342,8 @@ def factory_produce(
     occ = housing_occupancy_box(
         tiles, x, y, radius=FACTORY_OCC_R, extra=FACTORY_OCC_EXTRA
     )
+    if city_only and occ == 0 and stage == 0:
+        stage = 1
     if occ > 0x82:
         stage += 4
     elif occ > 0x5A:
@@ -369,6 +444,7 @@ def factory_produce_row(
     goods: bytes | bytearray | None = None,
     labor: int = 0,
     province_links: int = 0,
+    city_only: bool = False,
 ) -> int:
     """0x41719 factory arm: +3 |= 1 on every 0xFA; 41b33 on origins."""
     written = 0
@@ -389,6 +465,7 @@ def factory_produce_row(
                 goods=goods,
                 labor=labor,
                 province_links=province_links,
+                city_only=city_only,
             )
             written += 1
     return written
@@ -482,11 +559,16 @@ def paint_plus13_buildings(tiles: bytearray, y0: int, n: int) -> int:
                 tile_or_radius(tiles, x, y, 2, 13, 0x40)
                 painted += 1
             elif hid == 0xFA:
-                tile_or_radius(tiles, x, y, 4, 14, 0x20)
-                tile_or_radius(tiles, x, y, 2, 14, 0x10)
-                tile_or_radius(tiles, x, y, 1, 13, 0x80)
+                paint_factory_emitter(tiles, x, y)
                 painted += 1
     return painted
+
+
+def paint_factory_emitter(tiles: bytearray, x: int, y: int) -> None:
+    """0x3FDD0 factory arm + place 0x3043B: +13 0x80 / +14 0x10/0x20."""
+    tile_or_radius(tiles, x, y, 4, 14, 0x20)
+    tile_or_radius(tiles, x, y, 2, 14, 0x10)
+    tile_or_radius(tiles, x, y, 1, 13, 0x80)
 
 
 # FUN_0003fef7 / FUN_0003fdd0 radii (Chebyshev). Fountain is not a well.

@@ -817,6 +817,7 @@ def emit_walkers(
     factory_labor: int = 0,
     province_links: int = 0,
     shutoff: frozenset[str] | None = None,
+    city_only: bool = False,
 ) -> int:
     """Spawn from civic buildings onto adjacent roads. Mutates walkers."""
     global LAST_EMIT_NOTE
@@ -834,6 +835,7 @@ def emit_walkers(
             goods=goods,
             labor=prod_labor,
             province_links=province_links,
+            city_only=city_only,
         )
     if walkers is None:
         LAST_EMIT_NOTE = f"skip walkers=None produced={produced}"
@@ -859,6 +861,7 @@ def emit_walkers(
         province_links=province_links,
         produced=produced,
         shutoff=shutoff,
+        city_only=city_only,
     )
     _write_back(walkers, pool)
     return spawned
@@ -889,6 +892,7 @@ def emit_walkers_row(
     province_links: int = 0,
     produced: int | None = None,
     shutoff: frozenset[str] | None = None,
+    city_only: bool = False,
 ) -> int:
     """Forum 0xAE–0xB9, prefecture 0xE3, barracks 0xE4, market 0xFC–0xFF.
 
@@ -919,6 +923,7 @@ def emit_walkers_row(
             goods=goods,
             labor=prod_labor,
             province_links=province_links,
+            city_only=city_only,
         )
     if produced is None:
         produced = 0

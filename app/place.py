@@ -76,11 +76,15 @@ from app.city_map import (
     iso_tile_size,
 )
 from app.city_paint import (
+    factory_produce,
+    factory_type_name,
     paint_baths_emitter,
     paint_education_emitter,
     paint_entertainment_emitter,
+    paint_factory_emitter,
     paint_security_emitter,
     paint_water_emitter,
+    seed_city_only_industry,
 )
 from app.city_sim import SimState
 
@@ -1412,6 +1416,12 @@ def _write_stamp(city: CityMap, ox: int, oy: int, spec: StampSpec) -> list[tuple
             city, x, y, tid, spec.flags, draw, variant,
             piece=piece, special=extra,
         )
+        if spec.tool == TOOL_FACTORY and (dx, dy) == (0, 0):
+            # 0x30415: OR +3 bit7 so flag80 blits CITYTOP[(+19)+9].
+            # 0x3043B: OR +13 0x80 (factory splash for type-2 traders).
+            off = city.offset(x, y)
+            city.tiles[off + 3] |= 0x80
+            city.tiles[off + 13] |= 0x80
         dirty.append((x, y))
     return dirty
 
@@ -1691,15 +1701,32 @@ def try_place(
             paint_baths_emitter(city.tiles, x, y)
         if spec.tid in (ID_BARRACKS, ID_PREFECTURE):
             paint_security_emitter(city.tiles, x, y)
+        if spec.tool == TOOL_FACTORY:
+            paint_factory_emitter(city.tiles, x, y)
+            if sim is not None and getattr(sim, "city_only", 0):
+                seed_city_only_industry(sim, nibble=factory_goods())
+                factory_produce(
+                    city.tiles,
+                    x,
+                    y,
+                    goods=sim.goods,
+                    labor=sim.factory_labor,
+                    province_links=0,
+                    city_only=True,
+                )
         for cx, cy in dirty:
             paint_entertainment_emitter(city.tiles, cx, cy)
         seeds = list(dirty)
         dirty.extend(_retile_roads(city, [n for c in dirty for n in _neighbor_ring(*c)]))
         dirty = expand_iso_dirty(dirty, seeds)
         paid = f"  -{spec.cost}" if spec.cost else ""
+        if spec.tool == TOOL_FACTORY:
+            label = f"Factory {factory_type_name(factory_goods())} 0xFA"
+        else:
+            label = f"{spec.label} {spec.tid:#x}"
         return PlaceResult(
             True,
-            f"{spec.label} {spec.tid:#x} {spec.w}×{spec.h} NO ({x},{y}){paid}",
+            f"{label} {spec.w}×{spec.h} NO ({x},{y}){paid}",
             dirty=list(dict.fromkeys(dirty)),
             cost=spec.cost,
         )
@@ -1829,7 +1856,7 @@ def query_tile(city: CityMap, x: int, y: int) -> str:
     if t.terrain_id == ID_HOSPITAL:
         bits.append("Hospital")
     if t.terrain_id == ID_FACTORY:
-        bits.append("Factory")
+        bits.append(f"Factory {factory_type_name(t.special)}")
     if t.terrain_id == ID_RUBBLE:
         bits.append("rubble")
     if t.terrain_id == ID_CLEAR:
@@ -3597,20 +3624,33 @@ def selftest() -> list[str]:
     set_factory_goods(0)
     r = try_place(city, 16, 2, TOOL_FACTORY, sim)
     factory_extra = city.tiles[city.offset(16, 2) + 19]
-    if not r.ok or city.tiles[city.offset(16, 2)] != ID_FACTORY or factory_extra != 0:
-        lines.append(f"FAIL  factory {r.message} +19={factory_extra}")
+    factory_draw = city.tiles[city.offset(16, 2) + 3]
+    if (
+        not r.ok
+        or city.tiles[city.offset(16, 2)] != ID_FACTORY
+        or factory_extra != 0
+        or factory_draw != 0x8C
+    ):
+        lines.append(
+            f"FAIL  factory {r.message} +19={factory_extra} +3={factory_draw:#04x}"
+        )
     else:
-        lines.append("ok    Factory 0xFA 3×3 +19=0 (Bakery)")
+        lines.append("ok    Factory 0xFA 3×3 +19=0 +3=0x8C (Bakery flag80)")
     _grass_block(40, 2, 3, 3)
     sim.treasury = 80
+    sim.city_only = 1
     set_factory_goods(1)
     r = try_place(city, 40, 2, TOOL_FACTORY, sim)
     winery = city.tiles[city.offset(40, 2) + 19]
+    stock = (city.tiles[city.offset(40, 2) + 9] & 0xF0) >> 4
     if not r.ok or winery != 1:
         lines.append(f"FAIL  winery +19={winery} {r.message}")
+    elif stock == 0:
+        lines.append(f"FAIL  winery City Only stock {stock} {r.message}")
     else:
-        lines.append("ok    Factory type Winery +19=1")
+        lines.append(f"ok    Factory type Winery +19=1 stock={stock}")
     set_factory_goods(0)
+    sim.city_only = 0
 
     _grass_block(16, 8, 4, 4)
     sim.treasury = 10

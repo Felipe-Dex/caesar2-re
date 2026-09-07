@@ -53,6 +53,7 @@ CITY_MAP_PL8S_BY_ZOOM: tuple[tuple[tuple[str, str], ...], ...] = (
         ("BUILD1B", "BUILD1B.PL8"),
         ("BUILD1C", "BUILD1C.PL8"),
         ("BUILD1D", "BUILD1D.PL8"),
+        ("CITYTOP", "CITYTOP1.PL8"),
     ),
     (
         ("CITYFIXT", "CITYFIX2.PL8"),
@@ -61,6 +62,7 @@ CITY_MAP_PL8S_BY_ZOOM: tuple[tuple[tuple[str, str], ...], ...] = (
         ("BUILD1B", "BUILD2B.PL8"),
         ("BUILD1C", "BUILD2C.PL8"),
         ("BUILD1D", "BUILD2D.PL8"),
+        ("CITYTOP", "CITYTOP2.PL8"),
     ),
     (
         ("CITYFIXT", "CITYFIX3.PL8"),
@@ -69,6 +71,7 @@ CITY_MAP_PL8S_BY_ZOOM: tuple[tuple[tuple[str, str], ...], ...] = (
         ("BUILD1B", "BUILD3B.PL8"),
         ("BUILD1C", "BUILD3C.PL8"),
         ("BUILD1D", "BUILD3D.PL8"),
+        ("CITYTOP", "CITYTOP3.PL8"),
     ),
 )
 CITY_MAP_PL8S = CITY_MAP_PL8S_BY_ZOOM[0]

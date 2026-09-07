@@ -115,6 +115,26 @@ Worker type 6 / state 10 (`0x4675C`) calls `0x4A7FF` **EDX=0** and packs scores 
 
 **No cart / load-to-market walker.** Type 2 traders scan factory splash `+13&0x80`; workers scan market splash `+13&0x40`. Industry tax still needs `+10&0x0C` and reads stock×70.
 
+### Type picker + etiqueta
+
+Placement `0x30407` stamps `0xFA` 3×3 (`+4=0x3E…0x46`, `+3` sheet `0x0C`). The **user** picks the good (HELP eight Business kinds). EXE then:
+
+- writes origin **`+19` lo** from `[0x10243C]` (picker nibble)
+- **`OR +3 bit7`** on the origin → `+3 = 0x8C` (D.SAV origins)
+- **`OR +13 bit7`** (`0x80`) — factory splash for type-2 traders
+
+The picker does **not** write `+9`. Overlay is a later blit, not a second building.
+
+`city_map_draw_overlays` `0x365CC` calls `city_tile_draw_flag80` `0x37E0F` only when **`+3 & 0x80`**. Origin (`+5` lo == 0): **CITYTOP** frame = `(+19 & 0xF) + 9` at dest LUT `0x9410C`/`0x9413C` (zoom-0 **(32, −18)**). Handle `[0x1023D0]` = `citytop1.pl8`. Non-origin with stock uses frame `hi(+9)+0x18`.
+
+Host: place ORs bit7; `_paint_iso_tile` blits `CITYTOP` on the origin. Without bit7 the factory is a bare BUILD1C pad.
+
+### What starts production
+
+No cart / load-to-market walker. `0x41719` (slots `0x9A–0x9D`) ORs `+3` bit0 and runs `41b33` on every origin **before** the pop≥2 worker-6 gate. Stock is **`+9` hi** from goods `+24` (supplied %) and `+28` (raw) and labor seed `[0x102B08]`. Type-6 workers pack scores into `+9` bits 0–3 only.
+
 ### City Only / farms
 
-Farms are province. `province_goods_setup` `0x577E4` is skipped. New Game goods table is **zeros** → raw +28 = 0 → **stock 0**. D.SAV chunk 339 has supplied % (40–100) but **+28 = 0** and factory **+9 = 0** — nothing to fall back on. Do **not** invent free goods. Career SAVs (20230610 / FELIPE) already stock +28 in the thousands; load chunk 339 and 41b33 runs as in the EXE.
+Farms are province. `init_new_city` **does** call `province_goods_setup` `0x577E4` (pid 0 locals + `goods[+0]=1`) and `0x43DD4`. `0x43F05` **zeros** all 16 records’ `+24`/`+28`. Campaign (`[0x9CE81]≠0`) then reseeds supplied % from `0x96927`; City Only skips that. Raw `+28` is later `pop / farm-counter` (`0x4453D`) — no farms → **0**. `41b33` with raw≤0 or supplied≤0 writes stock **0**. D.SAV chunk 339 has supplied % but `+28=0` and factory `+9=0`. Career SAVs already stock `+28` in the thousands.
+
+Host City Only **sandbox-seeds** chunk 339 (`+0=1`, supplied 100, raw 500) and `factory_labor=4`, and treats empty occupancy as stage 1 so a placed Bakery/Winery/… is not stuck at stock 0 with no label. `province_links=0` still caps prod at 4 (EXE). Career load keeps the file table — do not overwrite.

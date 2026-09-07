@@ -1122,6 +1122,7 @@ def city_sim_phase(
             factory_labor=state.factory_labor,
             province_links=state.province_links,
             shutoff=shut,
+            city_only=bool(getattr(state, "city_only", 0)),
         )
         note = wt.LAST_EMIT_NOTE or f"pop={state.population}"
     elif 0x9E <= phase <= 0xA1 and can:
@@ -2068,7 +2069,14 @@ def selftest() -> list[str]:
         f"id={tiles[toff]:#x} +15={tiles[toff + 15]} {reason}"
     )
 
-    from app.city_paint import factory_produce, GOODS_RAW, GOODS_SUPPLIED
+    from app.city_paint import (
+        factory_produce,
+        factory_type_name,
+        seed_city_only_good,
+        GOODS_RAW,
+        GOODS_SUPPLIED,
+        CITY_ONLY_LABOR,
+    )
     from app.walker_tick import pack_home_plus9
 
     fac = _blank_tiles()
@@ -2079,8 +2087,20 @@ def selftest() -> list[str]:
     zero = factory_produce(fac, 10, 10)
     ok = zero == 0 and (fac[foff + 9] & 0xF0) == 0
     lines.append(
-        f"City Only no raw → stock 0: {'ok' if ok else 'FAIL'} "
+        f"41b33 no raw → stock 0: {'ok' if ok else 'FAIL'} "
         f"stock={zero} +9={fac[foff + 9]:#04x}"
+    )
+
+    sandbox = bytearray(768)
+    seed_city_only_good(sandbox, 0)
+    fac[foff + 9] = 0
+    play = factory_produce(
+        fac, 10, 10, goods=sandbox, labor=CITY_ONLY_LABOR, city_only=True
+    )
+    ok = play > 0 and (fac[foff + 9] & 0xF0) != 0
+    lines.append(
+        f"City Only seeded workshop → stock {play}: {'ok' if ok else 'FAIL'} "
+        f"+9={fac[foff + 9]:#04x} type={factory_type_name(0)}"
     )
 
     d_like = bytearray(768)
