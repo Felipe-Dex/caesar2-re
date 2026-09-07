@@ -1689,16 +1689,14 @@ def show(ctx: BootContext, *, game: Path) -> None:
 
     def _apply_load() -> None:
         from app.city_map import find_saves
+        from app.sav import load_picker_entries
 
         found = find_saves(game)
-        if not found:
+        picks = load_picker_entries(found)
+        if not picks:
             blit(_eng_skip(ctx.eng, 38, 4, "FILE ERROR -- Load Canceled"))
             return
-        if len(found) == 1:
-            _load_sav(found[0])
-            return
         title = _eng_skip(ctx.eng, 38, 2, "Select a saved game to LOAD")
-        picks = found[:12]
         _open_report(
             MenuReport(title, tuple(_load_label(p) for p in picks)),
             picks=picks,

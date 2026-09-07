@@ -2014,6 +2014,46 @@ def selftest() -> list[str]:
     )
 
     tiles = _blank_tiles()
+    for dy in range(2):
+        for dx in range(2):
+            foff = _off(20 + dx, 20 + dy)
+            tiles[foff] = 0xAF
+            tiles[foff + 1] = 0x01
+            tiles[foff + 5] = dy * 2 + dx
+    tiles[_off(20, 19)] = 0x52
+    tiles[_off(20, 19) + 1] = 0x20
+    walkers = []
+    try:
+        nsp = emit_walkers(
+            tiles,
+            walkers,
+            20,
+            3,
+            population=4,
+            kinds="forum",
+            city_only=True,
+        )
+    except TypeError as exc:
+        lines.append(f"emit_walkers city_only: FAIL {exc}")
+    else:
+        live = live_walkers(walkers)
+        tid = tiles[_off(live[0].x, live[0].y)] if live else -1
+        trader_on_forum = any(
+            w.type == 2 and 0xAE <= tiles[_off(w.x, w.y)] <= 0xB9 for w in live
+        )
+        ok = (
+            nsp >= 1
+            and live
+            and live[0].type == 1
+            and 0x52 <= tid <= 0x5C
+            and not trader_on_forum
+        )
+        lines.append(
+            f"emit_walkers city_only clerk on road: {'ok' if ok else 'FAIL'} "
+            f"n={nsp} type={live[0].type if live else 0} id={tid:#x}"
+        )
+
+    tiles = _blank_tiles()
     toff = _off(8, 9)
     tiles[toff] = 0x82
     tiles[toff + 1] = 0x01

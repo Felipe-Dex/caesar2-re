@@ -253,6 +253,11 @@ def host_sav_dir(*, create: bool = False) -> Path:
     return folder
 
 
+def load_picker_entries(saves: list[Path], *, limit: int = 12) -> list[Path]:
+    """F4 / File→Load names. Even one slot is a list — never auto-load."""
+    return list(saves[:limit])
+
+
 def sav_dir(root: Path | None = None, *, create: bool = False) -> Path:
     """`{root}/sav/`. Default root is the repo, not `{game}`."""
     folder = (Path(root) if root is not None else REPO_ROOT) / SAV_SUBDIR
@@ -601,4 +606,12 @@ def selftest() -> list[str]:
             lines.append("FAIL  history trailer not 4000 zeros")
         else:
             lines.append("ok    history.dat trailer 4000 zeros (City Only reset)")
+    one = [Path("sav/CITY.SAV")]
+    two = [Path("sav/A.SAV"), Path("sav/B.SAV")]
+    if load_picker_entries([]) or load_picker_entries(one) != one:
+        lines.append("FAIL  F4 picker auto-loads a single .SAV")
+    elif load_picker_entries(two) != two:
+        lines.append("FAIL  F4 picker list")
+    else:
+        lines.append("ok    F4 picker lists host .SAV names (even one)")
     return lines

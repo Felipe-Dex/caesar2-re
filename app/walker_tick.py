@@ -2836,4 +2836,43 @@ def selftest() -> list[str]:
         f"understaffed factory leftover no worker: {'ok' if ok else 'FAIL'} "
         f"spawn={nsp} wait={wait} stock={stock}"
     )
+
+    reset_clock()
+    tiles = bytearray(MAP_W * MAP_H * TILE_BYTES)
+    for dy in range(2):
+        for dx in range(2):
+            off = _tile_off(20 + dx, 20 + dy)
+            tiles[off] = 0xAF
+            tiles[off + 1] = 0x01
+            tiles[off + 5] = dy * 2 + dx
+    road = _tile_off(20, 19)
+    tiles[road] = 0x52
+    tiles[road + 1] = 0x20
+    walkers: list[Walker] = []
+    try:
+        nsp = emit_walkers(
+            tiles, walkers, 20, 3, population=4, kinds="forum", city_only=True
+        )
+    except TypeError as exc:
+        lines.append(f"emit_walkers city_only: FAIL {exc}")
+    else:
+        live = [w for w in walkers if getattr(w, "occupied", 0)]
+        tid = -1
+        if live:
+            tid = tiles[_tile_off(live[0].x, live[0].y)]
+        trader_on_forum = any(
+            w.type == 2 and _is_forum_floor(tiles[_tile_off(w.x, w.y)])
+            for w in live
+        )
+        ok = (
+            nsp >= 1
+            and live
+            and live[0].type == TYPE_CLERK
+            and ID_ROAD_LO <= tid <= ID_ROAD_HI
+            and not trader_on_forum
+        )
+        lines.append(
+            f"emit_walkers city_only clerk on road: {'ok' if ok else 'FAIL'} "
+            f"spawn={nsp} type={live[0].type if live else 0} id={tid:#x}"
+        )
     return lines
