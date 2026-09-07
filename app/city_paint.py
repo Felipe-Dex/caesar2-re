@@ -251,6 +251,28 @@ def factory_jug_frame(plus9: int) -> int | None:
     return stock + FACTORY_JUG_FRAME_BASE
 
 
+# city_tile_draw_flag80 0x37FB2: Praefecture 0xE3 roof flag (not a walker).
+# Frame = 0x21 + ((+9 + [0x117AB0]) & 7). 8 CITYTOP bitmaps 16×16.
+# Dest zoom-0/1/2 = (28, −30) / (14, −15) / (3, −6). ESI=1 blit.
+PREFECTURE_FLAG_FRAME_BASE = 0x21
+PREFECTURE_FLAG_FRAMES = 8
+PREFECTURE_FLAG_DEST: tuple[tuple[int, int], ...] = (
+    (28, -30),
+    (14, -15),
+    (3, -6),
+)
+
+
+def prefecture_flag_frame(plus9: int, phase: int = 0) -> int:
+    """CITYTOP frame for the Praefecture roof flag."""
+    return PREFECTURE_FLAG_FRAME_BASE + ((int(plus9) + int(phase)) & 7)
+
+
+def prefecture_flag_dest(zoom: int = 0) -> tuple[int, int]:
+    z = 0 if zoom < 0 else 2 if zoom > 2 else zoom
+    return PREFECTURE_FLAG_DEST[z]
+
+
 def goods_i32(goods: bytes | bytearray | None, nibble: int, off: int) -> int:
     """One i32 from a 16×48 goods record. Missing / short table → 0."""
     idx = nibble & 0xF

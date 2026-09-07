@@ -98,6 +98,7 @@ ID_FOUNTAIN_LO = 0xDB
 ID_FOUNTAIN_HI = 0xDE
 ID_BATH_LO = 0xDF
 ID_BATH_HI = 0xE2
+ID_PREFECTURE = 0xE3
 # FUN_0003fef7 wet +4 (LUT 0x94f6c[id]+1). Dry fountain is 0x0C/0x0E/0x5F/0x61.
 _FOUNTAIN_WET_VAR = frozenset({0x0D, 0x0F, 0x60, 0x62})
 FLAG_RIVER = 0x10
@@ -165,6 +166,15 @@ FACTORY_JUG_DEST: tuple[tuple[int, int], ...] = (
     (-54, 22),
     (-27, 11),
     (-13, 5),
+)
+# 0x37FB2 Praefecture 0xE3: CITYTOP[0x21 + ((+9+[0x117AB0])&7)].
+# Zoom dest (28, −30) / (14, −15) / (3, −6). 16×16 bitmap, ESI=1.
+PREFECTURE_FLAG_FRAME_BASE = 0x21
+PREFECTURE_FLAG_FRAMES = 8
+PREFECTURE_FLAG_DEST: tuple[tuple[int, int], ...] = (
+    (28, -30),
+    (14, -15),
+    (3, -6),
 )
 
 # Zoom-0 column of each 4-byte LUT record (variant*4 + (zoom>>1), zoom==0).
@@ -415,11 +425,12 @@ def graphic_source_xy(
     tid = city.tiles[off]
     if tid < ID_TERRAIN_MAX:
         return wx, wy
-    from app.place import building_footprint_size, is_long_pair_building
+    from app.place import building_footprint_size, long_pair_rect
 
-    # Circus / C.Maximus are two abutting N×N halves. Remapping each half
-    # independently stamps the origin +4 on one end of the long oval.
-    if is_long_pair_building(tid):
+    # Complete Circus / C.Max pair is one W×H, not two squares. Per-half
+    # N×N remap stamps the origin +4 on one end; iso_paint_tile rides +4
+    # along the long axis (leftover pair at odd facing).
+    if long_pair_rect(city, wx, wy) is not None:
         return wx, wy
     size = building_footprint_size(tid)
     if size <= 1:
@@ -439,7 +450,23 @@ def graphic_source_xy(
 def iso_paint_tile(
     city: CityMap, wx: int, wy: int, facing: int = 0
 ) -> Tile:
-    """Tile whose sheet/+4 to blit at world ``(wx, wy)``."""
+    """Tile whose sheet/+4 to blit at world ``(wx, wy)``.
+
+    Long pair buildings (Circus / C.Maximus) synthesize leftover-axis
+    +4 at odd facing so extra_rows meet; square N×N still remaps via
+    ``graphic_source_xy``. Does not write the map.
+    """
+    f = clamp_facing(facing)
+    if f != 0 and 0 <= wx < city.width and 0 <= wy < city.height:
+        from app.place import long_pair_paint_art
+
+        art = long_pair_paint_art(city, wx, wy, f)
+        if art is not None:
+            tid, variant = art
+            raw = bytearray(city.tile_bytes(wx, wy))
+            raw[0] = tid & 0xFF
+            raw[4] = variant & 0xFF
+            return Tile.unpack(bytes(raw))
     gx, gy = graphic_source_xy(city, wx, wy, facing)
     return city.tile(gx, gy)
 
@@ -1243,6 +1270,29 @@ def factory_jug_frame(plus9: int) -> int | None:
     return stock + FACTORY_JUG_FRAME_BASE
 
 
+def prefecture_flag_frame(plus9: int, phase: int = 0) -> int:
+    """CITYTOP frame for the Praefecture roof flag (0x37FB2)."""
+    return PREFECTURE_FLAG_FRAME_BASE + ((int(plus9) + int(phase)) & 7)
+
+
+def prefecture_flag_dest(zoom: int = 0) -> tuple[int, int]:
+    z = 0 if zoom < 0 else 2 if zoom > 2 else zoom
+    return PREFECTURE_FLAG_DEST[z]
+
+
+def prefecture_flag_tile_xy(city: CityMap) -> list[tuple[int, int]]:
+    """0xE3 cells with +3 bit7 — looping CITYTOP flag while the building exists."""
+    out: list[tuple[int, int]] = []
+    tiles = city.tiles
+    for y in range(city.height):
+        row = y * ROW_STRIDE
+        for x in range(city.width):
+            off = row + x * TILE_STRIDE
+            if tiles[off] == ID_PREFECTURE and tiles[off + 3] & 0x80:
+                out.append((x, y))
+    return out
+
+
 def factory_west_plus9(city: CityMap, x: int, y: int) -> int | None:
     """+9 of the west neighbor (EXE [tile−20]+9). None if missing / not 0xFA."""
     if x <= 0:
@@ -1289,6 +1339,87 @@ def _paint_factory_flag80(
     img.paste(spr, (sx + dx, sy + dy), spr)
 
 
+def _paint_prefecture_flag80(
+    img: Image.Image,
+    tile: Tile,
+    sx: int,
+    sy: int,
+    *,
+    zoom: int,
+    sheets: dict[str, Sequence[Image.Image]] | None,
+    overlay_phase: int = 0,
+) -> None:
+    """0x37FB2: CITYTOP[0x21+((+9+phase)&7)] at dest (28, −30) zoom 0."""
+    if tile.terrain_id != ID_PREFECTURE:
+        return
+    if not (tile.draw & 0x80):
+        return
+    if sheets is None:
+        return
+    citytop = sheets.get(PL8_CITYTOP)
+    if citytop is None:
+        return
+    frame = prefecture_flag_frame(tile.overlay_anim, overlay_phase)
+    if not (0 <= frame < len(citytop)):
+        return
+    dx, dy = prefecture_flag_dest(zoom)
+    spr = citytop[frame]
+    if spr.mode != "RGBA":
+        spr = spr.convert("RGBA")
+    img.paste(spr, (sx + dx, sy + dy), spr)
+
+
+def blit_prefecture_flags(
+    img: Image.Image,
+    city: CityMap,
+    overlay_phase: int,
+    *,
+    zoom: int = 0,
+    cells: Sequence[tuple[int, int]] | None = None,
+    sheets: dict[str, Sequence[Image.Image]] | None = None,
+    cam_x: int = 0,
+    cam_y: int = 0,
+    facing: int = 0,
+) -> int:
+    """Re-blit Praefecture tiles so the roof flag can loop on the live well."""
+    prefs = cells if cells is not None else prefecture_flag_tile_xy(city)
+    if not prefs or sheets is None:
+        return 0
+    z = clamp_zoom(zoom)
+    tile_w, tile_h = iso_tile_size(z)
+    half_w, half_h = tile_w // 2, tile_h // 2
+    origin_x = (MAP_W - 1) * half_w
+    cityfixt = sheets.get(PL8_CITYFIXT)
+    vw, vh = img.size
+    n = 0
+    for px, py in prefs:
+        if not (0 <= px < city.width and 0 <= py < city.height):
+            continue
+        dx, dy = world_to_draw(px, py, facing, width=city.width, height=city.height)
+        sx = int(round(origin_x + (dx - dy) * half_w - cam_x))
+        sy = int(round((dx + dy) * half_h - cam_y))
+        if sx + tile_w < 0 or sy + tile_h + 32 < 0 or sx >= vw or sy >= vh:
+            continue
+        world = city.tile(px, py)
+        _paint_iso_tile(
+            img,
+            world,
+            sx,
+            sy,
+            tile_w=tile_w,
+            tile_h=tile_h,
+            water_frame=0,
+            cityfixt=cityfixt,
+            sheets=sheets,
+            facing=facing,
+            zoom=z,
+            sprite_tile=iso_paint_tile(city, px, py, facing),
+            overlay_phase=overlay_phase,
+        )
+        n += 1
+    return n
+
+
 def _paint_iso_tile(
     img: Image.Image,
     tile: Tile,
@@ -1304,6 +1435,7 @@ def _paint_iso_tile(
     zoom: int = 0,
     sprite_tile: Tile | None = None,
     west_plus9: int | None = None,
+    overlay_phase: int = 0,
 ) -> None:
     """Blit this cell's LUT sprite at ``(sx, sy)``.
 
@@ -1348,6 +1480,15 @@ def _paint_iso_tile(
             zoom=zoom,
             sheets=sheets,
             west_plus9=west_plus9,
+        )
+        _paint_prefecture_flag80(
+            img,
+            tile,
+            sx,
+            sy,
+            zoom=zoom,
+            sheets=sheets,
+            overlay_phase=overlay_phase,
         )
         return
     _draw_diamond(img, sx, sy, _fallback_color(tile), tile_w=tile_w, tile_h=tile_h)
@@ -2086,6 +2227,28 @@ def selftest() -> list[str]:
         )
     else:
         lines.append("ok    factory flag80 CITYTOP frame +19+9 dest (32,-18)")
+    if (
+        prefecture_flag_frame(0, 0) != 0x21
+        or prefecture_flag_frame(0, 3) != 0x24
+        or prefecture_flag_frame(1, 7) != 0x21
+        or prefecture_flag_dest(0) != (28, -30)
+        or prefecture_flag_dest(1) != (14, -15)
+        or prefecture_flag_dest(2) != (3, -6)
+    ):
+        lines.append(
+            f"FAIL  prefecture flag80 frame={prefecture_flag_frame(0, 0)}/"
+            f"{prefecture_flag_frame(0, 3)} dest={prefecture_flag_dest(0)}"
+        )
+    else:
+        from app.city_paint import (
+            prefecture_flag_dest as paint_pref_dest,
+            prefecture_flag_frame as paint_pref_frame,
+        )
+
+        if paint_pref_frame(0, 3) != 0x24 or paint_pref_dest(0) != (28, -30):
+            lines.append("FAIL  city_paint prefecture flag pin drifted")
+        else:
+            lines.append("ok    prefecture flag80 CITYTOP 0x21–0x28 dest (28,-30)")
     if factory_jug_frame(0x20) != 0x1A or factory_jug_frame(0) is not None:
         lines.append(
             f"FAIL  factory jugs frame={factory_jug_frame(0x20)} "
@@ -2143,6 +2306,69 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  factory jugs pixel {jugs}")
     else:
         lines.append("ok    factory etiqueta + porch jugs both blit")
+    pref_tops = [Image.new("RGBA", (16, 16), (0, 0, 0, 0)) for _ in range(0x29)]
+    pref_tops[0x21] = Image.new("RGBA", (16, 16), (20, 180, 40, 255))
+    pref_tops[0x24] = Image.new("RGBA", (16, 16), (20, 40, 180, 255))
+    pref_houses = [
+        Image.new("RGBA", (ISO_W, ISO_H), (80, 60, 40, 255)) for _ in range(0x51)
+    ]
+    pref_sheets = {PL8_HOUSES1: pref_houses, PL8_CITYTOP: pref_tops}
+    pref_raw = bytearray(TILE_BYTES)
+    pref_raw[0] = ID_PREFECTURE
+    pref_raw[3] = 0x80
+    pref_raw[4] = 0x50
+    pref_canvas = Image.new("RGBA", (160, 80), (*ISO_BG, 255))
+    _paint_iso_tile(
+        pref_canvas,
+        Tile.unpack(bytes(pref_raw)),
+        40,
+        40,
+        tile_w=ISO_W,
+        tile_h=ISO_H,
+        water_frame=0,
+        cityfixt=None,
+        sheets=pref_sheets,
+        overlay_phase=0,
+    )
+    flag0 = pref_canvas.getpixel((40 + 28, 40 - 30))
+    pref_canvas3 = Image.new("RGBA", (160, 80), (*ISO_BG, 255))
+    _paint_iso_tile(
+        pref_canvas3,
+        Tile.unpack(bytes(pref_raw)),
+        40,
+        40,
+        tile_w=ISO_W,
+        tile_h=ISO_H,
+        water_frame=0,
+        cityfixt=None,
+        sheets=pref_sheets,
+        overlay_phase=3,
+    )
+    flag3 = pref_canvas3.getpixel((40 + 28, 40 - 30))
+    quiet = bytearray(pref_raw)
+    quiet[3] = 0x00
+    pref_quiet = Image.new("RGBA", (160, 80), (*ISO_BG, 255))
+    _paint_iso_tile(
+        pref_quiet,
+        Tile.unpack(bytes(quiet)),
+        40,
+        40,
+        tile_w=ISO_W,
+        tile_h=ISO_H,
+        water_frame=0,
+        cityfixt=None,
+        sheets=pref_sheets,
+        overlay_phase=0,
+    )
+    no_flag = pref_quiet.getpixel((40 + 28, 40 - 30))
+    if flag0[:3] != (20, 180, 40):
+        lines.append(f"FAIL  prefecture flag pixel {flag0}")
+    elif flag3[:3] != (20, 40, 180):
+        lines.append(f"FAIL  prefecture flag phase 3 {flag3}")
+    elif no_flag[:3] == (20, 180, 40):
+        lines.append(f"FAIL  prefecture flag without +3 bit7 {no_flag}")
+    else:
+        lines.append("ok    prefecture roof flag loops CITYTOP 0x21/0x24")
     f18 = [flag18.cityfixt_index(f) for f in range(WATER_FRAMES)]
     if f18 != [0x18 + CITYFIXT_TERRAIN_BIAS] * WATER_FRAMES:
         lines.append(f"FAIL  0x18 flag tile {f18}, want static grass")
@@ -2746,4 +2972,63 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  baths visual-east {east0}->{east1}")
     else:
         lines.append("ok    baths compound cohesive at facing 0 and 1")
+    # Long pair: leftover +4 at odd facing so extra_rows meet. Square remap
+    # of each 3×3 would stamp the origin on both ends of the oval.
+    from app.place import (
+        ID_CIRCUS_A,
+        ID_CIRCUS_C,
+        TOOL_CIRCUS,
+        long_pair_paint_local,
+        try_place,
+    )
+    from app.city_sim import SimState
+
+    if long_pair_paint_local(0, 2, 6, 3, 1) != (3, 6, 0, 0):
+        lines.append(f"FAIL  circus local facing 1 {long_pair_paint_local(0, 2, 6, 3, 1)}")
+    elif long_pair_paint_local(5, 0, 6, 3, 1) != (3, 6, 2, 5):
+        lines.append(f"FAIL  circus local SE {long_pair_paint_local(5, 0, 6, 3, 1)}")
+    elif long_pair_paint_local(5, 2, 6, 3, 2) != (6, 3, 0, 0):
+        lines.append(f"FAIL  circus local 180 {long_pair_paint_local(5, 2, 6, 3, 2)}")
+    else:
+        lines.append("ok    Circus W×H +4 local remap facing 1–2")
+    oval = CityMap()
+    for gy in range(MAP_H):
+        for gx in range(MAP_W):
+            oval.tiles[oval.offset(gx, gy)] = 0x14
+    placed = try_place(oval, 40, 40, TOOL_CIRCUS, SimState(treasury=1500))
+    sw = iso_paint_tile(oval, 40, 42, 1)
+    se = iso_paint_tile(oval, 45, 40, 1)
+    origin = iso_paint_tile(oval, 40, 40, 0)
+    if (
+        not placed.ok
+        or origin.terrain_id != ID_CIRCUS_C
+        or origin.variant != 0x32
+        or sw.terrain_id != ID_CIRCUS_A
+        or sw.variant != 0x00
+        or se.variant != 0x11
+        or graphic_source_xy(oval, 40, 42, 1) != (40, 42)
+        or iso_paint_tile(baths, 40, 41, 1).variant != 0x63
+    ):
+        lines.append(
+            f"FAIL  circus paint facing 1 {placed.ok} "
+            f"{sw.terrain_id:#x}/{sw.variant:#x} {se.variant:#x}"
+        )
+    else:
+        lines.append("ok    Circus pair cohesive at facing 1; baths remap intact")
+    # BUILD1D LUT[0x32]=0x00 (EW origin) / LUT[0x00]=0x32 (NS origin).
+    ns_rgb, ew_rgb = (200, 40, 40), (40, 180, 40)
+    build1d = [Image.new("RGBA", (ISO_W, ISO_H), (0, 0, 0, 0)) for _ in range(0x64)]
+    _draw_diamond(build1d[0x32], 0, 0, ns_rgb)
+    _draw_diamond(build1d[0x00], 0, 0, ew_rgb)
+    oval_sheets = {PL8_BUILD1D: build1d, PL8_CITYFIXT: grass_fixt}
+    o0 = render_iso(oval, sheets=oval_sheets, facing=0)
+    o1 = render_iso(oval, sheets=oval_sheets, facing=1)
+    c0x, c0y = tile_iso_xy(40, 40, facing=0)
+    c1x, c1y = tile_iso_xy(40, 42, facing=1)
+    c_north0 = o0.getpixel((c0x + tw // 2, c0y + th // 2))
+    c_north1 = o1.getpixel((c1x + tw // 2, c1y + th // 2))
+    if c_north0[0:3] != ew_rgb or c_north1[0:3] != ns_rgb:
+        lines.append(f"FAIL  circus visual-north {c_north0}->{c_north1}")
+    else:
+        lines.append("ok    Circus visual-north keeps leftover-axis origin")
     return lines

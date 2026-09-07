@@ -806,7 +806,9 @@ def show(ctx: BootContext, *, game: Path) -> None:
     zoom = 0
     map_facing = 0
     water_frame = 0
+    overlay_phase = 0
     river_xy: list[tuple[int, int]] = []
+    pref_xy: list[tuple[int, int]] = []
     pl8_sheets: dict[int, dict] = {}
     last_extra: str | None = None
     water_after: str | None = None
@@ -1263,12 +1265,13 @@ def show(ctx: BootContext, *, game: Path) -> None:
         """Water diamonds + walkers on the camera well. Does not mutate terrain."""
         nonlocal live_base, live_key
         wf = water_frame if options.animations else 0
-        key = (zoom, vx, vy, terrain.width, terrain.height, wf, map_facing)
+        op = overlay_phase if options.animations else 0
+        key = (zoom, vx, vy, terrain.width, terrain.height, wf, op, map_facing)
         if live_base is None or live_key != key:
             view = terrain.copy()
-            if wf and river_xy and zoom in pl8_zooms:
-                sheets = pl8_sheets.get(zoom)
-                cityfixt = sheets.get("CITYFIXT") if sheets else None
+            sheets = pl8_sheets.get(zoom) if zoom in pl8_zooms else None
+            if wf and river_xy and sheets is not None:
+                cityfixt = sheets.get("CITYFIXT")
                 if cityfixt is not None:
                     vis = city_map.cells_in_iso_view(
                         river_xy,
@@ -1293,6 +1296,28 @@ def show(ctx: BootContext, *, game: Path) -> None:
                             restore=False,
                             facing=map_facing,
                         )
+            if pref_xy and sheets is not None:
+                vis_pref = city_map.cells_in_iso_view(
+                    pref_xy,
+                    vx,
+                    vy,
+                    view.width,
+                    view.height,
+                    zoom=zoom,
+                    facing=map_facing,
+                )
+                if vis_pref:
+                    city_map.blit_prefecture_flags(
+                        view,
+                        ctx.city,
+                        op,
+                        zoom=zoom,
+                        cells=vis_pref,
+                        sheets=sheets,
+                        cam_x=vx,
+                        cam_y=vy,
+                        facing=map_facing,
+                    )
             live_base = view
             live_key = key
             view = view.copy()
@@ -1320,8 +1345,9 @@ def show(ctx: BootContext, *, game: Path) -> None:
         return view
 
     def remember_rivers() -> None:
-        nonlocal river_xy
+        nonlocal river_xy, pref_xy
         river_xy = city_map.water_anim_tile_xy(ctx.city)
+        pref_xy = city_map.prefecture_flag_tile_xy(ctx.city)
 
     def center_camera() -> None:
         nonlocal cam_x, cam_y
@@ -1455,11 +1481,14 @@ def show(ctx: BootContext, *, game: Path) -> None:
 
     def on_water() -> None:
         """Host interior water cycle (250 ms). +0 / banks stay locked."""
-        nonlocal water_frame, water_after
+        nonlocal water_frame, overlay_phase, water_after
         water_after = root.after(WATER_FRAME_MS, on_water)
-        if not map_mode or forum_state is not None or not river_xy or not options.animations:
+        if not map_mode or forum_state is not None or not options.animations:
+            return
+        if not river_xy and not pref_xy:
             return
         water_frame = (water_frame + 1) % WATER_FRAMES
+        overlay_phase = (overlay_phase + 1) % city_map.PREFECTURE_FLAG_FRAMES
         from app.walkers import drawable_walkers
 
         blit(map_status(len(drawable_walkers(ctx.walkers))))
