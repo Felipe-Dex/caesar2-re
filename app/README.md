@@ -47,6 +47,8 @@ python -m app --new --city-only --check --no-audio
 
 Hail on map enter is text + ``congrat`` talking-head, **muted** (EXE table [79] is ``congrat.smk``; that file’s audio is the promotion fanfare, so Hail stays silent). Pop milestones and New Structure play the same clip **with** audio when Sound is on. Other advisor clips play mp4 audio unless Options Sound is off or you pass ``--no-audio``. Do not copy game mp4s into git.
 
+City SFX (place / click / fire / destroy / overlay / forum) play from the retail WAV names when Sound is on. Default ``python -m app --new --city-only`` is **not** muted — you should hear ``place.wav`` / ``poscl.wav`` etc. Mute with Options → Sound or ``--no-audio``. Do **not** play ``A01.RAW`` on City Only start. SFX are one-shot (no loop). Do not copy WAVs into git.
+
 Plano das fatias seguintes (placement, água, Forum…): `findings/city_only.md`. **Não** há `--career` nesta versão.
 
 Check only (no window — good for a quick smoke test):
@@ -55,7 +57,7 @@ Check only (no window — good for a quick smoke test):
 python -m app --check --no-audio
 ```
 
-Pillow is already required by `tools/decode_pl8.py`. tkinter ships with this Windows Python. No Godot / pygame install.
+Pillow is already required by `tools/decode_pl8.py`. tkinter ships with this Windows Python. No Godot install. SFX use pygame if present, else ``ffplay`` (same as advisor clips).
 
 Keys follow **C2MANUAL.DOC p.48** once the city map is up: **P** pause · **C** census · **A** faster · **Space** cancel build · **F** / **F2** forum · **F1** city · **F3** province (City Only stub) · **F4** load · **F5** save (225745 B, owned chunks; see `findings/sav_write.md`) · **1**/**2**/**3** closest/medium/furthest zoom · **Esc** dismiss panel/menu/tool (does not quit) · **+**/**-** zoom · setas pan. Host extras that do not collide: **T** sim slot · **E** evolve80 · **M** month · **Z** cycle zoom · **Home** re-center · **Q** quit. Off-map debug still uses **1** title · **2** CITYFIXT · **3** enter map · **Space**/**T** pulse · **A** `A01.RAW` · **Esc** quit. **&lt;**/**&gt;** (e INT_CITY sprites 4–5) rodam o mapa (facing 0–3). Leftovers (no bind): **Alt-F** flags, overlay letters, Query letter, **R** roads. No mapa: clique na **sidebar direita** (Housing / Roads / Clear / Query). **Housing** e **Clear** — clique-arrasta um **rectângulo**. **Roads** — linha recta. Sem ferramenta / **Query**, arrastar ainda faz **pan**. **Direito** cancela o arrasto e a ferramenta.
 
@@ -80,7 +82,7 @@ A janela nativa é **640×480** (viewport sobre o canvas iso; já não encolhe o
 - A **640×480** window (stand-in for VESA `video_init` @ `0x28341`).
 - **Title art**: decoded `backgrnd.pl8` + `backgrnd.256` via `tools/decode_pl8.py` (not a copy of the format).
 - HUD: path, one `C2.ENG` string (the “Caesar II - Version …” line if present).
-- Optional: **2 seconds** of `A01.RAW` through Windows `winsound` (not Miles). Missing audio → skip.
+- Optional: **2 seconds** of `A01.RAW` through Windows `winsound` on the title screen only (not Miles, not City Only). City SFX are retail ``.wav`` via pygame/ffplay. Missing audio → skip.
 
 No intro video. `INTRO.SMK` is only verified on disk (`smk_play` @ `0x5AB3D` is a stub; `tools/decode_smk.py` remuxes with ffmpeg, it does not play in-process).
 

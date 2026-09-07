@@ -96,7 +96,7 @@ def run_boot(
     if play_audio and city_only:
         # City Only opens on the map with Hail. A01.RAW is a boot probe,
         # not the briefing — playing it here sounds like a promotion sting.
-        audio_status = "advisor audio on (no boot RAW preview)"
+        audio_status = "city SFX on (no boot RAW / A01 sting)"
     elif play_audio:
         audio_status = audio.play_raw_preview(game)
     notes.append(audio_status)

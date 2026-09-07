@@ -105,6 +105,7 @@ from app.palette import PaletteState, action_for_tool
 from app.place import (
     DRAW_AQUEDUCT,
     DRAW_GARDEN,
+    ID_RUBBLE,
     SPAN_TOOLS,
     STAMP_TOOLS,
     TOOL_AQUEDUCT,
@@ -833,7 +834,27 @@ def show(ctx: BootContext, *, game: Path) -> None:
     menu_report: MenuReport | None = None
     load_picks: list[Path] | None = None
     options = HostOptions(sound=bool(getattr(ctx, "play_audio", True)))
+    sfx = audio.SfxPlayer(game, enabled=options.sound)
     city_skill = int(ctx.sim.skill) if getattr(ctx.sim, "city_only", 0) else 2
+
+    def _sfx(event: str) -> None:
+        sfx.play(event)
+
+    def _sfx_place(result, tool_name: str | None) -> None:
+        if getattr(result, "query", None):
+            _sfx("click")
+            return
+        if not result.ok:
+            _sfx("click_no")
+            return
+        if tool_name == TOOL_CLEAR:
+            n = 0
+            for x, y in result.dirty or ():
+                if in_map(x, y) and ctx.city.tiles[ctx.city.offset(x, y)] == ID_RUBBLE:
+                    n += 1
+            _sfx(audio.destroy_event(max(n, 1)))
+            return
+        _sfx("place")
 
     def world_wh() -> tuple[int, int]:
         return city_map.iso_canvas_size(zoom)
@@ -1367,6 +1388,8 @@ def show(ctx: BootContext, *, game: Path) -> None:
             advisor_dlg = None
             return
         advisor_dlg = msg
+        if str(getattr(msg, "key", "") or "") == "fire":
+            _sfx("fire")
         _start_advisor_video(msg)
 
     def _pump_advisor() -> None:
@@ -1501,6 +1524,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
         palette.close()
         tool = None
         forum_state = open_forum(ctx.sim, ctx.city.tiles, game)
+        _sfx("forum")
         blit(_eng_skip(ctx.eng, 28, 8, "PLEBS"))
 
     def _leave_forum() -> None:
@@ -1834,6 +1858,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
             return False
         tool = None
         place_dlg = None
+        _sfx("click")
         blit(
             ("arrasto cancelado" if aborted else "ferramenta cancelada")
             + f"  tesouro {ctx.sim.treasury}"
@@ -2016,9 +2041,11 @@ def show(ctx: BootContext, *, game: Path) -> None:
             place_dlg = query_walker(
                 hit, ctx.city.tiles, ctx.eng, ctx.sim.tax_rate
             )
+            _sfx("click")
             blit(f"Query {place_dlg.name}  tesouro {ctx.sim.treasury}")
             return
         place_dlg = query_place(ctx.city, x, y, ctx.eng)
+        _sfx("click")
         blit(f"Query {place_dlg.name}  tesouro {ctx.sim.treasury}")
 
     def place_at(vx: int, vy: int) -> None:
@@ -2043,6 +2070,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
             invalidate_iso(result.dirty, flush=result.flush_iso)
         if result.ok:
             _scan_city_events()
+        _sfx_place(result, tool)
         blit(result.message + f"  tesouro {ctx.sim.treasury}")
 
     def select_chrome(hit) -> None:
@@ -2050,10 +2078,12 @@ def show(ctx: BootContext, *, game: Path) -> None:
         action = hit.action
         if action.startswith("rotate_"):
             overlay_flyout = False
+            _sfx("click")
             rotate_map(-1 if action == "rotate_left" else 1)
             return
         if action.startswith("speed_"):
             overlay_flyout = False
+            _sfx("click")
             apply_speed(action)
             return
         if action == "view_forum":
@@ -2062,6 +2092,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
             return
         if action == "view_city":
             overlay_flyout = False
+            _sfx("click")
             if forum_state is not None:
                 _leave_forum()
                 return
@@ -2071,6 +2102,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
             return
         if action == "view_province":
             overlay_flyout = False
+            _sfx("click")
             blit(
                 _eng_skip(
                     ctx.eng,
@@ -2084,14 +2116,17 @@ def show(ctx: BootContext, *, game: Path) -> None:
             overlay_flyout = not overlay_flyout
             palette.close()
             place_dlg = None
+            _sfx("click")
             blit(f"Overlay: {overlay_name(overlay_id, ctx.eng)}")
             return
         if action == "zoom_in":
             overlay_flyout = False
+            _sfx("click")
             set_zoom(zoom - 1)
             return
         if action == "zoom_out":
             overlay_flyout = False
+            _sfx("click")
             set_zoom(zoom + 1)
             return
         overlay_flyout = False
@@ -2099,6 +2134,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
         if picked.tool is not None:
             tool = picked.tool
             place_dlg = None
+        _sfx("click")
         blit(f"{picked.message}  tesouro {ctx.sim.treasury}")
 
     def pick_overlay(idx: int) -> None:
@@ -2108,9 +2144,11 @@ def show(ctx: BootContext, *, game: Path) -> None:
             # EXE 0x329EF: cancel build tool slots. Does not reset overlay.
             tool = None
             place_dlg = None
+            _sfx("click")
             blit(f"ferramenta cancelada  tesouro {ctx.sim.treasury}")
             return
         overlay_id = idx
+        _sfx("overlay")
         hint = overlay_help(idx, ctx.eng)
         blit(f"{overlay_name(idx, ctx.eng)} — {hint}")
 
@@ -2154,6 +2192,8 @@ def show(ctx: BootContext, *, game: Path) -> None:
         if item is not None:
             slot, skip, lab = item
             menu_open = None
+            if slot != SLOT_OPTIONS or skip != OPT_SOUND:
+                _sfx("click")
             if slot == SLOT_FILE and skip == FILE_QUIT:
                 q = _eng_skip(ctx.eng, 9, 0, "Exit to DOS?")
                 if _confirm(q):
@@ -2184,6 +2224,9 @@ def show(ctx: BootContext, *, game: Path) -> None:
                 return True
             if slot == SLOT_OPTIONS and skip == OPT_SOUND:
                 options.sound = not options.sound
+                sfx.set_enabled(options.sound)
+                if options.sound:
+                    _sfx("click")
                 if advisor_clip is not None:
                     from app.advisor_video import advisor_plays_audio
 
@@ -2429,6 +2472,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
                 invalidate_iso(result.dirty, flush=result.flush_iso)
             if result.ok:
                 _scan_city_events()
+            _sfx_place(result, tool)
             blit(result.message + f"  tesouro {ctx.sim.treasury}")
             return
         if click is None:
@@ -2440,6 +2484,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
         if advisor_contains(
             event.x, event.y, advisor_dlg, has_video=_advisor_has_video()
         ):
+            _sfx("click")
             _dismiss_advisor()
             blit(last_extra)
             return
@@ -2453,9 +2498,13 @@ def show(ctx: BootContext, *, game: Path) -> None:
                 frame_size=(win_w, win_h),
             )
             if msg == "exit":
+                _sfx("click")
                 _leave_forum()
+            elif msg:
+                _sfx("click")
+                blit(msg)
             else:
-                blit(msg if msg else last_extra)
+                blit(last_extra)
             return
         if menu_report is not None and report_contains(event.x, event.y):
             return
@@ -2474,12 +2523,14 @@ def show(ctx: BootContext, *, game: Path) -> None:
             picked = palette.click_item(fly.key)
             if picked.tool is not None:
                 tool = picked.tool
+            _sfx("click")
             blit(f"{picked.message}  tesouro {ctx.sim.treasury}")
             return
         if place_dlg is not None and place_dialog_close_contains(
             event.x, event.y, place_dlg, frame_size=(win_w, win_h)
         ):
             place_dlg = None
+            _sfx("click")
             blit(last_extra)
             return
         if place_dlg is not None and place_dialog_contains(
@@ -2520,6 +2571,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
             _forum_back()
             return
         if advisor_dlg is not None:
+            _sfx("click")
             _dismiss_advisor()
             blit(last_extra)
             return
@@ -2540,12 +2592,14 @@ def show(ctx: BootContext, *, game: Path) -> None:
         if aborted:
             tool = None
             place_dlg = None
+            _sfx("click")
             blit(f"arrasto cancelado  tesouro {ctx.sim.treasury}")
             return
         building = tool is not None and tool != TOOL_QUERY
         if building:
             tool = None
             place_dlg = None
+            _sfx("click")
             blit(f"ferramenta cancelada  tesouro {ctx.sim.treasury}")
             return
         ox = chrome_ox(win_w)
@@ -2602,6 +2656,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
     host.bind("<Button-5>", on_wheel)
     def on_close() -> None:
         _stop_advisor_video()
+        sfx.close()
         if water_after is not None:
             root.after_cancel(water_after)
         if sim_after is not None:

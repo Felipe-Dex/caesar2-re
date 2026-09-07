@@ -77,7 +77,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--no-audio",
         action="store_true",
-        help="mute boot RAW preview and advisor clips (Options Sound starts off)",
+        help="mute city SFX, boot RAW preview, and advisor clips (Options Sound off)",
     )
     parser.add_argument(
         "--no-window",
@@ -369,6 +369,17 @@ def main(argv: list[str] | None = None) -> int:
                 vid_fail += 1
         if vid_fail:
             print("FAILED        : advisor video selftest")
+            return 1
+        from app.audio import selftest as audio_selftest
+
+        print("-- city sfx selftest --")
+        sfx_fail = 0
+        for line in audio_selftest(game):
+            print(f"  {line}")
+            if "FAIL" in line:
+                sfx_fail += 1
+        if sfx_fail:
+            print("FAILED        : city sfx selftest")
             return 1
         if args.new:
             from app.new_game import river_tile_count
