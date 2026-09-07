@@ -1344,6 +1344,73 @@ def _paint_factory_flag80(
     img.paste(spr, (sx + dx, sy + dy), spr)
 
 
+def factory_overlay_dest_box(
+    tile: Tile,
+    sx: int,
+    sy: int,
+    *,
+    zoom: int = 0,
+    sheets: dict[str, Sequence[Image.Image]] | None = None,
+    west_plus9: int | None = None,
+) -> tuple[int, int, int, int] | None:
+    """Canvas AABB of the CITYTOP flag80 blit, or None if this cell skips."""
+    if tile.terrain_id != 0xFA or not (tile.draw & 0x80):
+        return None
+    citytop = sheets.get(PL8_CITYTOP) if sheets else None
+    if tile.spawn_packed & 0xF:
+        frame = factory_jug_frame(west_plus9 if west_plus9 is not None else 0)
+        if frame is None:
+            return None
+        dx, dy = factory_jug_dest(zoom)
+        default = (48, 32)
+    else:
+        frame = factory_label_frame(tile.special)
+        dx, dy = factory_flag80_dest(zoom)
+        default = (16, 16)
+    if citytop is not None and 0 <= frame < len(citytop):
+        sw, sh = citytop[frame].size
+    else:
+        sw, sh = default
+    return (sx + dx, sy + dy, sx + dx + sw, sy + dy + sh)
+
+
+def blit_factory_overlays(
+    img: Image.Image,
+    city: CityMap,
+    cells: Sequence[tuple[int, int, int, int]],
+    *,
+    zoom: int = 0,
+    sheets: dict[str, Sequence[Image.Image]] | None = None,
+) -> int:
+    """city_map_draw_overlays 0x365CC factory arm — after terrain.
+
+    Jug dest (−54, 22) sits below the east diamond. South BUILD1C
+    extra_rows cover an in-tile blit; replay CITYTOP so porch amphorae
+    stay on top. Etiqueta at (32, −18) is redrawn too (same pixels).
+    ``cells`` is ``(wx, wy, sx, sy)``.
+    """
+    if sheets is None:
+        return 0
+    n = 0
+    for wx, wy, sx, sy in cells:
+        if not (0 <= wx < city.width and 0 <= wy < city.height):
+            continue
+        world = city.tile(wx, wy)
+        if world.terrain_id != 0xFA or not (world.draw & 0x80):
+            continue
+        _paint_factory_flag80(
+            img,
+            world,
+            sx,
+            sy,
+            zoom=zoom,
+            sheets=sheets,
+            west_plus9=factory_west_plus9(city, wx, wy),
+        )
+        n += 1
+    return n
+
+
 def _paint_prefecture_flag80(
     img: Image.Image,
     tile: Tile,
@@ -1449,7 +1516,8 @@ def _paint_iso_tile(
     full-compound graphic — HOUSES1[81] is 58×56, one diamond. Drawing
     the origin variant on the other eight cells would stamp extra forts.
     After facing≠0, ``sprite_tile`` is the remapped source (visual slot
-    keeps the facing-0 piece). Factory CITYTOP stays on the world tile.
+    keeps the facing-0 piece). Factory CITYTOP stays on the world tile
+    and is replayed after terrain so south extra_rows do not bury jugs.
     """
     art = sprite_tile if sprite_tile is not None else tile
     frames, idx = _tile_frames(art, water_frame, cityfixt, sheets, facing=facing)
@@ -1638,6 +1706,7 @@ def render_iso(
     if cityfixt is None:
         cityfixt = sprites
 
+    overlays: list[tuple[int, int, int, int]] = []
     for dy in range(city.height):
         for dx in range(city.width):
             wx, wy = draw_to_world(dx, dy, facing, width=city.width, height=city.height)
@@ -1662,6 +1731,9 @@ def render_iso(
                 sprite_tile=iso_paint_tile(city, wx, wy, facing),
                 west_plus9=factory_west_plus9(city, wx, wy),
             )
+            if world.terrain_id == 0xFA and world.draw & 0x80:
+                overlays.append((wx, wy, sx, sy))
+    blit_factory_overlays(img, city, overlays, zoom=zoom, sheets=sheets)
     return img
 
 
@@ -1706,6 +1778,7 @@ def render_iso_view(
     if tx1 < tx0 or ty1 < ty0:
         return img, cx, cy
     tall = _MAX_SPRITE_H[z]
+    overlays: list[tuple[int, int, int, int]] = []
     for dy in range(ty0, ty1 + 1):
         for dx in range(tx0, tx1 + 1):
             wx, wy = draw_to_world(dx, dy, facing, width=city.width, height=city.height)
@@ -1732,6 +1805,9 @@ def render_iso_view(
                 sprite_tile=iso_paint_tile(city, wx, wy, facing),
                 west_plus9=factory_west_plus9(city, wx, wy),
             )
+            if world.terrain_id == 0xFA and world.draw & 0x80:
+                overlays.append((wx, wy, sx, sy))
+    blit_factory_overlays(img, city, overlays, zoom=z, sheets=sheets)
     return img, cx, cy
 
 
@@ -1883,6 +1959,17 @@ def blit_water_tiles(
         px, py = iso_sprite_dest(sx, sy, sh, tile_h)
         box = (px - half_w, py, px + sw + half_w, py + sh + half_h)
         clear_rects.append(box)
+        world = city.tile(x, y)
+        overlay = factory_overlay_dest_box(
+            world,
+            sx,
+            sy,
+            zoom=z,
+            sheets=sheets,
+            west_plus9=factory_west_plus9(city, x, y),
+        )
+        if overlay is not None:
+            clear_rects.append(overlay)
 
     box_cache: dict[tuple[int, int], tuple[int, int, int, int]] = {}
 
@@ -1934,6 +2021,7 @@ def blit_water_tiles(
     crop = Image.new("RGBA", (x1 - x0, y1 - y0), (*bg, 255))
     ordered = sorted(members, key=lambda p: (p[1], p[0]))
     n = 0
+    overlays: list[tuple[int, int, int, int]] = []
     for dx, dy in ordered:
         wx, wy = draw_to_world(dx, dy, facing, width=city.width, height=city.height)
         wx, wy = int(round(wx)), int(round(wy))
@@ -1957,7 +2045,10 @@ def blit_water_tiles(
             sprite_tile=iso_paint_tile(city, wx, wy, facing),
             west_plus9=factory_west_plus9(city, wx, wy),
         )
+        if world.terrain_id == 0xFA and world.draw & 0x80:
+            overlays.append((wx, wy, sx - x0, sy - y0))
         n += 1
+    blit_factory_overlays(crop, city, overlays, zoom=z, sheets=sheets)
     img.paste(crop, (x0, y0))
     return n
 
@@ -2311,6 +2402,37 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  factory jugs pixel {jugs}")
     else:
         lines.append("ok    factory etiqueta + porch jugs both blit")
+    fac3 = CityMap()
+    for i, var in enumerate((0x3E, 0x40, 0x43, 0x3F, 0x42, 0x45, 0x41, 0x44, 0x46)):
+        dx, dy = i % 3, i // 3
+        raw = bytearray(TILE_BYTES)
+        raw[0] = 0xFA
+        raw[3] = 0x8C if (dx, dy) in ((0, 0), (1, 0)) else 0x0C
+        raw[4] = var
+        raw[5] = i
+        if (dx, dy) == (0, 0):
+            raw[9] = 0x20
+            raw[19] = 1
+        off = fac3.offset(10 + dx, 10 + dy)
+        fac3.tiles[off : off + TILE_BYTES] = raw
+    tall = [Image.new("RGBA", (ISO_W, 59), (20, 20, 20, 255)) for _ in range(0x47)]
+    tops3 = [Image.new("RGBA", (16, 16), (0, 0, 0, 0)) for _ in range(0x20)]
+    tops3[10] = Image.new("RGBA", (16, 16), (200, 0, 200, 255))
+    tops3[0x1A] = Image.new("RGBA", (43, 30), (240, 200, 40, 255))
+    world3 = Image.new("RGBA", (4640, 2400), (*ISO_BG, 255))
+    blit_dirty_tiles(
+        world3,
+        fac3,
+        [(10 + dx, 10 + dy) for dy in range(3) for dx in range(3)],
+        sheets={PL8_BUILD1C: tall, PL8_CITYTOP: tops3},
+    )
+    esx, esy = tile_iso_xy(11, 10, zoom=0)
+    jdx, jdy = factory_jug_dest(0)
+    porch = world3.getpixel((esx + jdx, esy + jdy))
+    if porch[:3] != (240, 200, 40):
+        lines.append(f"FAIL  factory 3x3 overlay jugs {porch}")
+    else:
+        lines.append("ok    factory 3x3 overlay keeps porch jugs")
     pref_tops = [Image.new("RGBA", (16, 16), (0, 0, 0, 0)) for _ in range(0x29)]
     pref_tops[0x21] = Image.new("RGBA", (16, 16), (20, 180, 40, 255))
     pref_tops[0x24] = Image.new("RGBA", (16, 16), (20, 40, 180, 255))

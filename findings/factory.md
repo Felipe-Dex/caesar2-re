@@ -134,7 +134,7 @@ The picker does **not** write `+9`. Overlay is a later blit, not a second buildi
 
 Non-origin reads **`[tile−20]+9`** (`0xE2FB1` = current `+9` − 20) — the **west** cell’s stock, not its own. Career / D.SAV put bit7 on origin **and** `+5` lo==1 (east of origin, `+4=0x40`). Stock hi lives only on the origin; the east cell borrows it. Stock 0 skips the jug blit (`je 0x382F3`). Etiqueta and jugs are separate frames — do not hide the grape/wheat overlay.
 
-Host: place ORs bit7 on origin and the east cell; `_paint_iso_tile` blits both CITYTOP layers. Without bit7 the factory is a bare BUILD1C pad.
+Host: place ORs bit7 on origin and the east cell; `_paint_iso_tile` blits both CITYTOP layers. Jug dest (−54, 22) sits **below** the east diamond — south BUILD1C extra_rows cover an in-tile blit. `render_iso` / `render_iso_view` / dirty wipe replay factory CITYTOP after terrain (`city_map_draw_overlays` 0x365CC). Without bit7 the factory is a bare BUILD1C pad. City Only seed writes origin `+9` hi (stock 2 at labor 4 / stage 1); jugs need stock ≥ 1, not a missing frame.
 
 ### What starts production
 
