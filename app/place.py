@@ -3908,7 +3908,7 @@ def selftest() -> list[str]:
     else:
         lines.append("ok    Circus pair entra no wipe N×N")
 
-    from app.city_map import graphic_source_xy
+    from app.city_map import graphic_source_xy, iso_paint_tile
 
     ns_ghost = stamp_ghost_pieces(TOOL_CIRCUS, facing=1)
     ns_ids = {(p[0], p[1], p[2], p[4]) for p in ns_ghost}
@@ -3955,6 +3955,34 @@ def selftest() -> list[str]:
         )
     else:
         lines.append("ok    Circus facing 1 writes 0xE9+0xEA 3×6 cohesive")
+    # Place writes the leftover pair; paint still remaps +4 along the W×H
+    # so a later camera rotate does not sink the seam.
+    ew_sw = iso_paint_tile(city, 2, 14, 1)
+    ew_se = iso_paint_tile(city, 7, 12, 1)
+    ew_id = iso_paint_tile(city, 2, 12, 0)
+    ew_180 = iso_paint_tile(city, 7, 14, 2)
+    ns_sw = iso_paint_tile(city, 20, 25, 1)
+    ns_ne = iso_paint_tile(city, 22, 20, 1)
+    if (
+        ew_sw.terrain_id != ID_CIRCUS_A
+        or ew_sw.variant != 0x00
+        or ew_se.terrain_id != ID_CIRCUS_B
+        or ew_se.variant != 0x11
+        or ew_id.terrain_id != ID_CIRCUS_C
+        or ew_id.variant != 0x32
+        or ew_180.variant != 0x32
+        or ns_sw.terrain_id != ID_CIRCUS_C
+        or ns_sw.variant != 0x32
+        or ns_ne.terrain_id != ID_CIRCUS_D
+        or ns_ne.variant != 0x43
+    ):
+        lines.append(
+            f"FAIL  circus paint-axis {ew_sw.terrain_id:#x}/{ew_sw.variant:#x} "
+            f"{ew_se.variant:#x} id={ew_id.variant:#x} 180={ew_180.variant:#x} "
+            f"ns {ns_sw.terrain_id:#x}/{ns_sw.variant:#x} {ns_ne.variant:#x}"
+        )
+    else:
+        lines.append("ok    Circus paint remaps +4 along the long axis")
 
     _grass_block(10, 2, 4, 8)
     sim.treasury = 2500
@@ -3990,6 +4018,20 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  cmax facing 1 {r.message} {cm_a:#x}/{cm_b:#x}")
     else:
         lines.append("ok    C.Maximus facing 1 writes 0xEF+0xF0 8×4")
+    cm_ns_sw = iso_paint_tile(city, 10, 9, 1)
+    cm_ew_sw = iso_paint_tile(city, 30, 43, 1)
+    if (
+        cm_ns_sw.terrain_id != ID_CMAX_C
+        or cm_ns_sw.variant != 0x44
+        or cm_ew_sw.terrain_id != ID_CMAX_A
+        or cm_ew_sw.variant != 0x12
+    ):
+        lines.append(
+            f"FAIL  cmax paint-axis {cm_ns_sw.terrain_id:#x}/{cm_ns_sw.variant:#x} "
+            f"{cm_ew_sw.terrain_id:#x}/{cm_ew_sw.variant:#x}"
+        )
+    else:
+        lines.append("ok    C.Maximus paint remaps +4 along the long axis")
 
     _grass_block(16, 2, 3, 3)
     sim.treasury = 80
