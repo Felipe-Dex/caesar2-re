@@ -844,7 +844,7 @@ def emit_walkers(
         LAST_EMIT_NOTE = f"skip pop={population}<2 produced={produced}"
         _path_log(f"walker emit skip pop={population}<2")
         if want_market:
-            restage_market_band(tiles, y0, n, wrap4=wrap4)
+            restage_market_band(tiles, y0, n, wrap4=wrap4, city_only=city_only)
         return 0
     pool = _pool_from(walkers)
     spawned = emit_walkers_row(
@@ -970,7 +970,9 @@ def emit_walkers_row(
                 # FUN_00041719 / 0x417F9: type 2, next_state 4, pad,
                 # retry class 4 (DAT_00094FE5[0xFC]=4 → 2×2 rim).
                 # 0x41A4E restages from +9 before the wait gate.
-                restage_market_origin(tiles, off, wrap4=wrap4)
+                restage_market_origin(
+                    tiles, off, wrap4=wrap4, city_only=city_only
+                )
                 hid = tiles[off]
                 typ, nxt, cls, tries = 2, 4, 4, 8
                 size = 2
@@ -1333,7 +1335,24 @@ def _stamp_market_stage(tiles: bytearray, off: int, stage: int) -> None:
             tiles[cell + 4] = (base + _ADDEND_2X2[dy * 2 + dx]) & 0xFF
 
 
-def restage_market_band(tiles: bytearray, y0: int, n: int, *, wrap4: int = 0) -> int:
+def seed_city_only_market_stock(tiles: bytearray, off: int) -> bool:
+    """Sandbox +9 goods bits. EXE fills them from type-2 score_b (factory
+    splash); City Only has no province grain, so empty markets never feed.
+    Does not invent a granary — only bits 2–3, same packed nibble as 0x45FE9.
+    """
+    if off < 0 or off + 9 >= len(tiles):
+        return False
+    if not (0xFC <= tiles[off] <= 0xFF):
+        return False
+    if tiles[off + 9] & _MARKET_PLUS9_GOODS:
+        return False
+    tiles[off + 9] = (tiles[off + 9] & ~_MARKET_PLUS9_GOODS) | _MARKET_PLUS9_GOODS
+    return True
+
+
+def restage_market_band(
+    tiles: bytearray, y0: int, n: int, *, wrap4: int = 0, city_only: bool = False
+) -> int:
     """0x41719 market arm: 0x41A4E on every origin in the emit band."""
     n_ok = 0
     for y in range(y0, min(MAP_H, y0 + n)):
@@ -1344,15 +1363,20 @@ def restage_market_band(tiles: bytearray, y0: int, n: int, *, wrap4: int = 0) ->
             if tiles[off + 5] & 0xF:
                 continue
             if 0xFC <= tiles[off] <= 0xFF:
-                restage_market_origin(tiles, off, wrap4=wrap4)
+                restage_market_origin(
+                    tiles, off, wrap4=wrap4, city_only=city_only
+                )
                 n_ok += 1
     return n_ok
 
 
-def restage_market_origin(tiles: bytearray, off: int, *, wrap4: int = 0) -> int:
+def restage_market_origin(
+    tiles: bytearray, off: int, *, wrap4: int = 0, city_only: bool = False
+) -> int:
     """FUN_00041a4e 0x41A4E. Stage from +9; decay bits 0–3 when wrap4&1.
 
     No goods (bits 2–3==0) forces stage 1 (0xFD). Else stage = bits 0–1.
+    City Only reseeds goods after decay so houses keep eating without farms.
     """
     if off < 0 or off + 9 >= len(tiles):
         return 0
@@ -1367,7 +1391,10 @@ def restage_market_origin(tiles: bytearray, off: int, *, wrap4: int = 0) -> int:
     if hid != want:
         _stamp_market_stage(tiles, off, stage)
     if wrap4 & 1:
-        tiles[off + 9] = decay_plus9_service(plus9)
+        plus9 = decay_plus9_service(plus9)
+        tiles[off + 9] = plus9
+    if city_only:
+        seed_city_only_market_stock(tiles, off)
     return stage
 
 
@@ -1718,8 +1745,9 @@ def _state_dispatch(
         )
         if rec is None:
             return
-        # Food +10 0x0C only when the home market holds goods (+9 bits 2–3).
-        # Access 0xC0 is unconditional (state 4). Empty 0xFC does not feed.
+        # EXE state 4 ORs only 0xC0. Food +10 0x0C is the 40d08 hut gate;
+        # stocked traders (and paint_market_emitter) refresh it while +9 goods last.
+        # Empty 0xFC does not feed. +10 then decays 0x0C→8→4 like evolve_row.
         home = struct.unpack_from("<i", rec, _OFF_HOME)[0]
         if market_has_goods(tiles, home):
             tile_or_radius(
@@ -2660,6 +2688,59 @@ def selftest() -> list[str]:
     lines.append(
         f"empty market restage 0xFD: {'ok' if ok else 'FAIL'} "
         f"id={tiles[moff]:#x} stage={stage}"
+    )
+
+    tiles[moff] = 0xFC
+    tiles[moff + 9] = 0x00
+    stage = restage_market_origin(tiles, moff, wrap4=1, city_only=True)
+    goods = tiles[moff + 9] & _MARKET_PLUS9_GOODS
+    ok = goods == _MARKET_PLUS9_GOODS
+    lines.append(
+        f"City Only 41A4E reseeds goods: {'ok' if ok else 'FAIL'} "
+        f"stage={stage} +9={tiles[moff + 9]:#x}"
+    )
+    tiles[moff + 9] = _MARKET_PLUS9_GOODS
+    restage_market_origin(tiles, moff, wrap4=1, city_only=True)
+    after = tiles[moff + 9] & _MARKET_PLUS9_GOODS
+    ok = after in (4, 8, _MARKET_PLUS9_GOODS)
+    lines.append(
+        f"City Only goods decay then last: {'ok' if ok else 'FAIL'} "
+        f"+9 goods={after:#x}"
+    )
+
+    reset_clock()
+    pool = bytearray(WALKER_BYTES)
+    tiles = bytearray(MAP_W * MAP_H * TILE_BYTES)
+    for x in range(10, 14):
+        off = _tile_off(x, 10)
+        tiles[off] = 0x52
+        tiles[off + 1] = FLAG_PAD
+    hoff = _tile_off(11, 9)
+    tiles[hoff] = 0x83
+    tiles[hoff + 1] = 0x01
+    moff = _tile_off(10, 10)
+    tiles[moff] = 0xFC
+    seed_city_only_market_stock(tiles, moff)
+    slot = walker_spawn(pool, tiles, 2, 11, 10, pad=0x20)
+    rec = _rec(pool, slot)
+    rec[_OFF_STATE] = 4
+    rec[_OFF_NEXT_STATE] = 4
+    rec[_OFF_ANIM_FLAGS] = _ANIM_DONE
+    rec[_OFF_WANT_MOVE] = 0
+    struct.pack_into("<i", rec, _OFF_HOME, moff)
+    _put(pool, slot, rec)
+    walkers_tick(tiles, pool, clock=WalkerClock())
+    road10 = tiles[_tile_off(11, 10) + 10]
+    house10 = tiles[hoff + 10]
+    ok = (
+        tiles[moff + 9] & _MARKET_PLUS9_GOODS
+        and road10 & 0x0C == 0x0C
+        and house10 & 0x0C == 0x0C
+        and road10 & 0xC0 == 0xC0
+    )
+    lines.append(
+        f"City Only seed feeds house +10 0x0C: {'ok' if ok else 'FAIL'} "
+        f"+9={tiles[moff + 9]:#x} road={road10:#x} house={house10:#x}"
     )
 
     foff = _tile_off(12, 12)

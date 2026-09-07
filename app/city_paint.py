@@ -7,7 +7,7 @@ Lane helpers match findings/ghidra_water.md and ghidra_tile.md.
 from __future__ import annotations
 
 from app.city_map import FLAG_PAD, MAP_H, MAP_W, ROW_STRIDE, TILE_STRIDE
-from app.walker_tick import tile_or_radius
+from app.walker_tick import market_has_goods, tile_or_radius
 
 HOUSE_SIZE: tuple[int, ...] = (1,) * 26 + (2, 2, 2, 2, 3, 3)
 
@@ -621,7 +621,7 @@ def paint_plus13_buildings(tiles: bytearray, y0: int, n: int) -> int:
                     tile_or_radius(tiles, x, y, 3 + charge, 13, 0x04)
                     painted += 1
             elif 0xFC <= hid <= 0xFF:
-                tile_or_radius(tiles, x, y, 2, 13, 0x40)
+                paint_market_emitter(tiles, x, y)
                 painted += 1
             elif hid == 0xFA:
                 paint_factory_emitter(tiles, x, y)
@@ -634,6 +634,15 @@ def paint_factory_emitter(tiles: bytearray, x: int, y: int) -> None:
     tile_or_radius(tiles, x, y, 4, 14, 0x20)
     tile_or_radius(tiles, x, y, 2, 14, 0x10)
     tile_or_radius(tiles, x, y, 1, 13, 0x80)
+
+
+def paint_market_emitter(tiles: bytearray, x: int, y: int) -> None:
+    """0x3FDD0 +13 0x40 r=2; 0x401E7 +10 0xC0 r=3. Food +10 0x0C while +9 goods."""
+    off = _off(x, y)
+    tile_or_radius(tiles, x, y, 2, 13, 0x40)
+    tile_or_radius(tiles, x, y, 3, 10, 0xC0)
+    if market_has_goods(tiles, off):
+        tile_or_radius(tiles, x, y, 3, 10, 0x0C)
 
 
 # FUN_0003fef7 / FUN_0003fdd0 radii (Chebyshev). Fountain is not a well.
@@ -1138,7 +1147,7 @@ def paint_plus14_security(tiles: bytearray, y0: int, n: int) -> int:
                 tile_or_radius(tiles, x, y, 3, 10, 0x0C)
                 painted += 1
             elif 0xFC <= hid <= 0xFF:
-                tile_or_radius(tiles, x, y, 2, 10, 0xC0)
+                paint_market_emitter(tiles, x, y)
                 painted += 1
     return painted
 

@@ -2154,6 +2154,52 @@ def selftest() -> list[str]:
         f"id={tiles[toff]:#x} +15={tiles[toff + 15]} {reason}"
     )
 
+    from app.city_paint import paint_market_emitter
+    from app.walker_tick import seed_city_only_market_stock
+
+    tiles = _blank_tiles()
+    toff = _off(8, 9)
+    tiles[toff] = 0x82
+    tiles[toff + 1] = 0x01
+    tiles[_off(9, 9)] = 0x52
+    tiles[_off(9, 9) + 1] = 0x20
+    roff = _off(10, 8)
+    tiles[roff] = 0xBE
+    tiles[roff + 1] = 0x80
+    tiles[roff + 10] = 3
+    foff = _off(8, 8)
+    tiles[foff] = 0xDD
+    tiles[foff + 1] = 0x01
+    moff = _off(10, 9)
+    tiles[moff] = 0xFC
+    tiles[moff + 1] = 0x01
+    tiles[_off(11, 9)] = 0xFC
+    tiles[_off(11, 9) + 1] = 0x01
+    tiles[_off(11, 9) + 5] = 1
+    tiles[_off(10, 10)] = 0xFC
+    tiles[_off(10, 10) + 1] = 0x01
+    tiles[_off(10, 10) + 5] = 2
+    tiles[_off(11, 10)] = 0xFC
+    tiles[_off(11, 10) + 1] = 0x01
+    tiles[_off(11, 10) + 5] = 3
+    seed_city_only_market_stock(tiles, moff)
+    paint_market_emitter(tiles, 10, 9)
+    state = SimState(phase=1, year_raw=-300, month=0, city_only=1)
+    for _ in range(4):
+        city_sim_until_wrap(tiles, state)
+    reason = house_stay_reason(tiles, 8, 9, population=state.population)
+    food10 = tiles[toff + 10] & 0x0C
+    ok = (
+        tiles[toff] >= 0x85
+        and "no-food" not in reason
+        and food10 != 0
+        and tiles[moff + 9] & 0x0C
+    )
+    lines.append(
+        f"4 months City Only market food lasts: {'ok' if ok else 'FAIL'} "
+        f"id={tiles[toff]:#x} +10={food10:#x} +9={tiles[moff + 9]:#x} {reason}"
+    )
+
     from app.city_paint import (
         factory_jug_frame,
         factory_produce,

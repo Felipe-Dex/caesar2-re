@@ -94,6 +94,7 @@ from app.city_paint import (
     sync_water_building_graphic,
     paint_entertainment_emitter,
     paint_factory_emitter,
+    paint_market_emitter,
     paint_security_emitter,
     paint_water_emitter,
     seed_city_only_industry,
@@ -2036,6 +2037,18 @@ def try_place(
                     province_links=0,
                     city_only=True,
                 )
+        if spec.tool == TOOL_MARKET:
+            from app.walker_tick import (
+                restage_market_origin,
+                seed_city_only_market_stock,
+            )
+
+            if sim is not None and getattr(sim, "city_only", 0):
+                seed_city_only_market_stock(city.tiles, city.offset(x, y))
+                restage_market_origin(
+                    city.tiles, city.offset(x, y), wrap4=0, city_only=True
+                )
+            paint_market_emitter(city.tiles, x, y)
         for cx, cy in dirty:
             paint_entertainment_emitter(city.tiles, cx, cy)
         seeds = list(dirty)
@@ -4252,7 +4265,34 @@ def selftest() -> list[str]:
     else:
         lines.append(f"ok    Factory type Winery +19=1 stock={stock}")
     set_factory_goods(0)
+
+    _grass_block(48, 2, 2, 2)
+    sim.treasury = 40
+    r = try_place(city, 48, 2, TOOL_MARKET, sim)
+    m9 = city.tiles[city.offset(48, 2) + 9]
+    m10 = city.tiles[city.offset(49, 2) + 10]
+    if (
+        not r.ok
+        or city.tiles[city.offset(48, 2)] != ID_MARKET
+        or m9 & 0x0C != 0x0C
+        or m10 & 0x0C != 0x0C
+        or m10 & 0xC0 != 0xC0
+    ):
+        lines.append(
+            f"FAIL  City Only market food seed {r.message} "
+            f"+9={m9:#04x} +10={m10:#04x}"
+        )
+    else:
+        lines.append(f"ok    City Only market +9 goods + house food +10={m10:#x}")
     sim.city_only = 0
+    _grass_block(52, 2, 2, 2)
+    sim.treasury = 40
+    r = try_place(city, 52, 2, TOOL_MARKET, sim)
+    c9 = city.tiles[city.offset(52, 2) + 9]
+    if not r.ok or c9 & 0x0C:
+        lines.append(f"FAIL  career market stayed empty {r.message} +9={c9:#04x}")
+    else:
+        lines.append("ok    career market +9 goods stay 0 (no province grain)")
 
     _grass_block(16, 8, 4, 4)
     sim.treasury = 10
