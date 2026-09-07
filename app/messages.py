@@ -195,7 +195,10 @@ def peek_status(sim) -> str:
 
 
 def take_status_sfx(sim) -> str:
-    """Pop the pending labor SFX event (``need_plebs`` → unused.wav), or ``""``."""
+    """Pop the pending labor SFX (``need_plebs`` → unused.wav), or ``""``.
+
+    Window plays this after scan / Forum allocate — not from overlay blit.
+    """
     watch = ensure_watch(sim)
     key = watch.status_sfx
     watch.status_sfx = ""
@@ -318,7 +321,11 @@ def _city_counts(tiles: bytearray) -> tuple[int, int, int, int]:
 
 
 def _staffed(sim) -> tuple[bool, ...]:
-    from app.forum import CREW, LABOR_CONSTRUCTION, LABOR_ROWS, labor_row_staffed
+    """Staffed flags for user-adjustable PLEBS sliders only.
+
+    Construction (locked 20/20) and Need-N/A rows are not in this tuple.
+    """
+    from app.forum import LABOR_ROWS, LABOR_SLIDER_ROWS, labor_row_staffed
 
     asg = list(getattr(sim, "labor_assigned", None) or [0] * LABOR_ROWS)
     need = list(getattr(sim, "labor_need", None) or [0] * LABOR_ROWS)
@@ -326,22 +333,28 @@ def _staffed(sim) -> tuple[bool, ...]:
         asg.append(0)
     while len(need) < LABOR_ROWS:
         need.append(0)
-    asg[LABOR_CONSTRUCTION] = CREW
-    need[LABOR_CONSTRUCTION] = CREW
-    return tuple(labor_row_staffed(asg[i], need[i]) for i in range(LABOR_ROWS))
+    return tuple(labor_row_staffed(asg[i], need[i]) for i in LABOR_SLIDER_ROWS)
+
+
+def clear_labor_status(sim) -> None:
+    """Drop the red labor HUD when no adjustable row is short."""
+    watch = ensure_watch(sim)
+    watch.status_line = ""
+    watch.status_alert = False
+    watch.status_sfx = ""
 
 
 def _labor_toasts(sim) -> tuple[bool, bool]:
-    """Labor-short rising edges: idle=0 vs leftover-idle + short row.
+    """Labor-short rising edges: idle=0 vs leftover-idle + short slider.
 
-    Construction assigned stays locked at 20. Both edges post the same
-    HUD line (``Plebs are needed!``). Idle-only leftover with every row
-    at need stays quiet.
+    Toast only when Fire/Roads/Water/Walls has assigned < need. Locked
+    construction 20/20 is not a shortage. Idle leftover with every
+    slider at need stays quiet. Both edges post the same HUD line
+    (``Plebs are needed!``).
     """
-    from app.forum import labor_idle_of
+    from app.forum import labor_idle_of, labor_slider_short
 
-    any_short = any(not ok for ok in _staffed(sim))
-    if not any_short:
+    if not labor_slider_short(sim):
         return False, False
     if labor_idle_of(sim) > 0:
         return False, True
@@ -406,11 +419,28 @@ def scan_city_messages(
             fired.append("fire")
     watch.on_fire = fires > 0
 
-    if need_more and not watch.construction_short:
+    # Rising edge only. Construction 20/20 and leftover idle with every
+    # slider at need stay quiet. Overlay / clock blit must not re-post.
+    if not any_short:
+        if watch.status_alert or watch.status_line or watch.status_sfx:
+            clear_labor_status(sim)
+        watch.construction_short = False
+        watch.idle_short = False
+    elif need_more and not watch.construction_short:
         watch.seen.discard("need_plebs")
         post_labor_status(sim, "need_plebs", eng)
         fired.append("need_plebs")
-    watch.construction_short = need_more
+        watch.construction_short = True
+        watch.idle_short = False
+    elif idle_short and not watch.idle_short:
+        watch.seen.discard("idle")
+        post_labor_status(sim, "idle", eng)
+        fired.append("idle")
+        watch.idle_short = True
+        watch.construction_short = False
+    else:
+        watch.construction_short = need_more
+        watch.idle_short = idle_short
 
     if watch.last_ready >= 0 and ready < watch.last_ready and any_short:
         if "services_cut" not in watch.seen:
@@ -420,12 +450,6 @@ def scan_city_messages(
         watch.last_ready = ready
     else:
         watch.last_ready = ready
-
-    if idle_short and not watch.idle_short:
-        watch.seen.discard("idle")
-        post_labor_status(sim, "idle", eng)
-        fired.append("idle")
-    watch.idle_short = idle_short
 
     if (
         month_wrapped
@@ -532,6 +556,48 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  all-staffed leftover idle {got}")
     else:
         lines.append("ok    leftover idle with every row at need stays quiet")
+
+    sim = SimState(city_only=1, population=20, treasury=100)
+    init_city_only_labor(sim)
+    sim.labor_assigned = [0, 12, 4, 4, 0, 0, 0]
+    sim.labor_need = [20, 12, 4, 4, 0, 0, 0]
+    sim.plebs_ready = 42
+    got = scan_city_messages(sim, tiles)
+    if "idle" in got or "need_plebs" in got or peek_status(sim):
+        lines.append(f"FAIL  construction lock is not a shortage {got} {peek_status(sim)!r}")
+    else:
+        lines.append("ok    construction 20/20 (even assigned 0) is not a labor toast")
+
+    sim = SimState(city_only=1, population=20, treasury=100)
+    init_city_only_labor(sim)
+    sim.labor_assigned = [20, 12, 4, 4, 0, 0, 0]
+    sim.labor_need = [20, 12, 4, 4, 0, 8, 3]
+    sim.plebs_ready = 42
+    got = scan_city_messages(sim, tiles)
+    if "idle" in got or "need_plebs" in got or peek_status(sim):
+        lines.append(f"FAIL  N/A leftover need toasted {got} {peek_status(sim)!r}")
+    else:
+        lines.append("ok    Need-N/A rows 5–6 leftover do not toast")
+
+    sim = SimState(city_only=1, population=20, treasury=100)
+    init_city_only_labor(sim)
+    sim.labor_assigned = [20, 0, 0, 0, 0, 0, 0]
+    sim.labor_need = [20, 8, 0, 0, 0, 0, 0]
+    sim.plebs_ready = 20
+    got = scan_city_messages(sim, tiles)
+    got2 = scan_city_messages(sim, tiles)
+    if "need_plebs" not in got:
+        lines.append(f"FAIL  first short {got}")
+    elif got2:
+        lines.append(f"FAIL  re-fired every scan {got2}")
+    else:
+        lines.append("ok    labor toast is a rising edge, not every tick")
+    sim.labor_assigned = [20, 8, 0, 0, 0, 0, 0]
+    got3 = scan_city_messages(sim, tiles)
+    if got3 or peek_status(sim) or ensure_watch(sim).status_alert:
+        lines.append(f"FAIL  status stuck after sliders meet need {got3} {peek_status(sim)!r}")
+    else:
+        lines.append("ok    Plebs are needed! clears when sliders are at need")
 
     from app.forum import apply_month_labor
 

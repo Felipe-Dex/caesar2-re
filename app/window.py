@@ -856,6 +856,13 @@ def show(ctx: BootContext, *, game: Path) -> None:
     def _sfx(event: str) -> None:
         sfx.play(event)
 
+    def _play_labor_sfx() -> None:
+        """Play unused.wav only when scan / Forum allocate just posted."""
+        from app.messages import take_status_sfx
+
+        if take_status_sfx(ctx.sim) in ("need_plebs", "idle"):
+            _sfx("need_plebs")
+
     def _sfx_place(result, tool_name: str | None) -> None:
         if getattr(result, "query", None):
             _sfx("click")
@@ -944,15 +951,12 @@ def show(ctx: BootContext, *, game: Path) -> None:
         ox = chrome_ox(win_w)
         shown = extra if extra is not None else last_extra
         extra_alert = False
-        from app.messages import ensure_watch, peek_status, take_status_sfx
+        from app.messages import ensure_watch, peek_status
 
         status = peek_status(ctx.sim)
         if ensure_watch(ctx.sim).status_alert and status:
             shown = status
             extra_alert = True
-        sfx_key = take_status_sfx(ctx.sim)
-        if sfx_key in ("need_plebs", "idle"):
-            _sfx("need_plebs")
         prev = current_preview()
         if prev is not None:
             shown = f"{prev.message}  tesouro {ctx.sim.treasury}"
@@ -1468,6 +1472,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
         scan_city_messages(
             ctx.sim, ctx.city.tiles, ctx.eng, hail=hail, houses_up=houses_up
         )
+        _play_labor_sfx()
         _pump_advisor()
 
     def _refresh_after_sim(*, houses_changed: bool) -> None:
@@ -1509,6 +1514,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
         ph, w = n.phase, n.walkers
         _refresh_after_sim(houses_changed=ph.houses_changed > 0)
         _maybe_annual_summary(ph)
+        _play_labor_sfx()
         _pump_advisor()
         from app.sim_log import last_line
 
@@ -1534,6 +1540,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
         date = format_hud_date(ctx.sim.date)
         _refresh_after_sim(houses_changed=ph.houses_changed > 0)
         _maybe_annual_summary(ph)
+        _play_labor_sfx()
         _pump_advisor()
         from app.sim_log import last_line
 
@@ -1909,6 +1916,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
             if ph.houses_changed > 0:
                 _refresh_after_sim(houses_changed=True)
             _maybe_annual_summary(ph)
+            _play_labor_sfx()
             _pump_advisor()
             from app.sim_log import last_line
 
@@ -2293,7 +2301,8 @@ def show(ctx: BootContext, *, game: Path) -> None:
             overlay_flyout = not overlay_flyout
             palette.close()
             place_dlg = None
-            _sfx("click")
+            # Overlay well (city_chrome overlay_menu): a09.wav, not unused.wav.
+            _sfx("overlay")
             blit(f"Overlay: {overlay_name(overlay_id, ctx.eng)}")
             return
         if action == "zoom_in":
@@ -2325,6 +2334,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
             blit(f"ferramenta cancelada  tesouro {ctx.sim.treasury}")
             return
         overlay_id = idx
+        # EXE 0x619F3 — a09.wav only. Never unused.wav / need_plebs.
         _sfx("overlay")
         hint = overlay_help(idx, ctx.eng)
         blit(f"{overlay_name(idx, ctx.eng)} — {hint}")
@@ -2686,6 +2696,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
                 _sfx("click")
                 _leave_forum()
             elif msg == "need_plebs":
+                _play_labor_sfx()
                 blit()
             elif msg:
                 _sfx("click")

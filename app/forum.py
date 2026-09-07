@@ -64,6 +64,9 @@ LABOR_FIRE = 1
 LABOR_ROADS = 2
 LABOR_WATER = 3
 LABOR_WALLS = 4
+# Forum sliders with a Need column. Construction is locked 20/20; rows 5–6
+# show N/A and must not trip the labor HUD.
+LABOR_SLIDER_ROWS = (LABOR_FIRE, LABOR_ROADS, LABOR_WATER, LABOR_WALLS)
 # labor_init 0x563E2: construction need always 20; assigned = need (locked).
 CREW = 20
 # FAQ / 0x444A5: 2 per fountain origin 0xDB–0xDE + 2 per baths 0xDF–0xE2.
@@ -665,6 +668,23 @@ def labor_percent(assigned: int, need: int) -> int:
 def labor_row_staffed(assigned: int, need: int) -> bool:
     """Row can run: need 0, or assigned covers need (percent 100)."""
     return labor_percent(assigned, need) >= 100
+
+
+def labor_slider_short(sim: SimState) -> bool:
+    """True when a user-adjustable PLEBS row has assigned < need.
+
+    Construction locked at 20/20 is not a shortage. Provincial / unused
+    rows (Need N/A) are ignored even if leftover SAV bytes look short.
+    """
+    asg = list(getattr(sim, "labor_assigned", None) or [0] * LABOR_ROWS)
+    need = list(getattr(sim, "labor_need", None) or [0] * LABOR_ROWS)
+    while len(asg) < LABOR_ROWS:
+        asg.append(0)
+    while len(need) < LABOR_ROWS:
+        need.append(0)
+    return any(
+        not labor_row_staffed(asg[i], need[i]) for i in LABOR_SLIDER_ROWS
+    )
 
 
 def labor_idle_of(sim: SimState) -> int:
@@ -1662,6 +1682,16 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  construction locked {labor.assigned[0]} need {labor.need[0]}")
     else:
         lines.append("ok    construction +/- do nothing, still 20 Need 20")
+    locked = SimState(
+        city_only=1,
+        labor_assigned=[0, 12, 4, 4, 0, 0, 0],
+        labor_need=[20, 12, 4, 4, 0, 8, 0],
+        plebs_ready=42,
+    )
+    if labor_slider_short(locked):
+        lines.append("FAIL  slider short treats construction / N/A as understaffed")
+    else:
+        lines.append("ok    slider short ignores construction lock and N/A rows")
     fire0 = labor.assigned[1]
     got = apply_plebs_hit(labor, "row1+", sim)
     if labor.assigned[0] != CREW:

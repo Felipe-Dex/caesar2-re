@@ -15,8 +15,9 @@ Pinned play/bind sites (mapped VA):
 - ``fire.wav`` play ``FUN_000696e8`` ``0x697AC``
 - ``smrub.wav`` ``0x697CF``; ``medrub.wav`` / ``lrgrub.wav`` ``0x696AC``
   (``cmp edi,2`` / ``jg`` → medium when ``edi<=2``, large when ``edi>2``)
-- ``a09.wav`` ``0x619F3`` (overlay/HUD cue — play once, do not arm the
-  EXE's every-8-tick loop)
+- ``a09.wav`` ``0x619F3`` (overlay well / flyout pick — play once, do
+  not arm the EXE's every-8-tick loop). Overlay gadget must never play
+  ``unused.wav``.
 - ``forum.wav`` is copied in ``city_sfx_bind_wavs`` ``0x12F2A`` (ambience
   table). Host plays it once on Forum enter.
 - ``unused.wav`` bind ``0x129B2`` / str ``0x90448`` — Need more plebs!
@@ -290,8 +291,11 @@ def selftest(game: Path | None = None) -> list[str]:
     }
     if EVENT_WAV != want:
         lines.append(f"FAIL  EVENT_WAV {EVENT_WAV}")
+    elif EVENT_WAV["overlay"] != "a09.wav" or EVENT_WAV["need_plebs"] == EVENT_WAV["overlay"]:
+        lines.append("FAIL  overlay gadget must be a09.wav, not unused.wav")
     else:
         lines.append("ok    EVENT_WAV pinned to EXE 8.3 names")
+        lines.append("ok    overlay gadget is a09.wav (0x619F3), not unused.wav")
     if "A01" in " ".join(EVENT_WAV.values()).upper() or PREFERRED_RAW.lower() in {
         n.lower() for n in EVENT_WAV.values()
     }:
