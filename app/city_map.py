@@ -714,26 +714,42 @@ def walk_sav_chunks(data: bytes, sizes: Sequence[int]) -> list[memoryview]:
     return chunks
 
 
-def find_saves(folder: Path) -> list[Path]:
-    """`.SAV` files: `{folder}/sav/` first, then the install root."""
+def _sav_in(folder: Path) -> list[Path]:
     found: list[Path] = []
     seen: set[Path] = set()
-    roots: list[Path] = []
-    sub = Path(folder) / "sav"
-    if sub.is_dir():
-        roots.append(sub)
-    roots.append(Path(folder))
-    for root in roots:
-        for pat in ("*.SAV", "*.sav"):
-            for path in sorted(root.glob(pat)):
-                if not path.is_file():
-                    continue
-                key = path.resolve()
-                if key in seen:
-                    continue
-                seen.add(key)
-                found.append(path)
+    if not folder.is_dir():
+        return found
+    for pat in ("*.SAV", "*.sav"):
+        for path in sorted(folder.glob(pat)):
+            if not path.is_file():
+                continue
+            key = path.resolve()
+            if key in seen:
+                continue
+            seen.add(key)
+            found.append(path)
     return found
+
+
+def find_saves(folder: Path) -> list[Path]:
+    """`.SAV` files: `{repo}/sav/` first. If empty, retail `{folder}/sav/` then install root."""
+    from app.config import REPO_ROOT
+
+    host = REPO_ROOT / "sav"
+    host.mkdir(parents=True, exist_ok=True)
+    found = _sav_in(host)
+    if found:
+        return found
+    out: list[Path] = []
+    seen: set[Path] = set()
+    for root in (Path(folder) / "sav", Path(folder)):
+        for path in _sav_in(root):
+            key = path.resolve()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(path)
+    return out
 
 
 def pick_save(folder: Path) -> Path | None:

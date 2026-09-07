@@ -1618,10 +1618,15 @@ def show(ctx: BootContext, *, game: Path) -> None:
         )
 
     def _load_label(path: Path) -> str:
-        try:
-            return str(path.resolve().relative_to(Path(game).resolve()))
-        except ValueError:
-            return path.name
+        from app.config import REPO_ROOT
+
+        resolved = path.resolve()
+        for base in (REPO_ROOT, Path(game)):
+            try:
+                return str(resolved.relative_to(base.resolve()))
+            except ValueError:
+                continue
+        return path.name
 
     def _apply_new_city() -> None:
         nonlocal city_skill, tool, overlay_id, overlay_flyout, place_dlg

@@ -14,8 +14,11 @@ from app.sim import on_sim_step  # Space / T — phase slot then walkers
 
 
 def _print_status(ctx) -> None:
+    from app.sav import host_sav_dir
+
     print(f"install       : {ctx.game}")
     print(f"resolved via  : {ctx.source}")
+    print(f"sav slots     : {host_sav_dir()}")
     print("-- key files --")
     for item in ctx.key_files:
         mark = "ok" if item.ok else "MISSING"
@@ -85,7 +88,7 @@ def main(argv: list[str] | None = None) -> int:
         "--sav",
         type=Path,
         default=None,
-        help="load this .SAV as SavChunk 13 (default: FELIPE01 / first in install)",
+        help="load this .SAV (name: {repo}/sav/ first, then retail sav/)",
     )
     parser.add_argument(
         "--new",
@@ -168,11 +171,10 @@ def main(argv: list[str] | None = None) -> int:
                 break
         if sav is None:
             sav = pick_save(game)
-    if sav is not None and not sav.is_file():
-        for alt in (game / "sav" / sav.name, game / sav.name):
-            if alt.is_file():
-                sav = alt
-                break
+    if sav is not None:
+        from app.sav import resolve_sav_path
+
+        sav = resolve_sav_path(sav, game)
 
     ctx = run_boot(
         game,

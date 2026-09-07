@@ -1,7 +1,7 @@
 """City Only top menu — File / Options / Speed / Help (C2.ENG [0]…[3]).
 
 Actions match 1.1A City Only strings. No Career empire / Forum PERSONAL.
-File→Save / F5 writes `{game}/sav/{8.3}.SAV` (owned chunks live, rest zero).
+File→Save / F5 writes `{repo}/sav/{8.3}.SAV` (owned chunks live, rest zero).
 Census is Options+5 (Census Panel [74]), not an overlay-filter.
 Keyboard table: C2MANUAL.DOC p.48 — see CITY_ONLY_KEYS / CITY_ONLY_LEFTOVERS.
 """

@@ -61,7 +61,7 @@ Keys follow **C2MANUAL.DOC p.48** once the city map is up: **P** pause · **C** 
 
 ### Mapa da cidade / City map (tecla **3**)
 
-Boot carrega o primeiro save da pasta do jogo (`FELIPE01.SAV`, senão `FELIPE02` / `LASTYEAR` / qualquer `.SAV`). **Não copia** o ficheiro para o git.
+**F4** Load e **F5** Save usam `{repo}/sav/` (`C:\Users\Felip\caesar2-re\sav\`; cria se faltar), não o install Sierra/OneDrive. Boot carrega o primeiro `.SAV` dessa pasta; se estiver vazia, cai no `sav/` / raiz do install. `--game` / `CAESAR2_PATH` continua só para arte / ENG / PL8 / vídeos. **Não copia** o ficheiro para o git.
 
 A janela nativa é **640×480** (viewport sobre o canvas iso; já não encolhe o mapa inteiro). **Maximizar / redimensionar** alarga o recorte iso (mais tiles, mesmo zoom PL8). O chrome INT_CITY fica 162 px 1:1 à direita.
 
@@ -70,7 +70,7 @@ A janela nativa é **640×480** (viewport sobre o canvas iso; já não encolhe o
 - **Zoom:** `+` / `=` / `]` aproxima (set 0 = `HOUSES1` / `BUILD1*` / `LTLMEN1B`, 58×30, flags `0x0002`). `-` / `[` / **Z** afasta. Set 1 = `HOUSES2` / `BUILD2*` / `CITYFIX2` / `LTLMEN2B` (26×14, `0x0102`). Set 2 = `HOUSES3` / `BUILD3*` / `CITYFIX3` / `LTLMEN3B` (10×6, `0x0202`). Roda do rato também muda o zoom. Se o PL8 faltar, o host faz scale nearest do zoom 0.
 - **T:** um pulso do EXE: `city_sim_phase` (1 slot) **depois** `walkers_tick`. **Space** no mapa cancela a ferramenta (1.1A). **E:** as 80 filas de evolve (atalho). Achea `+15=0` faz casas **descerem**. Preferir `20230610.SAV`. Como testar: `findings/app_sim_phase.md`.
 - PNG sem janela (gitignorado): `python -m app --map-preview --no-audio`
-- Save à escolha: `python -m app --sav "C:\Users\Felip\OneDrive\Games\Caesar2\LASTYEAR.SAV"`
+- Save à escolha: `python -m app --sav CITY.SAV` (procura `{repo}/sav/` primeiro; um path absoluto do install ainda vale)
 
 ---
 

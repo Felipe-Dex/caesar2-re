@@ -20,6 +20,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from app.calendar import MONTH_CHUNK, YEAR_CHUNK
+from app.config import REPO_ROOT
 from app.city_map import (
     MAP_BYTES,
     N_SAV_CHUNKS,
@@ -70,8 +71,9 @@ PROVINCE_LINKS_CHUNK = 276
 _NAMED_FLAGS = (0, 4, 0, 0)
 _LASTYEAR_FLAGS = (0, 0, 1, 0x01)
 
-# Host File→Save / F5: {game}/sav/{8.3}.SAV — no OS picker. Original loader
-# accepts DOS 8.3 names (CITY.SAV, FELIPE01.SAV, CAESAR2.SAV).
+# Host File→Save / F5: {repo}/sav/{8.3}.SAV — no OS picker. Retail {game}
+# stays for PL8 / ENG / videos. Original loader accepts DOS 8.3 names
+# (CITY.SAV, FELIPE01.SAV, CAESAR2.SAV).
 SAV_SUBDIR = "sav"
 DEFAULT_SAV_NAME = "CITY.SAV"
 
@@ -213,9 +215,36 @@ def _is_lastyear(path: Path | None) -> bool:
     return path is not None and path.name.lower() == "lastyear.sav"
 
 
-def sav_dir(game: Path) -> Path:
-    """Install `sav/` folder. Caller creates it on write."""
-    return Path(game) / SAV_SUBDIR
+def host_sav_dir(*, create: bool = False) -> Path:
+    """Repo `{caesar2-re}/sav/` — host .SAV slots, not the retail install."""
+    folder = REPO_ROOT / SAV_SUBDIR
+    if create:
+        folder.mkdir(parents=True, exist_ok=True)
+    return folder
+
+
+def sav_dir(root: Path | None = None, *, create: bool = False) -> Path:
+    """`{root}/sav/`. Default root is the repo, not `{game}`."""
+    folder = (Path(root) if root is not None else REPO_ROOT) / SAV_SUBDIR
+    if create:
+        folder.mkdir(parents=True, exist_ok=True)
+    return folder
+
+
+def resolve_sav_path(sav: Path, game: Path) -> Path:
+    """`--sav NAME.SAV`: `{repo}/sav/` first, then retail `sav/` / install root."""
+    path = Path(sav)
+    if path.is_file():
+        return path
+    name = path.name
+    for cand in (
+        host_sav_dir() / name,
+        Path(game) / SAV_SUBDIR / name,
+        Path(game) / name,
+    ):
+        if cand.is_file():
+            return cand
+    return path
 
 
 def _dos83_stem(raw: str) -> str:
@@ -246,10 +275,19 @@ def slot_name(city: CityMap | None = None, sim: SimState | None = None) -> str:
     return DEFAULT_SAV_NAME
 
 
-def dest_path(game: Path, city: CityMap | None = None, sim: SimState | None = None) -> Path:
-    """`{game}/sav/{slot}.SAV`. Creates `sav/` if missing."""
-    folder = sav_dir(game)
-    folder.mkdir(parents=True, exist_ok=True)
+def dest_path(
+    game: Path | None = None,
+    city: CityMap | None = None,
+    sim: SimState | None = None,
+    *,
+    root: Path | None = None,
+) -> Path:
+    """`{repo}/sav/{slot}.SAV`. Creates `sav/` if missing.
+
+    `game` is unused (assets stay on the install). Pass `root=` in tests.
+    """
+    del game
+    folder = sav_dir(root, create=True)
     return folder / slot_name(city, sim)
 
 
@@ -359,7 +397,7 @@ def write_sav(
     game: Path | None = None,
     sizes: Sequence[int] | None = None,
 ) -> Path:
-    """Write a 225745-byte .SAV. Caller chooses the path (install, not git)."""
+    """Write a 225745-byte .SAV. Host slots live in `{repo}/sav/` (gitignored)."""
     dest = Path(path)
     dest.write_bytes(
         build_sav_bytes(city, walkers, sim, game=game, sizes=sizes, path=dest)
@@ -390,12 +428,30 @@ def selftest() -> list[str]:
         lines.append("ok    generate slot CITY.SAV")
     with tempfile.TemporaryDirectory() as tmp:
         fake = Path(tmp)
-        dest = dest_path(fake, gen)
+        dest = dest_path(city=gen, root=fake)
         want = fake / SAV_SUBDIR / DEFAULT_SAV_NAME
         if dest != want or not dest.parent.is_dir():
             lines.append(f"FAIL  dest_path {dest}")
         else:
-            lines.append("ok    dest_path {game}/sav/CITY.SAV")
+            lines.append("ok    dest_path {repo}/sav/CITY.SAV")
+        default = dest_path(city=gen)
+        if default != REPO_ROOT / SAV_SUBDIR / DEFAULT_SAV_NAME:
+            lines.append(f"FAIL  default dest {default}")
+        else:
+            lines.append("ok    default dest {repo}/sav/CITY.SAV")
+        retail = fake / "install"
+        (retail / SAV_SUBDIR).mkdir(parents=True)
+        (retail / SAV_SUBDIR / "RETAIL.SAV").write_bytes(b"x")
+        host = fake / SAV_SUBDIR
+        host.mkdir(parents=True, exist_ok=True)
+        (host / "HOST.SAV").write_bytes(b"y")
+        # resolve_sav_path uses the real repo; name-only hits host_sav_dir first
+        # when that file exists. Here we only check an explicit file wins.
+        explicit = retail / SAV_SUBDIR / "RETAIL.SAV"
+        if resolve_sav_path(explicit, retail) != explicit:
+            lines.append(f"FAIL  resolve explicit {resolve_sav_path(explicit, retail)}")
+        else:
+            lines.append("ok    resolve_sav_path keeps an existing file")
     sizes = chunk_sizes()
     if len(sizes) != N_SAV_CHUNKS or sum(sizes) != SAV_TABLE_BYTES:
         lines.append(f"FAIL  writer sizes {len(sizes)} sum={sum(sizes)}")
