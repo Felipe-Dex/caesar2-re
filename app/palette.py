@@ -571,4 +571,15 @@ def selftest() -> list[str]:
             )
         else:
             lines.append("ok    INT_CITY 3×5 hit +ox (Water)")
+    left = next((h for h in ch.hits if h.action == "rotate_left"), None)
+    right = next((h for h in ch.hits if h.action == "rotate_right"), None)
+    if left is None or right is None:
+        lines.append("FAIL  chrome rotate hits missing")
+    else:
+        lx, ly, _lw, _lh = left.rect
+        hit = ch.hit_test(lx + 1, ly + 1)
+        if hit is None or hit.action != "rotate_left":
+            lines.append(f"FAIL  rotate_left hit={getattr(hit, 'action', None)}")
+        else:
+            lines.append("ok    INT_CITY rotate-left / rotate-right gadgets")
     return lines

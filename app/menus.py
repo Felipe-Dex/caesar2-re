@@ -381,11 +381,12 @@ CITY_ONLY_KEYS: tuple[tuple[str, str], ...] = (
     ("escape", "Exit current screen/panel/menu"),
     ("a", "Accelerate Time"),
     ("c", "See Census Panel"),
+    ("comma", "Rotate map left (INT_CITY sprite 4)"),
+    ("period", "Rotate map right (INT_CITY sprite 5)"),
 )
 
 # Official keys / UI we cannot host yet. Do not invent overlay or Query letters.
 CITY_ONLY_LEFTOVERS: tuple[str, ...] = (
-    "< > rotate (INT_CITY sprites 4–5 — no host camera rotate)",
     "Alt-F / Alt-F1 / Alt-F3 / Alt-D flags (sprite 9 unused)",
     "overlays — pull-down only; no letter key in the 1.1A table",
     "Query — mouse / right-click; no letter key in the 1.1A table",
@@ -464,10 +465,14 @@ def selftest() -> list[str]:
     else:
         lines.append("ok    City Only key table has P/C/A/Space/F/F1–F5/1–3")
     blob = " ".join(CITY_ONLY_LEFTOVERS).lower()
-    if "overlay" not in blob or "query" not in blob or "rotate" not in blob:
-        lines.append("FAIL  leftovers omit overlay/query/rotate")
+    if "overlay" not in blob or "query" not in blob:
+        lines.append("FAIL  leftovers omit overlay/query")
     else:
-        lines.append("ok    leftovers list overlay/query/rotate/flags")
+        lines.append("ok    leftovers list overlay/query/flags")
+    if "comma" not in bound or "period" not in bound:
+        lines.append("FAIL  city key rotate < > missing")
+    else:
+        lines.append("ok    City Only key table has < > rotate")
     if report_line_at(_REPORT_X + 8, _REPORT_Y + 24, 3) != 0:
         lines.append("FAIL  report_line_at first line")
     else:

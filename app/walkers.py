@@ -34,6 +34,7 @@ from app.city_map import (
     iso_tile_size,
     load_chunk_sizes,
     walk_sav_chunks,
+    world_to_draw,
 )
 
 # LTLMEN{1,2,3}B bitmap size (type-0, not the iso diamond).
@@ -340,14 +341,16 @@ def tile_iso_xy(
     *,
     origin_x: int | None = None,
     zoom: int = 0,
+    facing: int = 0,
 ) -> tuple[int, int]:
     """Diamond top-left. Same formula as city_map.render_iso."""
     tile_w, tile_h = iso_tile_size(zoom)
     half_w, half_h = tile_w / 2.0, tile_h / 2.0
     if origin_x is None:
         origin_x = iso_origin_x(zoom=zoom)
-    sx = origin_x + (x - y) * half_w
-    sy = (x + y) * half_h
+    dx, dy = world_to_draw(x, y, facing)
+    sx = origin_x + (dx - dy) * half_w
+    sy = (dx + dy) * half_h
     return int(round(sx)), int(round(sy))
 
 
@@ -416,13 +419,17 @@ def find_walker_at(
 
 
 def walker_iso_xy(
-    walker: Walker, *, origin_x: int | None = None, zoom: int = 0
+    walker: Walker,
+    *,
+    origin_x: int | None = None,
+    zoom: int = 0,
+    facing: int = 0,
 ) -> tuple[int, int]:
     """Blit origin for LTLMEN: feet on the road diamond."""
     tile_w, tile_h = iso_tile_size(zoom)
     men = LTLMEN_SIZE_BY_ZOOM[max(0, min(zoom, 2))]
     fx, fy = walker_draw_xy(walker)
-    sx, sy = tile_iso_xy(fx, fy, origin_x=origin_x, zoom=zoom)
+    sx, sy = tile_iso_xy(fx, fy, origin_x=origin_x, zoom=zoom, facing=facing)
     # Centre of the iso diamond is the pad. Bottom-edge feet sit on the
     # SE neighbour diamond (same dest Y as type-1 aqueduct).
     cx = sx + tile_w // 2
@@ -461,6 +468,7 @@ def overlay_walkers(
     cam_x: int = 0,
     cam_y: int = 0,
     inplace: bool = False,
+    facing: int = 0,
 ) -> Image.Image:
     """Blit live walkers onto an iso canvas or a camera crop of it.
 
@@ -493,7 +501,7 @@ def overlay_walkers(
         if not (0 <= idx < n):
             continue
         spr = sprites[idx]
-        px, py = walker_iso_xy(walker, origin_x=origin_x, zoom=zoom)
+        px, py = walker_iso_xy(walker, origin_x=origin_x, zoom=zoom, facing=facing)
         px -= cam_x
         py -= cam_y
         if px + men < 0 or py + men < 0 or px >= vw or py >= vh:

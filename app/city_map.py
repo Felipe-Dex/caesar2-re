@@ -256,20 +256,124 @@ def iso_origin_x(zoom: int = 0, width: int = MAP_W) -> int:
     return (width - 1) * (iso_tile_size(zoom)[0] // 2)
 
 
+def clamp_facing(facing: int) -> int:
+    """City iso facing 0–3 (INT_CITY sprites 4–5)."""
+    return int(facing) & 3
+
+
+def world_to_draw(
+    x: float,
+    y: float,
+    facing: int = 0,
+    *,
+    width: int = MAP_W,
+    height: int = MAP_H,
+) -> tuple[float, float]:
+    """World tile → draw-space tile for the facing-0 iso formula.
+
+    0 = default diamond. 1 = 90° CW (top → right). 2 = 180°. 3 = 270° CW.
+    Ghidra HTTP was down this pass; ``[0x117AC8]`` is a %4 frame increment
+    with no other xref (not this byte). Host facing lives in the window.
+    """
+    f = clamp_facing(facing)
+    if f == 0:
+        return x, y
+    last_x = width - 1
+    last_y = height - 1
+    if f == 1:
+        return last_y - y, x
+    if f == 2:
+        return last_x - x, last_y - y
+    return y, last_x - x
+
+
+def draw_to_world(
+    dx: float,
+    dy: float,
+    facing: int = 0,
+    *,
+    width: int = MAP_W,
+    height: int = MAP_H,
+) -> tuple[float, float]:
+    """Inverse of ``world_to_draw``."""
+    f = clamp_facing(facing)
+    if f == 0:
+        return dx, dy
+    last_x = width - 1
+    last_y = height - 1
+    if f == 1:
+        return dy, last_y - dx
+    if f == 2:
+        return last_x - dx, last_y - dy
+    return last_x - dy, dx
+
+
+def walker_camera(facing: int) -> int:
+    """LTLMEN camera 0–7. One map facing step is −2 walker dirs (CW)."""
+    return (-clamp_facing(facing) * 2) & 7
+
+
+# Road +0 0x52–0x5C: canonical NESW mask (place._ROAD_FROM_MASK) so a 90°
+# view can swap NS/EW and walk the corners. Building facades stay +4.
+_ROAD_CANON_MASK: dict[int, int] = {
+    0x52: 0x05,
+    0x53: 0x0A,
+    0x54: 0x03,
+    0x55: 0x06,
+    0x56: 0x0C,
+    0x57: 0x09,
+    0x58: 0x07,
+    0x59: 0x0E,
+    0x5A: 0x0D,
+    0x5B: 0x0B,
+    0x5C: 0x0F,
+}
+_ROAD_FROM_MASK: tuple[int, ...] = (
+    0x52, 0x52, 0x53, 0x54, 0x52, 0x52, 0x55, 0x58,
+    0x53, 0x57, 0x53, 0x5B, 0x56, 0x5A, 0x59, 0x5C,
+)
+_AQUEDUCT_AXIS: dict[int, int] = {0xD0: 0xD1, 0xD1: 0xD0, 0xD5: 0xD6, 0xD6: 0xD5}
+
+
+def orient_terrain_id(tid: int, facing: int) -> int:
+    """Paint-only +0 remap so roads/aqueducts follow the view.
+
+    Does not write the map. Corners/T use the mask walk; 180° keeps NS/EW.
+    """
+    f = clamp_facing(facing)
+    if f == 0:
+        return tid
+    mask = _ROAD_CANON_MASK.get(tid)
+    if mask is not None:
+        rot = mask
+        for _ in range(f):
+            rot = ((rot << 1) | (rot >> 3)) & 0xF
+        return _ROAD_FROM_MASK[rot]
+    if f & 1:
+        return _AQUEDUCT_AXIS.get(tid, tid)
+    return tid
+
+
 def tile_iso_xy(
-    x: int,
-    y: int,
+    x: float,
+    y: float,
     *,
     origin_x: int | None = None,
     zoom: int = 0,
     width: int = MAP_W,
+    facing: int = 0,
+    height: int = MAP_H,
 ) -> tuple[int, int]:
-    """Diamond top-left. Same formula as render_iso."""
+    """Diamond top-left. Same formula as render_iso (draw-space after facing)."""
     tile_w, tile_h = iso_tile_size(zoom)
-    half_w, half_h = tile_w // 2, tile_h // 2
+    half_w, half_h = tile_w / 2.0, tile_h / 2.0
     if origin_x is None:
         origin_x = iso_origin_x(zoom=zoom, width=width)
-    return origin_x + (x - y) * half_w, (x + y) * half_h
+    dx, dy = world_to_draw(x, y, facing, width=width, height=height)
+    return (
+        int(round(origin_x + (dx - dy) * half_w)),
+        int(round((dx + dy) * half_h)),
+    )
 
 
 def river_tile_xy(city: CityMap) -> list[tuple[int, int]]:
@@ -880,8 +984,9 @@ def _shimmer_iso_tile(
     water_frame: int,
     cityfixt: Sequence[Image.Image] | None,
     sheets: dict[str, Sequence[Image.Image]] | None,
+    facing: int = 0,
 ) -> bool:
-    frames, idx = _tile_frames(tile, water_frame, cityfixt, sheets)
+    frames, idx = _tile_frames(tile, water_frame, cityfixt, sheets, facing=facing)
     if frames is None or idx is None or not (0 <= idx < len(frames)):
         return False
     spr = _prepare_iso_sprite(frames[idx], tile_h)
@@ -897,8 +1002,15 @@ def _tile_frames(
     water_frame: int,
     cityfixt: Sequence[Image.Image] | None,
     sheets: dict[str, Sequence[Image.Image]] | None,
+    *,
+    facing: int = 0,
 ) -> tuple[Sequence[Image.Image] | None, int | None]:
     if tile.is_terrain:
+        tid = orient_terrain_id(tile.terrain_id, facing)
+        if tid != tile.terrain_id:
+            raw = bytearray(tile.raw)
+            raw[0] = tid
+            tile = Tile.unpack(bytes(raw))
         idx = tile.cityfixt_index()
         if (
             tile_wants_water_anim(tile.terrain_id, tile.flags, tile.coverage)
@@ -985,6 +1097,7 @@ def _paint_iso_tile(
     water_frame: int,
     cityfixt: Sequence[Image.Image] | None,
     sheets: dict[str, Sequence[Image.Image]] | None,
+    facing: int = 0,
 ) -> None:
     """Blit this cell's own LUT sprite at ``(sx, sy)``.
 
@@ -993,7 +1106,7 @@ def _paint_iso_tile(
     full-compound graphic — HOUSES1[81] is 58×56, one diamond. Drawing
     the origin variant on the other eight cells would stamp extra forts.
     """
-    frames, idx = _tile_frames(tile, water_frame, cityfixt, sheets)
+    frames, idx = _tile_frames(tile, water_frame, cityfixt, sheets, facing=facing)
     # Aqueduct CITYFIXT diamonds have transparent arches. Without a grass
     # underlay the canvas ISO_BG (12,16,28) reads as a solid black box.
     # Reservoir / fountain stay opaque — do not paint under them.
@@ -1136,6 +1249,7 @@ def render_iso(
     bg: tuple[int, int, int] = ISO_BG,
     zoom: int = 0,
     water_frame: int = 0,
+    facing: int = 0,
 ) -> Image.Image:
     """Blit 80×80 iso tiles. Terrain → CITYFIXT LUT+16; buildings → sheet LUT.
 
@@ -1160,13 +1274,17 @@ def render_iso(
     if cityfixt is None:
         cityfixt = sprites
 
-    for y in range(city.height):
-        for x in range(city.width):
-            sx = origin_x + (x - y) * half_w
-            sy = (x + y) * half_h
+    for dy in range(city.height):
+        for dx in range(city.width):
+            wx, wy = draw_to_world(dx, dy, facing, width=city.width, height=city.height)
+            wx, wy = int(round(wx)), int(round(wy))
+            if not (0 <= wx < city.width and 0 <= wy < city.height):
+                continue
+            sx = origin_x + (dx - dy) * half_w
+            sy = (dx + dy) * half_h
             _paint_iso_tile(
                 img,
-                city.tile(x, y),
+                city.tile(wx, wy),
                 sx,
                 sy,
                 tile_w=tile_w,
@@ -1174,6 +1292,7 @@ def render_iso(
                 water_frame=water_frame,
                 cityfixt=cityfixt,
                 sheets=sheets,
+                facing=facing,
             )
     return img
 
@@ -1191,6 +1310,7 @@ def render_iso_view(
     water_frame: int = 0,
     bg: tuple[int, int, int] = ISO_BG,
     restore: bool = False,
+    facing: int = 0,
 ) -> tuple[Image.Image, int, int]:
     """Paint camera-visible diamonds into a well-sized buffer.
 
@@ -1218,15 +1338,19 @@ def render_iso_view(
     if tx1 < tx0 or ty1 < ty0:
         return img, cx, cy
     tall = _MAX_SPRITE_H[z]
-    for y in range(ty0, ty1 + 1):
-        for x in range(tx0, tx1 + 1):
-            sx = origin_x + (x - y) * half_w + paste_ox
-            sy = (x + y) * half_h + paste_oy
+    for dy in range(ty0, ty1 + 1):
+        for dx in range(tx0, tx1 + 1):
+            wx, wy = draw_to_world(dx, dy, facing, width=city.width, height=city.height)
+            wx, wy = int(round(wx)), int(round(wy))
+            if not (0 <= wx < city.width and 0 <= wy < city.height):
+                continue
+            sx = origin_x + (dx - dy) * half_w + paste_ox
+            sy = (dx + dy) * half_h + paste_oy
             if sx + tile_w < 0 or sy + tile_h + tall < 0 or sx >= vw or sy >= vh:
                 continue
             _paint_iso_tile(
                 img,
-                city.tile(x, y),
+                city.tile(wx, wy),
                 sx,
                 sy,
                 tile_w=tile_w,
@@ -1234,6 +1358,7 @@ def render_iso_view(
                 water_frame=water_frame,
                 cityfixt=cityfixt,
                 sheets=sheets,
+                facing=facing,
             )
     return img, cx, cy
 
@@ -1248,6 +1373,7 @@ def blit_dirty_tiles(
     cityfixt: Sequence[Image.Image] | None = None,
     sheets: dict[str, Sequence[Image.Image]] | None = None,
     bg: tuple[int, int, int] = ISO_BG,
+    facing: int = 0,
 ) -> int:
     """Re-blit given tiles (and iso-overlapping neighbors) onto ``img``.
 
@@ -1268,6 +1394,7 @@ def blit_dirty_tiles(
         bg=bg,
         min_clear_h=_MAX_SPRITE_H[z],
         union_overlap=True,
+        facing=facing,
     )
 
 
@@ -1280,6 +1407,7 @@ def cells_in_iso_view(
     *,
     zoom: int = 0,
     pad: int = 32,
+    facing: int = 0,
 ) -> list[tuple[int, int]]:
     """Keep diamonds that intersect the camera crop (not the full 80×80)."""
     tw, th = iso_tile_size(zoom)
@@ -1288,7 +1416,7 @@ def cells_in_iso_view(
     right = cam_x + view_w
     bottom = cam_y + view_h
     for x, y in cells:
-        sx, sy = tile_iso_xy(x, y, origin_x=ox, zoom=zoom)
+        sx, sy = tile_iso_xy(x, y, origin_x=ox, zoom=zoom, facing=facing)
         if sx + tw < cam_x or sy + th + pad < cam_y:
             continue
         if sx >= right or sy >= bottom:
@@ -1312,6 +1440,7 @@ def blit_water_tiles(
     cam_x: int = 0,
     cam_y: int = 0,
     restore: bool | None = None,
+    facing: int = 0,
 ) -> int:
     """Re-blit water / dirty tiles onto an existing canvas.
 
@@ -1347,8 +1476,9 @@ def blit_water_tiles(
         for rx, ry in rivers:
             if not (0 <= rx < city.width and 0 <= ry < city.height):
                 continue
-            sx = origin_x + (rx - ry) * half_w - cam_x
-            sy = (rx + ry) * half_h - cam_y
+            dx, dy = world_to_draw(rx, ry, facing, width=city.width, height=city.height)
+            sx = int(round(origin_x + (dx - dy) * half_w - cam_x))
+            sy = int(round((dx + dy) * half_h - cam_y))
             if sx + tile_w < 0 or sy + tile_h + 32 < 0 or sx >= vw or sy >= vh:
                 continue
             if _shimmer_iso_tile(
@@ -1361,6 +1491,7 @@ def blit_water_tiles(
                 water_frame=water_frame,
                 cityfixt=cityfixt,
                 sheets=sheets,
+                facing=facing,
             ):
                 n += 1
         return n
@@ -1368,9 +1499,10 @@ def blit_water_tiles(
     clear_rects: list[tuple[int, int, int, int]] = []
     for x, y in rivers:
         tile = city.tile(x, y)
-        sx = origin_x + (x - y) * half_w
-        sy = (x + y) * half_h
-        frames, idx = _tile_frames(tile, water_frame, cityfixt, sheets)
+        dx, dy = world_to_draw(x, y, facing, width=city.width, height=city.height)
+        sx = int(round(origin_x + (dx - dy) * half_w))
+        sy = int(round((dx + dy) * half_h))
+        frames, idx = _tile_frames(tile, water_frame, cityfixt, sheets, facing=facing)
         sw, sh = _sprite_size(frames, idx, tile_w, tile_h)
         # Seeds keep a max-height wipe so Clear of a tall sprite (now rubble)
         # still covers leftover extra_rows. Members are painted with their
@@ -1382,18 +1514,26 @@ def blit_water_tiles(
 
     box_cache: dict[tuple[int, int], tuple[int, int, int, int]] = {}
 
-    def sprite_box(tx: int, ty: int) -> tuple[int, int, int, int]:
-        hit = box_cache.get((tx, ty))
+    def sprite_box(dx: int, dy: int) -> tuple[int, int, int, int]:
+        hit = box_cache.get((dx, dy))
         if hit is not None:
             return hit
-        tile = city.tile(tx, ty)
-        sx = origin_x + (tx - ty) * half_w
-        sy = (tx + ty) * half_h
-        frames, idx = _tile_frames(tile, water_frame, cityfixt, sheets)
+        wx, wy = draw_to_world(dx, dy, facing, width=city.width, height=city.height)
+        wx, wy = int(round(wx)), int(round(wy))
+        if not (0 <= wx < city.width and 0 <= wy < city.height):
+            sx = origin_x + (dx - dy) * half_w
+            sy = (dx + dy) * half_h
+            hit = (sx, sy, sx + tile_w, sy + tile_h)
+            box_cache[(dx, dy)] = hit
+            return hit
+        tile = city.tile(wx, wy)
+        sx = origin_x + (dx - dy) * half_w
+        sy = (dx + dy) * half_h
+        frames, idx = _tile_frames(tile, water_frame, cityfixt, sheets, facing=facing)
         sw, sh = _sprite_size(frames, idx, tile_w, tile_h)
         px, py = iso_sprite_dest(sx, sy, sh, tile_h)
         hit = (px, py, px + sw, py + sh)
-        box_cache[(tx, ty)] = hit
+        box_cache[(dx, dy)] = hit
         return hit
 
     wipe: tuple[int, int, int, int] | None = None
@@ -1411,7 +1551,8 @@ def blit_water_tiles(
                 members.add((nx, ny))
     for rx, ry in rivers:
         if 0 <= rx < city.width and 0 <= ry < city.height:
-            members.add((rx, ry))
+            dxy = world_to_draw(rx, ry, facing, width=city.width, height=city.height)
+            members.add((int(round(dxy[0])), int(round(dxy[1]))))
     x0 = max(0, wipe[0])
     y0 = max(0, wipe[1])
     x1 = min(img.width, wipe[2])
@@ -1421,12 +1562,16 @@ def blit_water_tiles(
     crop = Image.new("RGBA", (x1 - x0, y1 - y0), (*bg, 255))
     ordered = sorted(members, key=lambda p: (p[1], p[0]))
     n = 0
-    for nx, ny in ordered:
-        sx = origin_x + (nx - ny) * half_w
-        sy = (nx + ny) * half_h
+    for dx, dy in ordered:
+        wx, wy = draw_to_world(dx, dy, facing, width=city.width, height=city.height)
+        wx, wy = int(round(wx)), int(round(wy))
+        if not (0 <= wx < city.width and 0 <= wy < city.height):
+            continue
+        sx = origin_x + (dx - dy) * half_w
+        sy = (dx + dy) * half_h
         _paint_iso_tile(
             crop,
-            city.tile(nx, ny),
+            city.tile(wx, wy),
             sx - x0,
             sy - y0,
             tile_w=tile_w,
@@ -1434,6 +1579,7 @@ def blit_water_tiles(
             water_frame=water_frame,
             cityfixt=cityfixt,
             sheets=sheets,
+            facing=facing,
         )
         n += 1
     img.paste(crop, (x0, y0))
@@ -1497,8 +1643,9 @@ def view_tiles_for_camera(
     view_oy: int = _VIEW_MAP_OY,
     screen_w: int = _SCREEN_W,
     screen_h: int = _SCREEN_H,
+    facing: int = 0,
 ) -> tuple[int, int, int, int]:
-    """Inclusive tile AABB of the visible iso well (not under INT_CITY)."""
+    """Inclusive world-tile AABB of the visible iso well (not under INT_CITY)."""
     corners = (
         (view_ox, view_oy),
         (view_ox + view_w - 1, view_oy),
@@ -1512,8 +1659,9 @@ def view_tiles_for_camera(
             vx, vy, cam_x, cam_y, canvas_w, canvas_h, screen_w=screen_w, screen_h=screen_h
         )
         tx, ty = _canvas_to_tile(cx, cy, zoom)
-        txs.append(tx)
-        tys.append(ty)
+        wx, wy = draw_to_world(tx, ty, facing)
+        txs.append(wx)
+        tys.append(wy)
     x0 = max(0, min(MAP_W - 1, int(min(txs))))
     y0 = max(0, min(MAP_H - 1, int(min(tys))))
     x1 = max(0, min(MAP_W - 1, int(max(txs))))
@@ -1561,9 +1709,10 @@ def camera_center_on_tile(
     view_oy: int = _VIEW_MAP_OY,
     screen_w: int = _SCREEN_W,
     screen_h: int = _SCREEN_H,
+    facing: int = 0,
 ) -> tuple[int, int]:
     """cam_x, cam_y so tile (tx, ty) sits in the centre of the visible well."""
-    sx, sy = tile_iso_xy(tx, ty, zoom=zoom)
+    sx, sy = tile_iso_xy(tx, ty, zoom=zoom, facing=facing)
     tw, th = iso_tile_size(zoom)
     cx = sx + tw // 2
     cy = sy + th // 2
@@ -1584,8 +1733,13 @@ def minimap_click_pan(
     screen_w: int = _SCREEN_W,
     screen_h: int = _SCREEN_H,
     minimap: tuple[int, int, int, int] | None = None,
+    facing: int = 0,
 ) -> tuple[int, int] | None:
-    """If (x,y) is on the scaled well, new camera; else None."""
+    """If (x,y) is on the scaled well, new camera; else None.
+
+    Minimap stays north-up (world x/y). Click is a world tile; camera
+    recentres with the current iso facing.
+    """
     tile = (
         minimap_tile_at(x, y)
         if minimap is None
@@ -1603,6 +1757,7 @@ def minimap_click_pan(
         view_h=view_h,
         screen_w=screen_w,
         screen_h=screen_h,
+        facing=facing,
     )
 
 
@@ -1623,13 +1778,15 @@ def render_minimap(
     city: CityMap,
     viewport: tuple[int, int, int, int, int] | None = None,
     overlay_id: int = 0,
+    *,
+    facing: int = 0,
 ) -> Image.Image:
-    """80×80 top-down, one pixel per tile.
+    """80×80 top-down, one pixel per tile. North-up (does not rotate).
 
     ``viewport`` is ``(cam_x, cam_y, zoom, canvas_w, canvas_h[, win_w, win_h])``
-    — the same pan/zoom ``crop_viewport`` uses. Yellow outline = tiles under
-    the visible iso well (left of the 162 px sidebar). Omit it to skip the
-    rect. ``overlay_id`` is SavChunk 1 / [0x117A59] (0 = Geography).
+    — the same pan/zoom ``crop_viewport`` uses. Yellow outline = world tiles
+    under the visible iso well (left of the 162 px sidebar). Omit it to skip
+    the rect. ``overlay_id`` is SavChunk 1 / [0x117A59] (0 = Geography).
     """
     pixels: list[tuple[int, int, int]] = []
     tiles = city.tiles
@@ -1658,6 +1815,7 @@ def render_minimap(
             view_h=max(1, win_h - (_SCREEN_H - _VIEW_MAP_H)),
             screen_w=win_w,
             screen_h=win_h,
+            facing=facing,
         )
         ImageDraw.Draw(img).rectangle(box, outline=_MINI_VIEW)
     return img
@@ -2155,4 +2313,34 @@ def selftest() -> list[str]:
         lines.append("FAIL  barracks dirty deixou buraco na relva E")
     else:
         lines.append("ok    Barracks dirty = full, sem 2º forte na relva")
+    # Facing 0–3: world↔draw inverse, iso of (0,0) after CW, road NS↔EW.
+    for face in range(4):
+        wx, wy = 10, 40
+        dx, dy = world_to_draw(wx, wy, face)
+        back = draw_to_world(dx, dy, face)
+        if (round(back[0]), round(back[1])) != (wx, wy):
+            lines.append(f"FAIL  world/draw facing {face} {back}")
+            break
+    else:
+        lines.append("ok    world_to_draw inverse facing 0–3")
+    if tile_iso_xy(0, 0, facing=1) != tile_iso_xy(79, 0, facing=0):
+        lines.append(
+            f"FAIL  facing 1 (0,0) {tile_iso_xy(0, 0, facing=1)} "
+            f"want {tile_iso_xy(79, 0)}"
+        )
+    else:
+        lines.append("ok    facing 1 CW: world (0,0) at draw (79,0)")
+    if walker_camera(0) != 0 or walker_camera(1) != 6 or walker_camera(2) != 4:
+        lines.append(f"FAIL  walker_camera {walker_camera(1)}")
+    else:
+        lines.append("ok    walker_camera 0/6/4/2 for facing 0–3")
+    if orient_terrain_id(0x52, 1) != 0x53 or orient_terrain_id(0x53, 1) != 0x52:
+        lines.append(
+            f"FAIL  road orient {orient_terrain_id(0x52, 1):#x}/"
+            f"{orient_terrain_id(0x53, 1):#x}"
+        )
+    elif orient_terrain_id(0x52, 2) != 0x52:
+        lines.append("FAIL  road 180° should stay NS")
+    else:
+        lines.append("ok    road NS/EW swap on odd facing; 180 keeps NS")
     return lines

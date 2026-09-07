@@ -15,7 +15,14 @@ from dataclasses import dataclass
 
 from PIL import Image, ImageDraw, ImageFont
 
-from app.city_map import ID_TERRAIN_MAX, MAP_H, MAP_W, TILE_STRIDE, CityMap
+from app.city_map import (
+    ID_TERRAIN_MAX,
+    MAP_H,
+    MAP_W,
+    MINIMAP_WELL,
+    TILE_STRIDE,
+    CityMap,
+)
 from app.city_paint import (
     BATH_SPLASH_BIT,
     HOUSE_OCCUPANCY,
@@ -27,6 +34,7 @@ from app.city_paint import (
     civic_stamp_origin,
     hospital_cover_percent,
     library_cover_percent,
+    tile_inside_walls,
 )
 
 OVERLAY_GEOGRAPHY = 0
@@ -144,7 +152,7 @@ def overlay_name(overlay_id: int, eng=None) -> str:
 
 
 def overlay_help(overlay_id: int, eng=None) -> str:
-    if eng is not None and overlay_id <= 3:
+    if eng is not None and 0 <= overlay_id <= 9:
         got = eng.skip(52, 12 + overlay_id)
         if got:
             return got
@@ -398,6 +406,7 @@ def overlay_iso_wash(
     *,
     view_w: int | None = None,
     view_h: int | None = None,
+    facing: int = 0,
 ) -> Image.Image:
     """Translucent iso diamonds from the 0xD7BFC plane (post-crop, not cached).
 
@@ -421,6 +430,7 @@ def overlay_iso_wash(
         view_h=max(1, vh - 24),
         screen_w=vw,
         screen_h=vh,
+        facing=facing,
     )
     x0 = max(0, x0 - 1)
     y0 = max(0, y0 - 1)
@@ -716,9 +726,17 @@ def query_place(city: CityMap, x: int, y: int, eng=None) -> PlaceInfo:
         lines.append(_eng_skip(eng, 60, 5, "Forum Access"))
     else:
         lines.append(_eng_skip(eng, 60, 6, "NO Forum Access"))
-    # FUN_00063845: +10&0x30 = internal; signed +17>=16 = external; both = max.
+    # FUN_00063845 edi=2 @ 0x638a7 / fill 0x64337:
+    #   internal = 0x6dc68(+10 & 0x30)  → [0x117a72]
+    #   ext_bit  = signed(+17) >= 16     → [0x117a65]
+    #   if internal: [0x117a65] += 1
+    #   >1 → [60]+0x5C Maximum; [0x117a72] → +7 Internal;
+    #   [0x117a65]>0 → +8 External; else +9 NO Security.
+    # +17 flood 0x430da seeds +1&0x1E (wall 0x02, tower 0x04, river 0x10).
+    # Host flood_plus17 fills a City Only river map, so +17>=16 is not a
+    # wall test. External = enclosed by wall/gate/tower (same C2.ENG line).
     internal = bool(t.coverage & SECURITY_COV_BITS)
-    external = i8(t.unknown17) >= 0x10
+    external = tile_inside_walls(city.tiles, x, y)
     if internal and external:
         lines.append(_eng_skip(eng, 60, 0x5C, "Maximum Security"))
     elif internal:
@@ -868,6 +886,144 @@ def blit_overlay_chrome(
             if i == OVERLAY_CANCEL:
                 color = (200, 180, 160, 255)
             draw.text((fx + 6, iy + 1), name, fill=color, font=font)
+    return out.convert("RGB")
+
+
+# FUN_00061d52 — color key in the INT_CITY minimap well (478,48,162,160).
+# Geography (id 0) keeps the radar. Report overlays paint swatches + C2.ENG [52].
+_LEGEND_TITLE_XY = (14, 8)
+_LEGEND_HELP_XY = (7, 32)
+_LEGEND_SWATCH = (10, 98)
+_LEGEND_SWATCH_GAP = 20
+_LEGEND_SWATCH_WH = 14
+_LEGEND_LABEL_X = 34
+
+# 0x61f24 / 0x61fb9: CITY1.256 index + [52] skip. Security uses 0x61fb9
+# (eax=0x20 → Internal / External / Both = +32,+31,+30).
+_LEGEND_THREE: dict[int, tuple[tuple[int, int, str], ...]] = {
+    OVERLAY_WATER: (
+        (0x84, 25, "Water Supply"),
+        (0x8D, 26, "Pipe Access"),
+        (0x87, 27, "Both"),
+    ),
+    OVERLAY_SECURITY: (
+        (0x93, 32, "Internal"),
+        (0x90, 31, "External"),
+        (0x8D, 30, "Both"),
+    ),
+    OVERLAY_UNREST: (
+        (0x79, 22, "Low"),
+        (0x78, 23, "Medium"),
+        (0x77, 24, "High"),
+    ),
+    OVERLAY_TAX: (
+        (0x93, 22, "Low"),
+        (0x90, 23, "Medium"),
+        (0x8D, 24, "High"),
+    ),
+    OVERLAY_EDUCATION: (
+        (0x84, 28, "Rhetor"),
+        (0x8D, 29, "Grammaticus"),
+        (0x87, 30, "Both"),
+    ),
+    OVERLAY_ILLNESS: (
+        (0x79, 22, "Low"),
+        (0x78, 23, "Medium"),
+        (0x77, 24, "High"),
+    ),
+    OVERLAY_MARKETS: (
+        (0x93, 22, "Low"),
+        (0x90, 23, "Medium"),
+        (0x8D, 24, "High"),
+    ),
+}
+
+
+def overlay_has_legend(overlay_id: int) -> bool:
+    """INT_CITY well color key — Geography is the radar, not a key."""
+    return overlay_id in _LEGEND_THREE or overlay_id in (
+        OVERLAY_LAND_VALUE,
+        OVERLAY_ENTERTAINMENT,
+    )
+
+
+def blit_overlay_legend(
+    frame: Image.Image,
+    overlay_id: int,
+    *,
+    eng=None,
+    ox: int = 0,
+) -> Image.Image:
+    """FUN_00061d52: name + ' key' + help + swatches in the minimap well."""
+    if overlay_id <= 0 or not overlay_has_legend(overlay_id):
+        return frame
+    mx, my, mw, mh = MINIMAP_WELL
+    mx += ox
+    out = frame.convert("RGBA")
+    draw = ImageDraw.Draw(out)
+    font = ImageFont.load_default()
+    draw.rectangle((mx, my, mx + mw - 1, my + mh - 1), fill=(8, 24, 20, 240))
+    draw.rectangle(
+        (mx, my, mx + mw - 1, my + mh - 1), outline=(180, 160, 80, 255)
+    )
+    title = overlay_name(overlay_id, eng)
+    key = _eng_skip(eng, 52, 11, " key")
+    if not key.startswith(" "):
+        key = " " + key
+    draw.text(
+        (mx + _LEGEND_TITLE_XY[0], my + _LEGEND_TITLE_XY[1]),
+        (title + key)[:22],
+        fill=(255, 228, 160, 255),
+        font=font,
+    )
+    help_txt = overlay_help(overlay_id, eng)
+    hy = my + _LEGEND_HELP_XY[1]
+    for line in _wrap_query_line(help_txt, 22)[:4]:
+        draw.text(
+            (mx + _LEGEND_HELP_XY[0], hy),
+            line,
+            fill=(200, 210, 190, 255),
+            font=font,
+        )
+        hy += 12
+    rows = _LEGEND_THREE.get(overlay_id)
+    if rows is None:
+        # 0x6203c: nine (lv>>3)*3+0x7E chips; Low [52]+22 / High +24.
+        sx = mx + 8
+        sy = my + 100
+        for i in range(9):
+            rgb = palette_rgb((i * 3) + 0x7E)
+            x0 = sx + i * 16
+            draw.rectangle((x0, sy, x0 + 14, sy + 12), fill=rgb + (255,))
+        draw.text(
+            (sx, sy + 16),
+            _eng_skip(eng, 52, 22, "Low"),
+            fill=(220, 230, 210, 255),
+            font=font,
+        )
+        draw.text(
+            (sx + 112, sy + 16),
+            _eng_skip(eng, 52, 24, "High"),
+            fill=(220, 230, 210, 255),
+            font=font,
+        )
+        return out.convert("RGB")
+    sx = mx + _LEGEND_SWATCH[0]
+    sy = my + _LEGEND_SWATCH[1]
+    wh = _LEGEND_SWATCH_WH
+    for i, (index, skip, fallback) in enumerate(rows):
+        y0 = sy + i * _LEGEND_SWATCH_GAP
+        rgb = palette_rgb(index)
+        draw.rectangle((sx, y0, sx + wh, y0 + wh), fill=rgb + (255,))
+        draw.rectangle(
+            (sx, y0, sx + wh, y0 + wh), outline=(200, 180, 90, 255)
+        )
+        draw.text(
+            (mx + _LEGEND_LABEL_X, y0 + 1),
+            _eng_skip(eng, 52, skip, fallback)[:14],
+            fill=(220, 230, 210, 255),
+            font=font,
+        )
     return out.convert("RGB")
 
 
@@ -1273,8 +1429,56 @@ def selftest() -> list[str]:
     sjoin = " ".join(sec_q.lines)
     if "Internal Security Only" not in sjoin or "NO Security" in sjoin:
         lines.append(f"FAIL  query prefecture {sec_q.lines}")
+    elif "Maximum Security" in sjoin:
+        lines.append(f"FAIL  query prefecture without walls → max {sec_q.lines}")
     else:
         lines.append("ok    query house next to Praefecture → Internal Security")
+    # Host +17 stand-in is river-wide; EXE External is walls (0x64337 +17
+    # is the same byte, but City Only river must not promote to Maximum).
+    city.tiles[h5 + 17] = 100
+    flood_q = query_place(city, 23, 4)
+    fjoin = " ".join(flood_q.lines)
+    if "Maximum Security" in fjoin or "External Security Only" in fjoin:
+        lines.append(f"FAIL  query +17 without walls {flood_q.lines}")
+    elif "Internal Security Only" not in fjoin:
+        lines.append(f"FAIL  query +17 still internal {flood_q.lines}")
+    else:
+        lines.append("ok    query +17 flood without walls stays Internal")
+    from app.city_paint import ID_WALL_EW, ID_WALL_NS, tile_inside_walls
+
+    def _box(ox: int, oy: int) -> None:
+        for i in range(5):
+            city.tiles[city.offset(ox + i, oy)] = ID_WALL_EW
+            city.tiles[city.offset(ox + i, oy + 4)] = ID_WALL_EW
+            city.tiles[city.offset(ox, oy + i)] = ID_WALL_NS
+            city.tiles[city.offset(ox + 4, oy + i)] = ID_WALL_NS
+
+    _box(40, 40)
+    woff = city.offset(42, 42)
+    city.tiles[woff] = 0x83
+    city.tiles[woff + 1] = 0x01
+    if not tile_inside_walls(city.tiles, 42, 42):
+        lines.append("FAIL  enclosure 5×5 wall box")
+    else:
+        lines.append("ok    5×5 wall box encloses (42,42)")
+    wall_q = query_place(city, 42, 42)
+    wjoin = " ".join(wall_q.lines)
+    if "External Security Only" not in wjoin or "Maximum Security" in wjoin:
+        lines.append(f"FAIL  query walls only {wall_q.lines}")
+    else:
+        lines.append("ok    query enclosed house → External Security Only")
+    city.tiles[woff + 10] = SECURITY_COV_BITS
+    max_q = query_place(city, 42, 42)
+    mjoin = " ".join(max_q.lines)
+    if "Maximum Security" not in mjoin:
+        lines.append(f"FAIL  query walls+prefect {max_q.lines}")
+    else:
+        lines.append("ok    query enclosed + prefect → Maximum Security")
+    open_q = query_place(city, 1, 0)
+    if "NO Security" not in " ".join(open_q.lines):
+        lines.append(f"FAIL  query open house {open_q.lines}")
+    else:
+        lines.append("ok    query house with no prefect/walls → NO Security")
     hosp_off = city.offset(26, 4)
     city.tiles[hosp_off] = 0xFB
     city.tiles[hosp_off + 5] = 0
@@ -1351,6 +1555,27 @@ def selftest() -> list[str]:
         lines.append("FAIL  flyout over well")
     else:
         lines.append("ok    flyout left of sidebar")
+    if overlay_has_legend(OVERLAY_GEOGRAPHY) or not overlay_has_legend(
+        OVERLAY_WATER
+    ):
+        lines.append("FAIL  legend ids")
+    else:
+        lines.append("ok    Water/Security have a key; Geography does not")
+    blank = Image.new("RGB", (640, 480), (0, 0, 0))
+    water_key = blit_overlay_legend(blank, OVERLAY_WATER)
+    sec_key = blit_overlay_legend(blank, OVERLAY_SECURITY)
+    geo_key = blit_overlay_legend(blank, OVERLAY_GEOGRAPHY)
+    wx, wy, _ww, _wh = MINIMAP_WELL
+    if water_key.getpixel((wx + 20, wy + 20)) == (0, 0, 0):
+        lines.append("FAIL  water legend well empty")
+    elif sec_key.getpixel((wx + 20, wy + 20)) == (0, 0, 0):
+        lines.append("FAIL  security legend well empty")
+    elif geo_key.getpixel((wx + 20, wy + 20)) != (0, 0, 0):
+        lines.append("FAIL  geography painted a legend")
+    elif water_key.getpixel((wx + 12, wy + 100)) == (0, 0, 0):
+        lines.append("FAIL  water swatch missing")
+    else:
+        lines.append("ok    Water/Security legend in minimap well")
 
     qinfo = PlaceInfo(0, 0, "T", 0, 0, ("a",))
     ox, oy, ow, oh = place_dialog_ok_rect(qinfo)

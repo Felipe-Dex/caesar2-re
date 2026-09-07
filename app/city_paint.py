@@ -69,6 +69,12 @@ ID_RHETOR = 0xF4
 ID_LIBRARY = 0xF5
 ID_HOSPITAL = 0xFB
 ID_RIVER_LO, ID_RIVER_HI = 0x1E, 0x51
+ID_TOWER = 0xBF
+ID_GATE = 0xC0
+ID_WALL_NS = 0xC1
+ID_WALL_EW = 0xC2
+# +1 bits 0x02/0x04 (wall / tower). Gate 0x24 includes 0x04.
+FORTIFICATION_IDS = frozenset({ID_TOWER, ID_GATE, ID_WALL_NS, ID_WALL_EW})
 
 # FUN_0004034b / tile_or_radius 0x6CD7E. extra grows +x/+y for the N×N origin.
 GRAMMATICUS_SPLASH_R = 6
@@ -615,6 +621,50 @@ def paint_baths_emitter(tiles: bytearray, x: int, y: int) -> int:
         tiles, x, y, radius, 13, BATH_SPLASH_BIT, extra=BATH_SPLASH_EXTRA
     )
     return 1
+
+
+def is_fortification_id(tid: int) -> bool:
+    return tid in FORTIFICATION_IDS
+
+
+def tile_inside_walls(tiles: bytearray, x: int, y: int) -> bool:
+    """True when wall/gate/tower blocks every path from the map edge.
+
+    EXE Query External is signed +17>=16 (0x6434a). +17 flood 0x430da seeds
+    every +1&0x1E tile (wall 0x02, tower 0x04, river 0x10, bank 0x08). The
+    host isotropic stand-in then paints a City Only river map to >=16, so
+    a prefect alone would always read Maximum. Enclosure is the External
+    half (walls); Internal stays +10&0x30.
+    """
+    if not _in_map(x, y) or len(tiles) < MAP_W * MAP_H * TILE_STRIDE:
+        return False
+    if is_fortification_id(tiles[_off(x, y)]):
+        return False
+    seen = bytearray(MAP_W * MAP_H)
+    stack = []
+    for i in range(MAP_W):
+        stack.append((i, 0))
+        stack.append((i, MAP_H - 1))
+    for j in range(1, MAP_H - 1):
+        stack.append((0, j))
+        stack.append((MAP_W - 1, j))
+    while stack:
+        cx, cy = stack.pop()
+        if not _in_map(cx, cy):
+            continue
+        idx = cy * MAP_W + cx
+        if seen[idx]:
+            continue
+        if is_fortification_id(tiles[_off(cx, cy)]):
+            continue
+        seen[idx] = 1
+        if cx == x and cy == y:
+            return False
+        stack.append((cx - 1, cy))
+        stack.append((cx + 1, cy))
+        stack.append((cx, cy - 1))
+        stack.append((cx, cy + 1))
+    return True
 
 
 def paint_security_emitter(tiles: bytearray, x: int, y: int) -> int:

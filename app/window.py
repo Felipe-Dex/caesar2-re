@@ -87,10 +87,12 @@ from app.city_overlay import (
     OVERLAY_GEOGRAPHY,
     PlaceInfo,
     blit_overlay_chrome,
+    blit_overlay_legend,
     blit_place_dialog,
     flyout_item_at,
     flyout_rect,
     load_overlay_palette,
+    overlay_has_legend,
     overlay_help,
     overlay_iso_wash,
     overlay_name,
@@ -248,10 +250,11 @@ def _diamond_view_pts(
     *,
     screen_w: int = SCREEN_W,
     screen_h: int = SCREEN_H,
+    facing: int = 0,
 ) -> list[tuple[int, int]]:
     from app.city_map import iso_tile_size, tile_iso_xy
 
-    sx, sy = tile_iso_xy(tx, ty, zoom=zoom)
+    sx, sy = tile_iso_xy(tx, ty, zoom=zoom, facing=facing)
     tw, th = iso_tile_size(zoom)
     pts = (
         (sx + tw // 2, sy),
@@ -290,6 +293,7 @@ def overlay_stamp_ghost(
     *,
     screen_w: int = SCREEN_W,
     screen_h: int = SCREEN_H,
+    facing: int = 0,
 ) -> Image.Image:
     """One N×N stamp: translucent building sprites, or a single footprint bbox."""
     from app.city_map import (
@@ -319,7 +323,7 @@ def overlay_stamp_ghost(
             if spr is None:
                 continue
             ghost = _as_ghost(spr, refuse=bool(preview.refuse))
-            sx, sy = tile_iso_xy(tx, ty, zoom=zoom)
+            sx, sy = tile_iso_xy(tx, ty, zoom=zoom, facing=facing)
             px, py = iso_sprite_dest(sx, sy, ghost.height, th)
             vx, vy = canvas_to_view(
                 px, py, cam_x, cam_y, canvas_w, canvas_h, screen_w=screen_w, screen_h=screen_h
@@ -332,10 +336,10 @@ def overlay_stamp_ghost(
         x0, x1 = min(xs), max(xs)
         y0, y1 = min(ys), max(ys)
         tw, th = iso_tile_size(zoom)
-        n_sx, n_sy = tile_iso_xy(x0, y0, zoom=zoom)
-        e_sx, e_sy = tile_iso_xy(x1, y0, zoom=zoom)
-        s_sx, s_sy = tile_iso_xy(x1, y1, zoom=zoom)
-        w_sx, w_sy = tile_iso_xy(x0, y1, zoom=zoom)
+        n_sx, n_sy = tile_iso_xy(x0, y0, zoom=zoom, facing=facing)
+        e_sx, e_sy = tile_iso_xy(x1, y0, zoom=zoom, facing=facing)
+        s_sx, s_sy = tile_iso_xy(x1, y1, zoom=zoom, facing=facing)
+        w_sx, w_sy = tile_iso_xy(x0, y1, zoom=zoom, facing=facing)
         quad = [
             (n_sx + tw // 2, n_sy),
             (e_sx + tw - 1, e_sy + th // 2),
@@ -353,7 +357,7 @@ def overlay_stamp_ghost(
         if not in_map(tx, ty):
             continue
         pts = _diamond_view_pts(
-            tx, ty, zoom, cam_x, cam_y, canvas_w, canvas_h, screen_w=screen_w, screen_h=screen_h
+            tx, ty, zoom, cam_x, cam_y, canvas_w, canvas_h, screen_w=screen_w, screen_h=screen_h, facing=facing
         )
         draw.polygon(pts, outline=_PREVIEW_SKIP)
     return Image.alpha_composite(view.convert("RGBA"), overlay)
@@ -372,6 +376,7 @@ def overlay_span_preview(
     screen_w: int = SCREEN_W,
     screen_h: int = SCREEN_H,
     city=None,
+    facing: int = 0,
 ) -> Image.Image:
     """Translucent iso diamonds (or one bbox fill) for the rubber-band."""
     overlay = Image.new("RGBA", view.size, (0, 0, 0, 0))
@@ -399,7 +404,7 @@ def overlay_span_preview(
             if spr is None:
                 continue
             ghost = _as_ghost(spr, refuse=bool(preview.refuse))
-            sx, sy = tile_iso_xy(tx, ty, zoom=zoom)
+            sx, sy = tile_iso_xy(tx, ty, zoom=zoom, facing=facing)
             px, py = iso_sprite_dest(sx, sy, ghost.height, th)
             vx, vy = canvas_to_view(
                 px, py, cam_x, cam_y, canvas_w, canvas_h, screen_w=screen_w, screen_h=screen_h
@@ -410,7 +415,7 @@ def overlay_span_preview(
             for tx, ty in preview.skip:
                 pts = _diamond_view_pts(
                     tx, ty, zoom, cam_x, cam_y, canvas_w, canvas_h,
-                    screen_w=screen_w, screen_h=screen_h,
+                    screen_w=screen_w, screen_h=screen_h, facing=facing,
                 )
                 draw.polygon(pts, outline=_PREVIEW_SKIP)
             return Image.alpha_composite(view.convert("RGBA"), overlay)
@@ -419,7 +424,7 @@ def overlay_span_preview(
         for tx, ty in cells:
             pts = _diamond_view_pts(
                 tx, ty, zoom, cam_x, cam_y, canvas_w, canvas_h,
-                screen_w=screen_w, screen_h=screen_h,
+                screen_w=screen_w, screen_h=screen_h, facing=facing,
             )
             draw.polygon(pts, fill=fill, outline=outline)
     elif cells:
@@ -430,10 +435,10 @@ def overlay_span_preview(
         x0, x1 = min(xs), max(xs)
         y0, y1 = min(ys), max(ys)
         tw, th = iso_tile_size(zoom)
-        n_sx, n_sy = tile_iso_xy(x0, y0, zoom=zoom)
-        e_sx, e_sy = tile_iso_xy(x1, y0, zoom=zoom)
-        s_sx, s_sy = tile_iso_xy(x1, y1, zoom=zoom)
-        w_sx, w_sy = tile_iso_xy(x0, y1, zoom=zoom)
+        n_sx, n_sy = tile_iso_xy(x0, y0, zoom=zoom, facing=facing)
+        e_sx, e_sy = tile_iso_xy(x1, y0, zoom=zoom, facing=facing)
+        s_sx, s_sy = tile_iso_xy(x1, y1, zoom=zoom, facing=facing)
+        w_sx, w_sy = tile_iso_xy(x0, y1, zoom=zoom, facing=facing)
         quad = [
             (n_sx + tw // 2, n_sy),
             (e_sx + tw - 1, e_sy + th // 2),
@@ -443,7 +448,7 @@ def overlay_span_preview(
         vquad = [
             canvas_to_view(
                 px, py, cam_x, cam_y, canvas_w, canvas_h,
-                screen_w=screen_w, screen_h=screen_h,
+                screen_w=screen_w, screen_h=screen_h, facing=facing,
             )
             for px, py in quad
         ]
@@ -451,7 +456,7 @@ def overlay_span_preview(
     for tx, ty in preview.skip:
         pts = _diamond_view_pts(
             tx, ty, zoom, cam_x, cam_y, canvas_w, canvas_h,
-            screen_w=screen_w, screen_h=screen_h,
+            screen_w=screen_w, screen_h=screen_h, facing=facing,
         )
         draw.polygon(pts, outline=_PREVIEW_SKIP)
     return Image.alpha_composite(view.convert("RGBA"), overlay)
@@ -586,6 +591,7 @@ def blit_int_city_minimap(
     overlay_id: int = 0,
     *,
     ox: int = 0,
+    facing: int = 0,
 ) -> tuple[Image.Image, tuple[int, int, int, int] | None]:
     """Scale the 80×80 map to ``MINIMAP_RECT`` (INT_CITY well above the 3×5).
 
@@ -598,7 +604,7 @@ def blit_int_city_minimap(
     if fn is None:
         return frame, None
     _ = chrome
-    mini = fn(city, viewport, overlay_id=overlay_id)
+    mini = fn(city, viewport, overlay_id=overlay_id, facing=facing)
     mx, my, mw, mh = city_map.MINIMAP_RECT
     mx += ox
     if mini.size != (mw, mh):
@@ -788,6 +794,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
     cam_x = 0
     cam_y = 0
     zoom = 0
+    map_facing = 0
     water_frame = 0
     river_xy: list[tuple[int, int]] = []
     pl8_sheets: dict[int, dict] = {}
@@ -842,7 +849,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
             vx, vy, cam_x, cam_y, ww, wh,
             screen_w=win_w, screen_h=win_h,
         )
-        return screen_to_tile(cx, cy, zoom=zoom)
+        return screen_to_tile(cx, cy, zoom=zoom, facing=map_facing)
 
     def current_preview() -> DragPreview | None:
         if band_start is None or tool not in SPAN_TOOLS:
@@ -938,6 +945,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
                 wh,
                 view_w=win_w,
                 view_h=win_h,
+                facing=map_facing,
             )
         if prev is not None:
             if prev.tool in STAMP_TOOLS:
@@ -952,6 +960,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
                     sheets=pl8_sheets.get(zoom),
                     screen_w=win_w,
                     screen_h=win_h,
+                    facing=map_facing,
                 )
             else:
                 view = overlay_span_preview(
@@ -966,6 +975,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
                     screen_w=win_w,
                     screen_h=win_h,
                     city=ctx.city,
+                    facing=map_facing,
                 )
         build_flyout = palette.open is not None
         overlays = (
@@ -989,6 +999,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
             zoom,
             cam_x,
             cam_y,
+            map_facing,
             None if advisor_dlg is None else advisor_dlg.key,
         )
         if ui_cache is None or ui_cache_key != ui_key:
@@ -1000,9 +1011,21 @@ def show(ctx: BootContext, *, game: Path) -> None:
                 ox=ox,
             )
             vp = (cam_x, cam_y, zoom, ww, wh, win_w, win_h)
-            frame, minimap_rect = blit_int_city_minimap(
-                frame, chrome, ctx.city, vp, overlay_id=overlay_id, ox=ox
-            )
+            if overlay_has_legend(overlay_id):
+                frame = blit_overlay_legend(
+                    frame, overlay_id, eng=ctx.eng, ox=ox
+                )
+                minimap_rect = None
+            else:
+                frame, minimap_rect = blit_int_city_minimap(
+                    frame,
+                    chrome,
+                    ctx.city,
+                    vp,
+                    overlay_id=overlay_id,
+                    ox=ox,
+                    facing=map_facing,
+                )
             frame = blit_overlay_chrome(
                 frame,
                 overlay_id,
@@ -1163,7 +1186,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
         """Visible diamonds only — no 80×80 world canvas."""
         nonlocal cam_x, cam_y, view_terrain, view_terrain_key
         sheets = _ensure_sheets(zoom)
-        key = (zoom, cam_x, cam_y, win_w, win_h)
+        key = (zoom, cam_x, cam_y, win_w, win_h, map_facing)
         if view_terrain is not None and view_terrain_key == key:
             _ox, _oy, cx, cy = city_map.iso_view_origin(
                 cam_x, cam_y, win_w, win_h, zoom
@@ -1181,10 +1204,11 @@ def show(ctx: BootContext, *, game: Path) -> None:
             view_h=win_h,
             zoom=zoom,
             water_frame=0,
+            facing=map_facing,
         )
         cam_x, cam_y = cx, cy
         view_terrain = view
-        view_terrain_key = (zoom, cx, cy, win_w, win_h)
+        view_terrain_key = (zoom, cx, cy, win_w, win_h, map_facing)
         _invalidate_live_only()
         return view, cx, cy
 
@@ -1197,7 +1221,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
         """Water diamonds + walkers on the camera well. Does not mutate terrain."""
         nonlocal live_base, live_key
         wf = water_frame if options.animations else 0
-        key = (zoom, vx, vy, terrain.width, terrain.height, wf)
+        key = (zoom, vx, vy, terrain.width, terrain.height, wf, map_facing)
         if live_base is None or live_key != key:
             view = terrain.copy()
             if wf and river_xy and zoom in pl8_zooms:
@@ -1205,7 +1229,13 @@ def show(ctx: BootContext, *, game: Path) -> None:
                 cityfixt = sheets.get("CITYFIXT") if sheets else None
                 if cityfixt is not None:
                     vis = city_map.cells_in_iso_view(
-                        river_xy, vx, vy, view.width, view.height, zoom=zoom
+                        river_xy,
+                        vx,
+                        vy,
+                        view.width,
+                        view.height,
+                        zoom=zoom,
+                        facing=map_facing,
                     )
                     if vis:
                         city_map.blit_water_tiles(
@@ -1219,6 +1249,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
                             cam_x=vx,
                             cam_y=vy,
                             restore=False,
+                            facing=map_facing,
                         )
             live_base = view
             live_key = key
@@ -1239,6 +1270,8 @@ def show(ctx: BootContext, *, game: Path) -> None:
                 cam_x=vx,
                 cam_y=vy,
                 inplace=True,
+                camera=city_map.walker_camera(map_facing),
+                facing=map_facing,
             )
         except (OSError, ValueError):
             return view
@@ -1717,6 +1750,39 @@ def show(ctx: BootContext, *, game: Path) -> None:
         _invalidate_live()
         blit(map_status(len(drawable_walkers(ctx.walkers))))
 
+    def rotate_map(delta: int) -> None:
+        """INT_CITY sprites 4–5 / < >. Cycle facing 0–3; keep the well focus."""
+        nonlocal map_facing, cam_x, cam_y
+        if not map_ready:
+            return
+        well_cx = max(1, win_w - SIDEBAR_W) // 2
+        well_cy = TOP_BAR_H + max(1, win_h - TOP_BAR_H) // 2
+        focus = tile_at(well_cx, well_cy)
+        map_facing = (map_facing + int(delta)) & 3
+        ww, wh = world_wh()
+        if focus is not None:
+            cam_x, cam_y = city_map.camera_center_on_tile(
+                focus[0],
+                focus[1],
+                zoom,
+                ww,
+                wh,
+                view_w=max(1, win_w - SIDEBAR_W),
+                view_h=max(1, win_h - TOP_BAR_H),
+                screen_w=win_w,
+                screen_h=win_h,
+                facing=map_facing,
+            )
+            cam_x = max(0, min(cam_x, max(0, ww - win_w)))
+            cam_y = max(0, min(cam_y, max(0, wh - win_h)))
+        _invalidate_live()
+        from app.walkers import drawable_walkers
+
+        blit(
+            f"facing {map_facing}  "
+            f"{map_status(len(drawable_walkers(ctx.walkers)))}"
+        )
+
     def pan(dx: int, dy: int) -> None:
         nonlocal cam_x, cam_y
         from app.walkers import drawable_walkers
@@ -1901,6 +1967,10 @@ def show(ctx: BootContext, *, game: Path) -> None:
             set_zoom(zoom + 1)
         elif key in {"z"}:
             set_zoom((zoom + 1) % 3)
+        elif key in {"comma", "less"}:
+            rotate_map(-1)
+        elif key in {"period", "greater"}:
+            rotate_map(1)
         elif key in {"home"}:
             if map_ready:
                 center_camera()
@@ -1946,7 +2016,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
             vx, vy, cam_x, cam_y, ww, wh,
             screen_w=win_w, screen_h=win_h,
         )
-        cell = screen_to_tile(cx, cy, zoom=zoom)
+        cell = screen_to_tile(cx, cy, zoom=zoom, facing=map_facing)
         if cell is None:
             blit("clique fora do mapa")
             return
@@ -1964,6 +2034,10 @@ def show(ctx: BootContext, *, game: Path) -> None:
     def select_chrome(hit) -> None:
         nonlocal tool, overlay_flyout, overlay_id, place_dlg
         action = hit.action
+        if action.startswith("rotate_"):
+            overlay_flyout = False
+            rotate_map(-1 if action == "rotate_left" else 1)
+            return
         if action.startswith("speed_"):
             overlay_flyout = False
             apply_speed(action)
@@ -2048,6 +2122,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
             screen_w=win_w,
             screen_h=win_h,
             minimap=hit,
+            facing=map_facing,
         )
         if cam is None:
             return False

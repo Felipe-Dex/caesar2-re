@@ -1845,8 +1845,11 @@ def screen_to_tile(
     *,
     zoom: int = 0,
     width: int = MAP_W,
+    facing: int = 0,
 ) -> tuple[int, int] | None:
     """Inverse of tile_iso_xy using the diamond centre (not the sprite AABB)."""
+    from app.city_map import draw_to_world
+
     tile_w, tile_h = iso_tile_size(zoom)
     half_w, half_h = tile_w // 2, tile_h // 2
     if half_w < 1 or half_h < 1:
@@ -1854,8 +1857,11 @@ def screen_to_tile(
     origin_x = iso_origin_x(zoom=zoom, width=width)
     col = (px - origin_x - half_w) / half_w
     row = (py - half_h) / half_h
-    tx = int(round((col + row) / 2.0))
-    ty = int(round((row - col) / 2.0))
+    dx = (col + row) / 2.0
+    dy = (row - col) / 2.0
+    wx, wy = draw_to_world(dx, dy, facing, width=width, height=width)
+    tx = int(round(wx))
+    ty = int(round(wy))
     if in_map(tx, ty):
         return tx, ty
     return None
@@ -2521,6 +2527,16 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  screen_to_tile (5,3) -> {hit}")
     else:
         lines.append("ok    screen_to_tile (5,3)")
+    from app.city_map import tile_iso_xy as _iso
+
+    tw, th = iso_tile_size(0)
+    sx, sy = _iso(0, 0, facing=1)
+    cx, cy = sx + tw // 2, sy + th // 2
+    hit = screen_to_tile(cx, cy, zoom=0, facing=1)
+    if hit != (0, 0):
+        lines.append(f"FAIL  screen_to_tile facing 1 (0,0) -> {hit}")
+    else:
+        lines.append("ok    screen_to_tile facing 1 (0,0)")
 
     line = line_cells(0, 0, 5, 2)
     if line != [(x, 0) for x in range(6)]:

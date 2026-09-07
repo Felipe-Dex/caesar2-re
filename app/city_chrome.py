@@ -49,7 +49,11 @@ SPRITE_GRID = tuple(
 # First of the 3×5 in INT_CITY (sprite 13).
 _GRID_SPRITE0 = 13
 # Sprites 4–9 sit on the palette panel above the 3×5 (rotate / pause / play / fast / flag).
-# 4–5 rotate, 6 pause, 7 play (blue triangle), 8 faster (yellow), 9 flag.
+# 4 rotate-left (CCW), 5 rotate-right (CW), 6 pause, 7 play, 8 faster, 9 flag.
+_ROTATE_SPRITE_ACTIONS: dict[int, str] = {
+    4: "rotate_left",
+    5: "rotate_right",
+}
 _SPEED_SPRITE_ACTIONS: dict[int, str] = {
     6: "speed_pause",
     7: "speed_play",
@@ -79,6 +83,8 @@ _LABEL = {
     "health": "Sanitation",
     "commerce": "Industry",
     "overlay_menu": "Overlay",
+    "rotate_left": "Rot L",
+    "rotate_right": "Rot R",
     "speed_pause": "Pause",
     "speed_play": "Play",
     "speed_fast": "Faster",
@@ -125,6 +131,7 @@ class CityChrome:
         if not hits:
             return cls._fallback(frames=frames, dests=dests, source="int_city+fallback-hits")
         hits = _expand_grid_hits(hits)
+        hits = _with_rotate_hits(hits, packed)
         hits = _with_speed_hits(hits, packed)
         hits = _with_view_hits(hits, packed)
         hits = _with_overlay_well(hits)
@@ -148,6 +155,7 @@ class CityChrome:
                 hits.append(
                     ChromeHit(action, _LABEL.get(action, action), (x, y, w, h))
                 )
+        hits = _with_rotate_fallback(hits)
         hits = _with_speed_fallback(hits)
         hits = _with_view_fallback(hits)
         hits = _with_overlay_well(hits)
@@ -274,6 +282,36 @@ def _expand_grid_hits(hits: list[ChromeHit]) -> list[ChromeHit]:
     return extra + grown
 
 
+def _with_rotate_hits(
+    hits: list[ChromeHit], packed: list[tuple[Image.Image, int, int]]
+) -> list[ChromeHit]:
+    dx = SIDEBAR_X - _FLOAT_X0
+    dy = SIDEBAR_Y - _FLOAT_Y0
+    extra: list[ChromeHit] = []
+    for idx, action in _ROTATE_SPRITE_ACTIONS.items():
+        if idx >= len(packed):
+            continue
+        img, sx, sy = packed[idx]
+        extra.append(
+            ChromeHit(
+                action,
+                _LABEL.get(action, action),
+                (sx + dx, sy + dy, img.width, img.height),
+            )
+        )
+    return extra + hits
+
+
+def _with_rotate_fallback(hits: list[ChromeHit]) -> list[ChromeHit]:
+    extra: list[ChromeHit] = []
+    x0, y0 = SIDEBAR_X + 6, SIDEBAR_Y + 4
+    for i, action in enumerate(("rotate_left", "rotate_right")):
+        extra.append(
+            ChromeHit(action, _LABEL[action], (x0 + i * 28, y0, 26, 22))
+        )
+    return extra + hits
+
+
 def _with_speed_hits(
     hits: list[ChromeHit], packed: list[tuple[Image.Image, int, int]]
 ) -> list[ChromeHit]:
@@ -296,7 +334,7 @@ def _with_speed_hits(
 
 def _with_speed_fallback(hits: list[ChromeHit]) -> list[ChromeHit]:
     extra: list[ChromeHit] = []
-    x0, y0 = SIDEBAR_X + 6, SIDEBAR_Y + 4
+    x0, y0 = SIDEBAR_X + 62, SIDEBAR_Y + 4
     for i, action in enumerate(("speed_pause", "speed_play", "speed_fast")):
         extra.append(
             ChromeHit(action, _LABEL[action], (x0 + i * 32, y0, 30, 22))
