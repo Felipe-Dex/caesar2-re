@@ -325,7 +325,8 @@ def walker_camera(facing: int) -> int:
 
 
 # Road +0 0x52–0x5C: canonical NESW mask (place._ROAD_FROM_MASK) so a 90°
-# view can swap NS/EW and walk the corners. Building facades stay +4.
+# view can swap NS/EW and walk the corners. 1×1 +4 stays; N×N remaps
+# onto the visual slot so extra_rows still meet (graphic_source_xy).
 _ROAD_CANON_MASK: dict[int, int] = {
     0x52: 0x05,
     0x53: 0x0A,
@@ -363,6 +364,72 @@ def orient_terrain_id(tid: int, facing: int) -> int:
     if f & 1:
         return _AQUEDUCT_AXIS.get(tid, tid)
     return tid
+
+
+def rotate_footprint_local(
+    lx: int, ly: int, size: int, facing: int
+) -> tuple[int, int]:
+    """Source local cell whose +4 belongs at ``(lx, ly)`` after map facing.
+
+    N×N pieces are authored for facing 0. After a 90° view rotate they must
+    ride with the visual slot (north piece on the visual-north diamond) or
+    extra_rows miss their neighbours and the building shatters. Square only
+    — DAT_00094FE5 N×N (villa 2, barracks 3, palace 3, palatine 4).
+    """
+    n = int(size)
+    f = clamp_facing(facing)
+    if n <= 1 or f == 0:
+        return int(lx), int(ly)
+    if f == 1:
+        return n - 1 - int(ly), int(lx)
+    if f == 2:
+        return n - 1 - int(lx), n - 1 - int(ly)
+    return int(ly), n - 1 - int(lx)
+
+
+def graphic_source_xy(
+    city: CityMap,
+    wx: int,
+    wy: int,
+    facing: int = 0,
+) -> tuple[int, int]:
+    """World tile that owns the +4 to blit at ``(wx, wy)`` for this facing.
+
+    Does not write the map. 1×1 and facing 0 are identity. Origin is
+    ``FUN_00069483`` (+5 lo-nibble → NW, piece % N / N).
+    """
+    f = clamp_facing(facing)
+    if f == 0:
+        return wx, wy
+    if not (0 <= wx < city.width and 0 <= wy < city.height):
+        return wx, wy
+    off = city.offset(wx, wy)
+    tid = city.tiles[off]
+    if tid < ID_TERRAIN_MAX:
+        return wx, wy
+    from app.place import building_footprint_size
+
+    size = building_footprint_size(tid)
+    if size <= 1:
+        return wx, wy
+    piece = city.tiles[off + 5] & 0xF
+    if piece >= size * size:
+        return wx, wy
+    col = piece % size
+    row = piece // size
+    ox, oy = wx - col, wy - row
+    if ox < 0 or oy < 0 or ox + size > city.width or oy + size > city.height:
+        return wx, wy
+    slx, sly = rotate_footprint_local(col, row, size, f)
+    return ox + slx, oy + sly
+
+
+def iso_paint_tile(
+    city: CityMap, wx: int, wy: int, facing: int = 0
+) -> Tile:
+    """Tile whose sheet/+4 to blit at world ``(wx, wy)``."""
+    gx, gy = graphic_source_xy(city, wx, wy, facing)
+    return city.tile(gx, gy)
 
 
 def tile_iso_xy(
@@ -1195,15 +1262,19 @@ def _paint_iso_tile(
     sheets: dict[str, Sequence[Image.Image]] | None,
     facing: int = 0,
     zoom: int = 0,
+    sprite_tile: Tile | None = None,
 ) -> None:
-    """Blit this cell's own LUT sprite at ``(sx, sy)``.
+    """Blit this cell's LUT sprite at ``(sx, sy)``.
 
     Multi-tile buildings (Barracks 3×3, villa, palace) store a *piece*
     in ``+4`` on every footprint tile. The origin does **not** own a
     full-compound graphic — HOUSES1[81] is 58×56, one diamond. Drawing
     the origin variant on the other eight cells would stamp extra forts.
+    After facing≠0, ``sprite_tile`` is the remapped source (visual slot
+    keeps the facing-0 piece). Factory CITYTOP stays on the world tile.
     """
-    frames, idx = _tile_frames(tile, water_frame, cityfixt, sheets, facing=facing)
+    art = sprite_tile if sprite_tile is not None else tile
+    frames, idx = _tile_frames(art, water_frame, cityfixt, sheets, facing=facing)
     # Aqueduct CITYFIXT diamonds have transparent arches. Without a grass
     # underlay the canvas ISO_BG (12,16,28) reads as a solid black box.
     # Reservoir / fountain stay opaque — do not paint under them.
@@ -1380,9 +1451,10 @@ def render_iso(
                 continue
             sx = origin_x + (dx - dy) * half_w
             sy = (dx + dy) * half_h
+            world = city.tile(wx, wy)
             _paint_iso_tile(
                 img,
-                city.tile(wx, wy),
+                world,
                 sx,
                 sy,
                 tile_w=tile_w,
@@ -1392,6 +1464,7 @@ def render_iso(
                 sheets=sheets,
                 facing=facing,
                 zoom=zoom,
+                sprite_tile=iso_paint_tile(city, wx, wy, facing),
             )
     return img
 
@@ -1447,9 +1520,10 @@ def render_iso_view(
             sy = (dx + dy) * half_h + paste_oy
             if sx + tile_w < 0 or sy + tile_h + tall < 0 or sx >= vw or sy >= vh:
                 continue
+            world = city.tile(wx, wy)
             _paint_iso_tile(
                 img,
-                city.tile(wx, wy),
+                world,
                 sx,
                 sy,
                 tile_w=tile_w,
@@ -1459,6 +1533,7 @@ def render_iso_view(
                 sheets=sheets,
                 facing=facing,
                 zoom=z,
+                sprite_tile=iso_paint_tile(city, wx, wy, facing),
             )
     return img, cx, cy
 
@@ -1583,7 +1658,7 @@ def blit_water_tiles(
                 continue
             if _shimmer_iso_tile(
                 img,
-                city.tile(rx, ry),
+                iso_paint_tile(city, rx, ry, facing),
                 sx,
                 sy,
                 tile_w=tile_w,
@@ -1598,7 +1673,7 @@ def blit_water_tiles(
 
     clear_rects: list[tuple[int, int, int, int]] = []
     for x, y in rivers:
-        tile = city.tile(x, y)
+        tile = iso_paint_tile(city, x, y, facing)
         dx, dy = world_to_draw(x, y, facing, width=city.width, height=city.height)
         sx = int(round(origin_x + (dx - dy) * half_w))
         sy = int(round((dx + dy) * half_h))
@@ -1626,7 +1701,7 @@ def blit_water_tiles(
             hit = (sx, sy, sx + tile_w, sy + tile_h)
             box_cache[(dx, dy)] = hit
             return hit
-        tile = city.tile(wx, wy)
+        tile = iso_paint_tile(city, wx, wy, facing)
         sx = origin_x + (dx - dy) * half_w
         sy = (dx + dy) * half_h
         frames, idx = _tile_frames(tile, water_frame, cityfixt, sheets, facing=facing)
@@ -1669,9 +1744,10 @@ def blit_water_tiles(
             continue
         sx = origin_x + (dx - dy) * half_w
         sy = (dx + dy) * half_h
+        world = city.tile(wx, wy)
         _paint_iso_tile(
             crop,
-            city.tile(wx, wy),
+            world,
             sx - x0,
             sy - y0,
             tile_w=tile_w,
@@ -1681,6 +1757,7 @@ def blit_water_tiles(
             sheets=sheets,
             facing=facing,
             zoom=z,
+            sprite_tile=iso_paint_tile(city, wx, wy, facing),
         )
         n += 1
     img.paste(crop, (x0, y0))
@@ -2478,4 +2555,86 @@ def selftest() -> list[str]:
         lines.append("FAIL  road 180° should stay NS")
     else:
         lines.append("ok    road NS/EW swap on odd facing; 180 keeps NS")
+    # N×N +4 rides the visual slot: SW at facing 1 draws the NW origin piece.
+    if rotate_footprint_local(0, 1, 2, 1) != (0, 0):
+        lines.append(
+            f"FAIL  2×2 facing 1 SW source {rotate_footprint_local(0, 1, 2, 1)}"
+        )
+    elif rotate_footprint_local(0, 0, 2, 1) != (1, 0):
+        lines.append(
+            f"FAIL  2×2 facing 1 NW source {rotate_footprint_local(0, 0, 2, 1)}"
+        )
+    else:
+        broken = False
+        for n in (2, 3, 4):
+            for x in range(n):
+                for y in range(n):
+                    p = (x, y)
+                    for _ in range(4):
+                        p = rotate_footprint_local(p[0], p[1], n, 1)
+                    if p != (x, y):
+                        lines.append(f"FAIL  rotate_footprint_local {n}×{n} {x},{y}")
+                        broken = True
+                        break
+                if broken:
+                    break
+            if broken:
+                break
+        if not broken:
+            lines.append("ok    N×N +4 local remap facing 1–3 (4× = id)")
+    baths = CityMap()
+    for gy in range(MAP_H):
+        for gx in range(MAP_W):
+            baths.tiles[baths.offset(gx, gy)] = 0x14
+    bath_var = (0x63, 0x65, 0x64, 0x66)
+    for i, (dx, dy) in enumerate(((0, 0), (1, 0), (0, 1), (1, 1))):
+        off = baths.offset(40 + dx, 40 + dy)
+        baths.tiles[off] = 0xDF
+        baths.tiles[off + 3] = 0x08
+        baths.tiles[off + 4] = bath_var[i]
+        baths.tiles[off + 5] = i
+    if graphic_source_xy(baths, 40, 41, 1) != (40, 40):
+        lines.append(
+            f"FAIL  baths facing 1 SW source {graphic_source_xy(baths, 40, 41, 1)}"
+        )
+    elif graphic_source_xy(baths, 40, 40, 1) != (41, 40):
+        lines.append(
+            f"FAIL  baths facing 1 NW source {graphic_source_xy(baths, 40, 40, 1)}"
+        )
+    elif iso_paint_tile(baths, 40, 41, 1).variant != 0x63:
+        lines.append(
+            f"FAIL  baths facing 1 SW +4={iso_paint_tile(baths, 40, 41, 1).variant:#x}"
+        )
+    else:
+        lines.append("ok    baths 2×2 facing 1: visual-north keeps origin +4")
+    colors = {
+        0x63: (200, 40, 40),
+        0x65: (40, 180, 40),
+        0x64: (40, 40, 200),
+        0x66: (200, 200, 40),
+    }
+    build1b = [Image.new("RGBA", (ISO_W, ISO_H), (0, 0, 0, 0)) for _ in range(0x67)]
+    for var, rgb in colors.items():
+        _draw_diamond(build1b[var], 0, 0, rgb)
+    grass_spr = Image.new("RGBA", (ISO_W, ISO_H), (0, 0, 0, 0))
+    _draw_diamond(grass_spr, 0, 0, (60, 120, 50))
+    grass_fixt = [grass_spr.copy() for _ in range(40)]
+    bath_sheets = {PL8_BUILD1B: build1b, PL8_CITYFIXT: grass_fixt}
+    img0 = render_iso(baths, sheets=bath_sheets, facing=0)
+    img1 = render_iso(baths, sheets=bath_sheets, facing=1)
+    tw, th = iso_tile_size(0)
+    n0x, n0y = tile_iso_xy(40, 40, facing=0)
+    n1x, n1y = tile_iso_xy(40, 41, facing=1)
+    e0x, e0y = tile_iso_xy(41, 40, facing=0)
+    e1x, e1y = tile_iso_xy(40, 40, facing=1)
+    north0 = img0.getpixel((n0x + tw // 2, n0y + th // 2))
+    north1 = img1.getpixel((n1x + tw // 2, n1y + th // 2))
+    east0 = img0.getpixel((e0x + tw // 2, e0y + th // 2))
+    east1 = img1.getpixel((e1x + tw // 2, e1y + th // 2))
+    if north0[0:3] != colors[0x63] or north1[0:3] != colors[0x63]:
+        lines.append(f"FAIL  baths visual-north {north0}->{north1}")
+    elif east0[0:3] != colors[0x65] or east1[0:3] != colors[0x65]:
+        lines.append(f"FAIL  baths visual-east {east0}->{east1}")
+    else:
+        lines.append("ok    baths compound cohesive at facing 0 and 1")
     return lines

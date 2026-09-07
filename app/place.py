@@ -74,6 +74,7 @@ from app.city_map import (
     iso_origin_x,
     iso_overlap_radius,
     iso_tile_size,
+    rotate_footprint_local,
 )
 from app.city_paint import (
     factory_produce,
@@ -772,7 +773,9 @@ def stamp_size(tool: str) -> int:
     return w if w == h else max(w, h)
 
 
-def stamp_ghost_pieces(tool: str) -> list[tuple[int, int, int, int, int]]:
+def stamp_ghost_pieces(
+    tool: str, facing: int = 0
+) -> list[tuple[int, int, int, int, int]]:
     """(dx, dy, terrain_id, draw, variant) relative to the NW origin."""
     if tool == TOOL_RESERVOIR:
         return [(0, 0, ID_RESERVOIR, DRAW_RESERVOIR, VAR_RESERVOIR)]
@@ -791,10 +794,55 @@ def stamp_ghost_pieces(tool: str) -> list[tuple[int, int, int, int, int]]:
         for i, var in enumerate(spec.variants2):
             dx, dy = i % hw, i // hw
             out.append((ox2 + dx, oy2 + dy, spec.tid2, spec.draw, var))
-        return out
+        return _orient_stamp_ghost(out, facing)
     for i, var in enumerate(spec.variants):
         dx, dy = i % spec.w, i // spec.w
         out.append((dx, dy, spec.tid, spec.draw, var))
+    return _orient_stamp_ghost(out, facing)
+
+
+def _orient_stamp_ghost(
+    pieces: list[tuple[int, int, int, int, int]], facing: int
+) -> list[tuple[int, int, int, int, int]]:
+    """Keep facing-0 +4 on the visual slot (same remap as iso paint)."""
+    f = int(facing) & 3
+    if f == 0 or len(pieces) <= 1:
+        return pieces
+
+    def _square_block(
+        block: list[tuple[int, int, int, int, int]],
+    ) -> list[tuple[int, int, int, int, int]] | None:
+        by_xy = {(dx, dy): (tid, draw, var) for dx, dy, tid, draw, var in block}
+        xs = [p[0] for p in block]
+        ys = [p[1] for p in block]
+        ox, oy = min(xs), min(ys)
+        n = max(max(xs) - ox + 1, max(ys) - oy + 1)
+        if n * n != len(by_xy):
+            return None
+        if any((ox + dx, oy + dy) not in by_xy for dy in range(n) for dx in range(n)):
+            return None
+        out: list[tuple[int, int, int, int, int]] = []
+        for dy in range(n):
+            for dx in range(n):
+                slx, sly = rotate_footprint_local(dx, dy, n, f)
+                tid, draw, var = by_xy[(ox + slx, oy + sly)]
+                out.append((ox + dx, oy + dy, tid, draw, var))
+        return out
+
+    square = _square_block(pieces)
+    if square is not None:
+        return square
+    groups: dict[int, list[tuple[int, int, int, int, int]]] = {}
+    for piece in pieces:
+        groups.setdefault(piece[2], []).append(piece)
+    if len(groups) < 2:
+        return pieces
+    out: list[tuple[int, int, int, int, int]] = []
+    for block in groups.values():
+        remapped = _square_block(block)
+        if remapped is None:
+            return pieces
+        out.extend(remapped)
     return out
 
 
@@ -3048,6 +3096,16 @@ def selftest() -> list[str]:
         lines.append("FAIL  reservoir ghost piece")
     else:
         lines.append("ok    Reservoir ghost 1 sprite")
+    bath0 = stamp_ghost_pieces(TOOL_BATHS, facing=0)
+    bath1 = stamp_ghost_pieces(TOOL_BATHS, facing=1)
+    # Facing 1: visual-north (0,1) keeps the origin +4 0x63.
+    sw1 = next((p for p in bath1 if p[0] == 0 and p[1] == 1), None)
+    if not bath0 or bath0[0][4] != 0x63:
+        lines.append(f"FAIL  baths ghost facing 0 {bath0}")
+    elif sw1 is None or sw1[4] != 0x63:
+        lines.append(f"FAIL  baths ghost facing 1 SW {sw1}")
+    else:
+        lines.append("ok    Baths ghost facing 1 keeps origin +4 on SW")
 
     for dy in range(3):
         for dx in range(3):

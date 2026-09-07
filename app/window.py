@@ -320,7 +320,9 @@ def overlay_stamp_ghost(
         ox = min(c[0] for c in preview.cells)
         oy = min(c[1] for c in preview.cells)
         th = iso_tile_size(zoom)[1]
-        for dx, dy, tid, bdraw, variant in stamp_ghost_pieces(preview.tool):
+        for dx, dy, tid, bdraw, variant in stamp_ghost_pieces(
+            preview.tool, facing=facing
+        ):
             tx, ty = ox + dx, oy + dy
             if not in_map(tx, ty):
                 continue
