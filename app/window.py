@@ -69,6 +69,7 @@ from app.menus import (
     SPD_SCROLL,
     about_report,
     advisor_contains,
+    annual_summary_report,
     blit_advisor_dialog,
     blit_menu_report,
     census_report,
@@ -1469,6 +1470,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
         n = on_sim_step(ctx.city, ctx.walkers, ctx.sim)
         ph, w = n.phase, n.walkers
         _refresh_after_sim(houses_changed=ph.houses_changed > 0)
+        _maybe_annual_summary(ph)
         _pump_advisor()
         from app.sim_log import last_line
 
@@ -1493,6 +1495,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
         ph, w = n.phase, n.walkers
         date = format_hud_date(ctx.sim.date)
         _refresh_after_sim(houses_changed=ph.houses_changed > 0)
+        _maybe_annual_summary(ph)
         _pump_advisor()
         from app.sim_log import last_line
 
@@ -1588,6 +1591,16 @@ def show(ctx: BootContext, *, game: Path) -> None:
         menu_report = report
         load_picks = picks
         blit(extra if extra is not None else report.title)
+
+    def _maybe_annual_summary(ph) -> None:
+        """FUN_00061389 after Dec→Jan. City Only only. Not Hail / Fire."""
+        if not getattr(ph, "year_wrapped", False):
+            return
+        if not getattr(ctx.sim, "city_only", 0):
+            return
+        if not options.annual_summary:
+            return
+        _open_report(annual_summary_report(ctx.sim, eng=ctx.eng))
 
     def _open_census() -> None:
         """C / Options+5 — Census Panel [74]. Second C closes it."""
@@ -1754,6 +1767,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
         if sim_ran and ph is not None and w is not None:
             if ph.houses_changed > 0:
                 _refresh_after_sim(houses_changed=True)
+            _maybe_annual_summary(ph)
             _pump_advisor()
             from app.sim_log import last_line
 
@@ -2261,11 +2275,10 @@ def show(ctx: BootContext, *, game: Path) -> None:
                 )
                 return True
             if slot == SLOT_OPTIONS and skip == OPT_YEAR:
-                options.auto_save = not options.auto_save
+                options.annual_summary = not options.annual_summary
                 blit(
-                    f"{_eng_skip(ctx.eng, 56, 9, 'Auto-Save is')} "
-                    f"{on_off(ctx.eng, options.auto_save)}"
-                    + " — host does not write lastyear.sav"
+                    f"{_eng_skip(ctx.eng, 56, 6, 'Annual Summary ')}"
+                    f"{on_off(ctx.eng, options.annual_summary)}"
                 )
                 return True
             if slot == SLOT_OPTIONS and skip == OPT_CENSUS:

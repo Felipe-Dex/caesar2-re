@@ -125,6 +125,8 @@ def calendar_advance(state: DateCounters) -> bool:
     Chunk 27 week_gate += 1; if > 0 (always on saved cities) reset and month++.
     December (11) wraps to January and year_raw += 1 (−187 → −186 = 186 BC).
     SimState also applies Treasurer ESTIMATE cash (0x45696 / 0x565f9).
+    Year wrap then 0x3fd3e / close_year_books; City Only posts [72]
+    Annual Summary (FUN_00061389), not Career [115]+ Emperor letters.
     """
     state.week_gate += 1
     if state.week_gate <= 0:

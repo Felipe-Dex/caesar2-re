@@ -274,6 +274,7 @@ class PhaseResult:
     houses_merge: int = 0
     walkers_spawned: int = 0
     month_wrapped: bool = False
+    year_wrapped: bool = False
     date_label: str = ""
     note: str = ""
 
@@ -1036,6 +1037,7 @@ def city_sim_phase(
     implemented = slot_implemented(phase)
     up = down = merge = spawned = painted = 0
     wrapped = False
+    year_wrapped = False
     note = ""
     can = len(tiles) >= MAP_W * MAP_H * TILE_STRIDE
 
@@ -1201,7 +1203,9 @@ def city_sim_phase(
             state.tax_wealth = housing_tax_wealth(tiles)
             state.ind_wealth = industry_tax_wealth(tiles)
         treas_before = int(state.treasury)
+        year_before = int(state.year_raw)
         wrapped = _phase_wrap(state)
+        year_wrapped = wrapped and int(state.year_raw) != year_before
         if not log_this:
             _log_phase(
                 state,
@@ -1263,6 +1267,7 @@ def city_sim_phase(
         houses_merge=merge,
         walkers_spawned=spawned,
         month_wrapped=wrapped,
+        year_wrapped=year_wrapped,
         date_label=state.date_label,
         note=note or log_line,
     )
@@ -1292,6 +1297,7 @@ def city_sim_until_wrap(
     last_name = slot_name(state.phase)
     last_impl = slot_implemented(state.phase)
     wrapped = False
+    year_wrapped = False
     guard = 0
     while guard < 0xE0:
         guard += 1
@@ -1305,6 +1311,7 @@ def city_sim_until_wrap(
         last_impl = result.implemented
         if result.month_wrapped:
             wrapped = True
+            year_wrapped = result.year_wrapped
             break
 
     return PhaseResult(
@@ -1316,6 +1323,7 @@ def city_sim_until_wrap(
         houses_merge=merge,
         walkers_spawned=spawned,
         month_wrapped=wrapped,
+        year_wrapped=year_wrapped,
         date_label=state.date_label,
         note=f"month houses +{up}/-{down} spawn={spawned}",
     )
@@ -1653,10 +1661,24 @@ def selftest() -> list[str]:
 
     tiles = _blank_tiles()
     state = SimState(phase=0xD6, year_raw=-187, month=11)
-    city_sim_phase(tiles, state)
-    ok = state.month == 0 and state.year_raw == -186 and state.date_label == "186 BC January"
+    result = city_sim_phase(tiles, state)
+    ok = (
+        result.month_wrapped
+        and result.year_wrapped
+        and state.month == 0
+        and state.year_raw == -186
+        and state.date_label == "186 BC January"
+    )
     lines.append(
         f"Space wrap Dec→year++: {'ok' if ok else 'FAIL'} {state.date_label}"
+    )
+    tiles = _blank_tiles()
+    jan = SimState(phase=0xD6, year_raw=-300, month=0)
+    feb = city_sim_phase(tiles, jan)
+    ok = feb.month_wrapped and not feb.year_wrapped and jan.month == 1
+    lines.append(
+        f"Jan→Feb is not Annual Summary: {'ok' if ok else 'FAIL'} "
+        f"year_wrapped={feb.year_wrapped}"
     )
 
     tiles = _blank_tiles()

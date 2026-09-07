@@ -126,6 +126,7 @@ def on_month_step(
             houses_merge=phase.houses_merge,
             walkers_spawned=phase.walkers_spawned,
             month_wrapped=wrapped,
+            year_wrapped=wrapped and sim.month == 0,
             date_label=sim.date_label,
             note=phase.note,
         )
@@ -165,6 +166,7 @@ def on_clock_step(
             houses_merge=phase.houses_merge + nxt.houses_merge,
             walkers_spawned=phase.walkers_spawned + nxt.walkers_spawned,
             month_wrapped=phase.month_wrapped or nxt.month_wrapped,
+            year_wrapped=phase.year_wrapped or nxt.year_wrapped,
             date_label=sim.date_label,
             note=nxt.note,
         )

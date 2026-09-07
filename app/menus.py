@@ -60,7 +60,8 @@ class HostOptions:
     music: bool = False
     sound: bool = True
     animations: bool = True
-    auto_save: bool = False
+    auto_save: bool = False  # leftover — host does not write lastyear.sav
+    annual_summary: bool = True  # [56]+6 / FUN_00061389 panel
     scroll_step: int = 1  # 1…3 × PAN_STEP
 
 
@@ -105,7 +106,7 @@ def decorate_item(
         if skip == OPT_ANIM:
             return f"{label}  {on_off(eng, opt.animations)}"
         if skip == OPT_YEAR:
-            return f"{label}  {on_off(eng, opt.auto_save)}"
+            return f"{label}  {on_off(eng, opt.annual_summary)}"
     if slot == SLOT_SPEED and sim is not None:
         if skip == SPD_GAME:
             if getattr(sim, "paused", False):
@@ -158,6 +159,55 @@ def census_report(tiles: bytearray, *, eng=None, population: int | None = None) 
         name = _eng(eng, 23, skip, fallback) if skip is not None else fallback
         lines.append(f"{name}  {n}")
     return MenuReport(title, tuple(lines[:12]))
+
+
+def _year_delta(cur: int, prev: int, eng) -> str:
+    """0x61497 — jl → [72]+8 (DOWN); else [72]+7 (UP). Equal is (UP 0)."""
+    if int(cur) < int(prev):
+        word = _eng(eng, 72, 8, "(DOWN")
+        return f"{word} {int(prev) - int(cur)})"
+    word = _eng(eng, 72, 7, "(UP")
+    return f"{word} {int(cur) - int(prev)})"
+
+
+def annual_summary_report(sim, *, eng=None) -> MenuReport:
+    """C2.ENG [72] Annual Summary — FUN_00061389 after 0x3fd3e.
+
+    City Only year wrap. Not Career [115]+ Emperor letters. Numbers are
+    the HISTORY rec just appended (pop / treasury / pop tax / industry
+    tax) vs the previous rec. First year compares against 0.
+    """
+    from app.forum import parse_history
+
+    title = _eng(eng, 72, 0, "Annual Summary")
+    clerks = _eng(eng, 72, 1, "from the Clerks")
+    hint = _eng(
+        eng, 72, 2, "(This panel can be toggled off from the Options menu.)"
+    )
+    recs = parse_history(getattr(sim, "history", None))
+    if recs:
+        pop, treas, tax_p, tax_i, _year = recs[-1]
+        if len(recs) >= 2:
+            p_pop, p_treas, p_tax_p, p_tax_i, _py = recs[-2]
+        else:
+            p_pop = p_treas = p_tax_p = p_tax_i = 0
+    else:
+        pop = int(getattr(sim, "population", 0))
+        treas = int(getattr(sim, "treasury", 0))
+        tax_p = int(getattr(sim, "pop_tax_last", 0))
+        tax_i = int(getattr(sim, "ind_tax_last", 0))
+        p_pop = p_treas = p_tax_p = p_tax_i = 0
+
+    def row(skip: int, fallback: str, cur: int, prev: int) -> str:
+        lab = _eng(eng, 72, skip, fallback)
+        return f"{lab} {int(cur)}  {_year_delta(cur, prev, eng)}"
+
+    lines = [clerks, *_wrap_adv(hint, 44)]
+    lines.append(row(3, "City population is", pop, p_pop))
+    lines.append(row(4, "Treasury funds are", treas, p_treas))
+    lines.append(row(5, "Population tax was", tax_p, p_tax_p))
+    lines.append(row(6, "Industry tax was", tax_i, p_tax_i))
+    return MenuReport(title, tuple(lines))
 
 
 def _help_cstring(data: bytes, off: int) -> str:
@@ -422,6 +472,48 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  census pop {pop} want {want}")
     else:
         lines.append("ok    census pop from occupancy table")
+    from app.city_sim import SimState
+    from app.forum import append_history_year
+
+    first = SimState(city_only=1, population=80, treasury=11992, pop_tax_last=12, ind_tax_last=0)
+    first.history = bytearray(4000)
+    append_history_year(first)
+    summary = annual_summary_report(first)
+    body = " ".join(summary.lines)
+    if summary.title != "Annual Summary":
+        lines.append(f"FAIL  annual title {summary.title!r}")
+    elif "from the Clerks" not in body:
+        lines.append(f"FAIL  annual clerks {summary.lines!r}")
+    elif "City population is 80" not in body or "(UP 80)" not in body:
+        lines.append(f"FAIL  annual pop {summary.lines!r}")
+    elif "Treasury funds are 11992" not in body:
+        lines.append(f"FAIL  annual treas {summary.lines!r}")
+    elif "Population tax was 12" not in body or "Industry tax was 0" not in body:
+        lines.append(f"FAIL  annual tax {summary.lines!r}")
+    else:
+        lines.append("ok    Annual Summary first year pop/treas/tax (UP from 0)")
+    second = SimState(
+        city_only=1,
+        population=100,
+        treasury=11800,
+        pop_tax_last=20,
+        ind_tax_last=4,
+        history=bytearray(first.history),
+    )
+    append_history_year(second)
+    down = annual_summary_report(second)
+    down_body = " ".join(down.lines)
+    if "(UP 20)" not in down_body or "(DOWN 192)" not in down_body:
+        lines.append(f"FAIL  annual UP/DOWN {down.lines!r}")
+    else:
+        lines.append("ok    Annual Summary (UP pop) (DOWN treasury)")
+    opt = decorate_item(
+        SLOT_OPTIONS, OPT_YEAR, "End of Year ", options=HostOptions(annual_summary=False)
+    )
+    if "OFF" not in opt:
+        lines.append(f"FAIL  Annual Summary toggle {opt!r}")
+    else:
+        lines.append("ok    Options End of Year suffixes Annual Summary ON/OFF")
     lab = decorate_item(SLOT_OPTIONS, OPT_SOUND, "Sound", options=HostOptions(sound=False))
     if "OFF" not in lab:
         lines.append(f"FAIL  decorate {lab!r}")
@@ -514,6 +606,17 @@ def selftest() -> list[str]:
             lines.append(f"FAIL  about {about.title!r}")
         else:
             lines.append("ok    About fallback")
+        from app.assets import load_eng
+
+        eng = load_eng(game)
+        if eng.skip(72, 0) != "Annual Summary":
+            lines.append(f"FAIL  C2.ENG [72] {eng.skip(72, 0)!r}")
+        elif eng.skip(72, 3) != "City population is":
+            lines.append(f"FAIL  C2.ENG [72]+3 {eng.skip(72, 3)!r}")
+        elif eng.skip(56, 6) != "Annual Summary ":
+            lines.append(f"FAIL  C2.ENG [56]+6 {eng.skip(56, 6)!r}")
+        else:
+            lines.append("ok    C2.ENG [72] Annual Summary + Options toggle")
     except (OSError, ValueError, ImportError):
         lines.append("ok    HELP.ENG skipped (no install)")
     return lines
