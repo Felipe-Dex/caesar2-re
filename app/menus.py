@@ -1,8 +1,9 @@
 """City Only top menu — File / Options / Speed / Help (C2.ENG [0]…[3]).
 
 Actions match 1.1A City Only strings. No Career empire / Forum PERSONAL.
-Save does not write a .SAV: sav_write 0x70174 needs 500 BSS chunks the host
-does not keep. Census is Options+5 (Census Panel [74]), not an overlay-filter.
+File→Save / F5 writes `{game}/sav/{8.3}.SAV` (owned chunks live, rest zero).
+Census is Options+5 (Census Panel [74]), not an overlay-filter.
+Keyboard table: C2MANUAL.DOC p.48 — see CITY_ONLY_KEYS / CITY_ONLY_LEFTOVERS.
 """
 
 from __future__ import annotations
@@ -45,6 +46,11 @@ _HOUSE_FAMILIES: tuple[tuple[int, int, int | None, str], ...] = (
 
 _REPORT_X, _REPORT_Y = 16, 40
 _REPORT_W, _REPORT_H = 320, 200
+# Advisor banner — offset from Query (16,40) / Census so we do not share
+# the Query OK gadget. Click-to-dismiss; EXE [78] is right-click.
+_ADV_X, _ADV_Y = 72, 88
+_ADV_W = 360
+_ADV_LINE = 44
 
 
 @dataclass
@@ -214,6 +220,22 @@ def report_contains(x: int, y: int) -> bool:
     return rx <= x < rx + rw and ry <= y < ry + rh
 
 
+def report_line_at(x: int, y: int, n_lines: int) -> int | None:
+    """0-based line under the title (same layout as blit_menu_report)."""
+    if n_lines <= 0 or not report_contains(x, y):
+        return None
+    x0, y0, _w, h = report_rect()
+    rel = y - (y0 + 24)
+    if rel < 0:
+        return None
+    idx = rel // 13
+    if idx < 0 or idx >= n_lines:
+        return None
+    if y0 + 24 + idx * 13 > y0 + h - 18:
+        return None
+    return idx
+
+
 def blit_menu_report(frame: Image.Image, report: MenuReport) -> Image.Image:
     out = frame.convert("RGBA")
     overlay = Image.new("RGBA", out.size, (0, 0, 0, 0))
@@ -232,6 +254,94 @@ def blit_menu_report(frame: Image.Image, report: MenuReport) -> Image.Image:
     return Image.alpha_composite(out, overlay).convert("RGB")
 
 
+def _wrap_adv(text: str, width: int = _ADV_LINE) -> list[str]:
+    if not text:
+        return []
+    if len(text) <= width:
+        return [text]
+    out: list[str] = []
+    rest = text
+    while rest:
+        if len(rest) <= width:
+            out.append(rest)
+            break
+        cut = rest.rfind(" ", 0, width)
+        if cut <= 0:
+            cut = width
+        out.append(rest[:cut])
+        rest = rest[cut:].lstrip()
+    return out
+
+
+def advisor_rect(msg, *, has_video: bool = False) -> tuple[int, int, int, int]:
+    from app.advisor_video import SMK_H, SMK_W, SMK_X, SMK_Y
+
+    lines = 1 + len(_wrap_adv(getattr(msg, "body", "") or "")) + 2
+    text_h = max(96, 28 + 13 * lines + 14)
+    if not has_video:
+        return (_ADV_X, _ADV_Y, _ADV_W, text_h)
+    # Video stays at EXE (80,96) 320×152. Center the banner on that hole
+    # so 16:9 pillarbox is not left-heavy (_ADV_X=72 was 8px vs 32px).
+    top = SMK_Y - _ADV_Y
+    w = max(_ADV_W, SMK_W + 16)
+    x = SMK_X - (w - SMK_W) // 2
+    return (x, _ADV_Y, w, top + SMK_H + 8 + text_h)
+
+
+def advisor_contains(x: int, y: int, msg, *, has_video: bool = False) -> bool:
+    if msg is None:
+        return False
+    x0, y0, w, h = advisor_rect(msg, has_video=has_video)
+    return x0 <= x < x0 + w and y0 <= y < y0 + h
+
+
+def blit_advisor_dialog(
+    frame: Image.Image,
+    msg,
+    *,
+    eng=None,
+    video: Image.Image | None = None,
+    has_video: bool = False,
+) -> Image.Image:
+    """C2.ENG banner + optional 320×152 talker. Dismiss is not Query OK."""
+    from app.advisor_video import SMK_H, SMK_W, SMK_X, SMK_Y
+
+    has_video = has_video or video is not None
+    out = frame.convert("RGBA")
+    overlay = Image.new("RGBA", out.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    font = ImageFont.load_default()
+    x0, y0, w, h = advisor_rect(msg, has_video=has_video)
+    draw.rectangle((x0, y0, x0 + w - 1, y0 + h - 1), fill=(16, 20, 36, 236))
+    draw.rectangle((x0, y0, x0 + w - 1, y0 + h - 1), outline=(200, 180, 90, 255))
+    text_y = y0 + 6
+    if has_video:
+        hole = (SMK_X, SMK_Y, SMK_X + SMK_W - 1, SMK_Y + SMK_H - 1)
+        draw.rectangle(hole, fill=(0, 0, 0, 255))
+        text_y = SMK_Y + SMK_H + 8
+    draw.text((x0 + 8, text_y), msg.title[:42], fill=(255, 228, 160, 255), font=font)
+    y = text_y + 18
+    for line in _wrap_adv(msg.body or ""):
+        draw.text((x0 + 8, y), line, fill=(220, 230, 210, 255), font=font)
+        y += 13
+        if y > y0 + h - 32:
+            break
+    hint = getattr(msg, "dismiss", "") or _eng(
+        eng, 78, 0, "Right Click to remove this message."
+    )
+    click = _eng(eng, 7, 11, "Click to Continue")
+    draw.text((x0 + 8, y0 + h - 26), click[:40], fill=(200, 190, 140, 255), font=font)
+    draw.text((x0 + 8, y0 + h - 14), hint[:48], fill=(160, 150, 120, 255), font=font)
+    composed = Image.alpha_composite(out, overlay).convert("RGB")
+    if video is not None:
+        clip = video.convert("RGB")
+        if clip.size != (SMK_W, SMK_H):
+            # Nearest keeps the EXE 320×152 grid; bilinear shears odd strides.
+            clip = clip.resize((SMK_W, SMK_H), Image.Resampling.NEAREST)
+        composed.paste(clip, (SMK_X, SMK_Y))
+    return composed
+
+
 def cycle_scroll(step: int) -> int:
     return 1 if int(step) >= 3 else int(step) + 1
 
@@ -243,6 +353,44 @@ def next_game_speed(sim) -> str:
     if getattr(sim, "catchup", 0):
         return "speed_play"
     return "speed_fast"
+
+
+def toggle_pause_action(sim) -> str:
+    """Speed → Pause / P: resume Play, or pause. Does not touch Faster."""
+    return "speed_play" if getattr(sim, "paused", False) else "speed_pause"
+
+
+# C2MANUAL.DOC p.48 “Keyboard Commands” (1.1A). City Only binds rows we host.
+# Debug title keys (1/2/3/Space/A) yield to this table once the city map is up.
+CITY_ONLY_KEYS: tuple[tuple[str, str], ...] = (
+    ("plus", "Zoom in"),
+    ("minus", "Zoom out"),
+    ("1", "Closest zoom"),
+    ("2", "Medium zoom"),
+    ("3", "Furthest zoom"),
+    ("space", "Cancel current building"),
+    ("f1", "Jump to City Level"),
+    ("f2", "Jump to Forum"),
+    ("f", "Jump to Forum"),
+    ("f3", "Jump to Province Level"),
+    ("f4", "Load game"),
+    ("f5", "Save game"),
+    ("p", "Pause Game"),
+    ("y", "Yes (Yes/No panels)"),
+    ("n", "No (Yes/No panels)"),
+    ("escape", "Exit current screen/panel/menu"),
+    ("a", "Accelerate Time"),
+    ("c", "See Census Panel"),
+)
+
+# Official keys / UI we cannot host yet. Do not invent overlay or Query letters.
+CITY_ONLY_LEFTOVERS: tuple[str, ...] = (
+    "< > rotate (INT_CITY sprites 4–5 — no host camera rotate)",
+    "Alt-F / Alt-F1 / Alt-F3 / Alt-D flags (sprite 9 unused)",
+    "overlays — pull-down only; no letter key in the 1.1A table",
+    "Query — mouse / right-click; no letter key in the 1.1A table",
+    "R roads / other build letters — not in the 1.1A table",
+)
 
 
 def selftest() -> list[str]:
@@ -295,6 +443,51 @@ def selftest() -> list[str]:
         lines.append("FAIL  Game Speed from Faster should Play")
     else:
         lines.append("ok    Game Speed Faster->Play")
+    if toggle_pause_action(_Play()) != "speed_pause":
+        lines.append("FAIL  P from Play should pause")
+    else:
+        lines.append("ok    P Play->Pause")
+
+    class _Paused:
+        paused = True
+        catchup = 0
+
+    if toggle_pause_action(_Paused()) != "speed_play":
+        lines.append("FAIL  P from Pause should Play")
+    else:
+        lines.append("ok    P Pause->Play")
+    bound = {key for key, _lab in CITY_ONLY_KEYS}
+    for need in ("p", "c", "a", "space", "f", "f1", "f2", "f3", "f4", "f5", "1", "2", "3"):
+        if need not in bound:
+            lines.append(f"FAIL  city key {need} missing")
+            break
+    else:
+        lines.append("ok    City Only key table has P/C/A/Space/F/F1–F5/1–3")
+    blob = " ".join(CITY_ONLY_LEFTOVERS).lower()
+    if "overlay" not in blob or "query" not in blob or "rotate" not in blob:
+        lines.append("FAIL  leftovers omit overlay/query/rotate")
+    else:
+        lines.append("ok    leftovers list overlay/query/rotate/flags")
+    if report_line_at(_REPORT_X + 8, _REPORT_Y + 24, 3) != 0:
+        lines.append("FAIL  report_line_at first line")
+    else:
+        lines.append("ok    report_line_at first line")
+    from app.messages import AdvisorMessage
+
+    demo = AdvisorMessage(
+        key="t", title="Fire Alert!", body="x", slot=81, dismiss="Right Click"
+    )
+    if not advisor_contains(_ADV_X + 4, _ADV_Y + 4, demo):
+        lines.append("FAIL  advisor hit")
+    else:
+        lines.append("ok    advisor dialog hitbox")
+    x0, y0, w, h = advisor_rect(demo, has_video=True)
+    if h <= 152 or not advisor_contains(80 + 4, 96 + 4, demo, has_video=True):
+        lines.append(f"FAIL  advisor video box {w}x{h}")
+    elif x0 + (w - 320) // 2 != 80:
+        lines.append(f"FAIL  advisor video not centered x={x0} w={w}")
+    else:
+        lines.append("ok    advisor video+text hitbox")
     excerpt = help_topic_excerpt(None, HELP_TOPIC_HINTS, "Hints and Tips")
     if excerpt.title != "Hints and Tips":
         lines.append("FAIL  help fallback")

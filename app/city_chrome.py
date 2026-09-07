@@ -154,12 +154,14 @@ class CityChrome:
         return cls(frames=frames or [], dests=dests or [], hits=hits, source=source)
 
     def covers(self, x: int, y: int, ox: int = 0) -> bool:
+        """Window pixels. Chrome is the top bar plus the right 162 px strip."""
         if y < TOP_BAR_H:
             return True
         return x >= SIDEBAR_X + ox and y < SCREEN_H
 
     def hit_test(self, x: int, y: int, ox: int = 0) -> ChromeHit | None:
-        """Hitboxes live in native 640 space. ``ox`` is the maximize slide."""
+        """Hitboxes live in native 640 space. ``ox`` is the maximize slide
+        (same offset as ``blit`` / palette flyouts / the chrome layer)."""
         nx = x - ox
         for hit in self.hits:
             rx, ry, rw, rh = hit.rect

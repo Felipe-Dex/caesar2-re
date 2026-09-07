@@ -270,6 +270,23 @@ def unpack_pool(blob: bytes | memoryview) -> list[Walker]:
     ]
 
 
+def pack_pool(walkers: Sequence[Walker] | bytearray | bytes | memoryview) -> bytes:
+    """201 × 58 for SavChunk 8. Empty list → zeros (walkers_clear_pool)."""
+    if isinstance(walkers, (bytes, bytearray, memoryview)):
+        raw = bytes(walkers)
+        if len(raw) != WALKER_BYTES:
+            raise ValueError(f"chunk {SAV_CHUNK} is {len(raw)} bytes, want {WALKER_BYTES}")
+        return raw
+    blob = bytearray(WALKER_BYTES)
+    for walker in walkers:
+        slot = int(getattr(walker, "slot", -1))
+        rec = getattr(walker, "raw", b"")
+        if 0 <= slot < WALKER_COUNT and len(rec) == WALKER_STRIDE:
+            off = slot * WALKER_STRIDE
+            blob[off : off + WALKER_STRIDE] = rec
+    return bytes(blob)
+
+
 def live_walkers(pool: Sequence[Walker]) -> list[Walker]:
     return [w for w in pool if w.live]
 
@@ -401,16 +418,19 @@ def find_walker_at(
 def walker_iso_xy(
     walker: Walker, *, origin_x: int | None = None, zoom: int = 0
 ) -> tuple[int, int]:
-    """Blit origin for LTLMEN: feet on the road diamond, not the aqueduct lift."""
+    """Blit origin for LTLMEN: feet on the road diamond."""
     tile_w, tile_h = iso_tile_size(zoom)
     men = LTLMEN_SIZE_BY_ZOOM[max(0, min(zoom, 2))]
     fx, fy = walker_draw_xy(walker)
     sx, sy = tile_iso_xy(fx, fy, origin_x=origin_x, zoom=zoom)
     # Centre of the iso diamond is the pad. Bottom-edge feet sit on the
-    # SE neighbour (often the lifted aqueduct pipe, +26 px).
+    # SE neighbour diamond (same dest Y as type-1 aqueduct).
     cx = sx + tile_w // 2
     cy = sy + tile_h // 2
     return cx - men // 2, cy - men + men // 4
+
+
+_LTLMEN_FRAMES: dict[tuple[str, int], list[Image.Image]] = {}
 
 
 def load_ltlmen_frames(
@@ -418,8 +438,14 @@ def load_ltlmen_frames(
 ) -> tuple[list[Image.Image], str]:
     from app.assets import load_pl8_frames
 
-    name = LTLMEN_BY_ZOOM[max(0, min(zoom, 2))]
+    z = max(0, min(zoom, 2))
+    name = LTLMEN_BY_ZOOM[z]
+    key = (str(Path(game)), z)
+    hit = _LTLMEN_FRAMES.get(key)
+    if hit is not None:
+        return hit, name
     frames, path = load_pl8_frames(game, name)
+    _LTLMEN_FRAMES[key] = frames
     return frames, path.name
 
 
@@ -432,15 +458,15 @@ def overlay_walkers(
     sprites: Sequence[Image.Image] | None = None,
     camera: int = 0,
     origin_x: int | None = None,
+    cam_x: int = 0,
+    cam_y: int = 0,
+    inplace: bool = False,
 ) -> Image.Image:
-    """Blit live walkers onto an existing iso city image.
+    """Blit live walkers onto an iso canvas or a camera crop of it.
 
-    ``img`` must be the native ``render_iso`` canvas at this ``zoom``
-    (not the 640×480 viewport crop). Does not call ``city_map.render_iso``.
-    Uses ``tools/decode_pl8.py`` via ``assets.load_pl8_frames`` — never
-    copies a PL8 into git.
-
-        from app.walkers import overlay_walkers
+    Full-canvas callers omit ``cam_x`` / ``cam_y``. Play mode pastes onto
+    the 640×480 crop (``inplace=True``) so we never copy the 80×80 iso.
+    Does not call ``city_map.render_iso``. Uses ``assets.load_pl8_frames``.
     """
     if sprites is None:
         sprites, _name = load_ltlmen_frames(game, zoom=zoom)
@@ -450,15 +476,27 @@ def overlay_walkers(
         # Match render_iso: origin from map width, not image width.
         origin_x = iso_origin_x(MAP_W, zoom=zoom)
         expected_w = origin_x + (MAP_W - 1) * (tile_w // 2) + tile_w
-        if img.width != expected_w:
+        # Viewport crops are smaller; keep the map origin and subtract cam.
+        if img.width != expected_w and cam_x == 0 and cam_y == 0:
             origin_x = (img.width - tile_w) // 2
 
-    out = img.convert("RGBA")
+    if inplace and img.mode == "RGBA":
+        out = img
+    elif img.mode == "RGBA":
+        out = img.copy()
+    else:
+        out = img.convert("RGBA")
+    men = LTLMEN_SIZE_BY_ZOOM[max(0, min(zoom, 2))]
+    vw, vh = out.size
     for walker in drawable_walkers(walkers):
         idx = walker_draw_ltlmen_index(walker, camera=camera)
         if not (0 <= idx < n):
             continue
         spr = sprites[idx]
         px, py = walker_iso_xy(walker, origin_x=origin_x, zoom=zoom)
+        px -= cam_x
+        py -= cam_y
+        if px + men < 0 or py + men < 0 or px >= vw or py >= vh:
+            continue
         out.paste(spr, (px, py), spr)
     return out

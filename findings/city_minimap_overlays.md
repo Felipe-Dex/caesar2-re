@@ -42,7 +42,7 @@ Handlers store the id, set `[0x117A58]=1`, then `JMP 0x3E590` (wipe 80×80 plane
 | 0 | `0x3E656` | — | 0 = geography / no tint |
 | 1 | `0x3E666` | signed **+15**, clamp 0…64 | 0 if ≤0; else `(lv>>3)*3 + 0x7E` (teal→khaki ramp) |
 | 2 | `0x3E6BA` | **+1&0xC0**, **+0**, **+13&7** | pipe / Well–Fountain `0xD7–0xDE` → **0x96**; charge+ring → **0x87**; charge → **0x84**; ring `+13&4` → **0x8D** |
-| 3 | `0x3E7DB` | **+0**, **+1&6**, **+10&0x30**, signed **+17** | road/river `0x1E–0x51`, Praefecture `0xE3`, Barracks `0xE4` → **0x96**; coverage score 2/1 → **0x8D** / **0x90** / **0x93** |
+| 3 | `0x3E7DB` | **+0**, **+10&0x30**, signed **+17** | Praefecture `0xE3` → **0x96**; Barracks `0xE4` → **0x8B**; covered road (score 2) → **0x8D**; house/`+10&0x30` → **0x93**; road `+17≥16` → **0x90**; river / uncovered land → **0** (EXE also wrote `0x96` for `+1&6` and river `0x1E–0x51` — host skips that flood) |
 | 4 | `0x3EA8E` | **+11&0x0F** | 0 empty; ≥11 **0x77**; ≥5 **0x78**; else **0x79** |
 | 5 | `0x3E757` | **+0** `0xAE–0xB9`, **+10&0x0C** | forums **0x96**; tax bits 4/8/C → **0x93** / **0x90** / **0x8D** |
 | 6 | `0x3E983` | **+0** `0xE5–0xF0`, **+12** 3×2-bit | venues **0x96**; sum `n` → `(n-1)*3 + 0x7E` |
@@ -60,7 +60,7 @@ Water overlay uses the **real pipe graph** (`+1&0xC0` on Reservoir/aqueduct cell
 
 Fountain `0xDB–0xDE` emits **+13 `0x01` r=6** only when the tile is in a charged reservoir ring (`+13&4`, r=4/5/6 from charge 1/2/3). Dry fountain (no ring) is the building colour only. Well `0xD7–0xDA` always emits **+13 `0x02` r=2**. Place writes those bytes immediately; phases `0x56–0x5D` / `0x6E–0x75` rewrite them after wipe `0x51`.
 
-Same honesty: Security **+17** / **+10&0x30**, Tax **+10&0x0C**, Entert'ment **+12**, Education **+13&0x30**, Markets **+10&0xC0** are empty on a fresh map (phase stubs). Buildings still highlight (Reservoir, Well, Forum, school, market, Praefecture). Unrest / Illness use **+11** on houses when evolve has written the nibble.
+Education **+13 0x10/0x20** is painted by `FUN_0004034b` (`0x66–0x6D`) and on place: Grammaticus `0xF3` r=6 extra=1 bit `0x10`; Rhetor `0xF4` r=8 extra=2 bit `0x20`. Library `0xF5` has no splash in that painter (overlay still tints the school tile). Entert'ment **+12** is the rest of the same function (place + `0x66–0x6D`; wipe `0x54`): Theater `0xE5` bits 0–1 extra=1 r=9/7/5; Odeum `0xE6` extra=1 r=11/9/7; Arena `0xE7` bits 2–3 extra=2 r=9/7/5; Coliseum `0xE8` extra=2 r=11/9/7; Circus `0xE9–0xEC` bits 4–5 extra=2 r=10/8/6; C.Maximus `0xED–0xF0` extra=3 r=12/10/8. Baths **+13 0x08** (`0x3FEF7` / place): r=`id−0xDA` extra=1 only in a charged reservoir ring. Prefecture/Barracks paint **+10 0x30** r=2/3 on place and `0x5E` (`+14` 0x02/0x01). Security overlay still uses **+17≥16** (road flood) as the external half. Hospital `0xFB` / Library `0xF5` have no `tile_or_radius`. Working count needs road+forum on the 3×3 rim; Query cover is `n*1000*100/pop` (hospital) / `n*1200*100/pop` (library), or 100 if pop<100. Tax **+10&0x0C**, Markets **+10&0xC0** stay empty until their walkers write them. Security buildings still highlight (Praefecture **0x96**, Barracks **0x8B**); river and uncovered land stay plane 0. Unrest / Illness use **+11** on houses when evolve has written the nibble.
 
 ## 5. Right-click vs Query (original)
 
@@ -83,5 +83,6 @@ python -m app --new --city-only --no-audio
 1. Click the **name well** at the top of the right sidebar (`(478,24)` 162×24).
 2. Pick Water / Unrest / … . Geography = normal minimap + iso. Cancel = drop the build tool.
 3. Water: **blue** (`0x84` +13&3 / river), **tan** (`0x96` pipe / well / fountain / reservoir / aqueduct), **purple** (`0x87` charge+ring), **khaki ring** (`0x8D` +13&4). Uncovered grass stays geography (no red wash). Fountain blob is r=6 only when the fountain sits in a charged reservoir ring.
-4. Maximize / resize the window: same PL8 zoom, larger iso clip (more tiles). Chrome stays 162 px 1:1 on the right.
-5. Query tool or right-click (no tool) on a tile → place dialog.
+4. Security: **tan** Praefecture `0x96`, **salmon** Barracks `0x8B`, **khaki** covered road `0x8D`, **dark brown** house coverage `0x93`, **brown** road `+17` `0x90`. River / uncovered land stay geography (no `0x96` flood).
+5. Maximize / resize the window: same PL8 zoom, larger iso clip (more tiles). Chrome stays 162 px 1:1 on the right.
+6. Query tool or right-click (no tool) on a tile → place dialog.

@@ -24,6 +24,8 @@ from app.city_map import (
     SAV_HISTORY_BYTES,
     TILE_STRIDE,
     CityMap,
+    restore_river_tags,
+    snapshot_river_tags,
 )
 from app.city_sim import SimState
 from app.config import find_file
@@ -384,6 +386,7 @@ def city_map_generate(
             break
     if isinstance(tiles, CityMap):
         tiles.source = "city_map_generate"
+        snapshot_river_tags(tiles)
     return rng
 
 
@@ -502,6 +505,26 @@ def selftest(*, seed: int = 1) -> list[str]:
         lines.append("ok    river ids after 0x65B3E")
     if leftover_dir:
         lines.append(f"FAIL  {leftover_dir} river tiles still walk dirs 0/2/4/6")
+    if len(city.river_lock) != n_river:
+        lines.append(
+            f"FAIL  river_lock {len(city.river_lock)} vs flags {n_river}"
+        )
+    else:
+        mutated = 0
+        for (x, y), (tid, flags) in list(city.river_lock.items())[:8]:
+            city.tiles[city.offset(x, y)] = 0x21
+            mutated += 1
+        restore_river_tags(city)
+        bad = 0
+        for (x, y), (tid, flags) in city.river_lock.items():
+            if city.tiles[city.offset(x, y)] != tid:
+                bad += 1
+            if city.tiles[city.offset(x, y) + 1] != flags:
+                bad += 1
+        if bad or mutated < 1:
+            lines.append(f"FAIL  restore after shimmer mutate bad={bad}")
+        else:
+            lines.append("ok    generate lock restores +0 after mutate")
     if rubble_river:
         lines.append(f"FAIL  {rubble_river} river tiles are rubble 0x05")
     if counts.get(ID_RUBBLE, 0):

@@ -16,7 +16,18 @@ from dataclasses import dataclass
 from PIL import Image, ImageDraw, ImageFont
 
 from app.city_map import ID_TERRAIN_MAX, MAP_H, MAP_W, TILE_STRIDE, CityMap
-from app.city_paint import HOUSE_OCCUPANCY, ID_HOUSING_LO
+from app.city_paint import (
+    BATH_SPLASH_BIT,
+    HOUSE_OCCUPANCY,
+    ID_HOUSING_LO,
+    ID_HOSPITAL,
+    ID_LIBRARY,
+    SECURITY_COV_BITS,
+    civic_edge_access,
+    civic_stamp_origin,
+    hospital_cover_percent,
+    library_cover_percent,
+)
 
 OVERLAY_GEOGRAPHY = 0
 OVERLAY_LAND_VALUE = 1
@@ -118,6 +129,8 @@ _FLYOUT_ITEM_H = 14
 _DLG_X, _DLG_Y = 16, 40
 _DLG_W, _DLG_H = 420, 280
 _DLG_LINE = 52
+_DLG_OK_W, _DLG_OK_H = 56, 18
+_DLG_OK_PAD = 8
 
 
 def overlay_name(overlay_id: int, eng=None) -> str:
@@ -239,26 +252,37 @@ def _paint_water(tid: int, flags: int, splash: int) -> int:
     return 0
 
 
-def _paint_security(tid: int, flags: int, cov10: int, flood17: int) -> int:
-    # 0x3E7DB. Prefects +10&0x30; road-access +17>=16; buildings 0xE3/E4.
+def _is_security_road(tid: int) -> bool:
+    """Pavement the overlay should mark — not river 0x1E–0x51."""
+    if 0x52 <= tid <= 0x5C:
+        return True
+    if 0x4E <= tid <= 0x51:
+        return True
+    return 0x7C <= tid <= 0x7E
+
+
+def _paint_security(tid: int, _flags: int, cov10: int, flood17: int) -> int:
+    # 0x3E7DB. Score = (signed +17>=16) + (+10&0x30).
+    # EXE also writes 0x96 for flags&6, river 0x1E–0x51, and both 0xE3/0xE4
+    # — one khaki on the host iso/minimap. Split the two buildings (CITY1.256
+    # 0x96 tan vs 0x8B salmon), keep the 0x8D/0x90/0x93 coverage ramp, and
+    # leave river / open land on plane 0 (dimmed geography).
+    if tid == 0xE3:
+        return 0x96
+    if tid == 0xE4:
+        return 0x8B
     score = 0
     if i8(flood17) >= 0x10:
         score = 1
     if cov10 & 0x30:
         score += 1
-    if flags & 6:
-        return 0x96
-    if 0x1E <= tid <= 0x51:
-        return 0x96
-    if tid in (0xE3, 0xE4):
-        return 0x96
     if score == 0:
         return 0
     if score == 2:
         return 0x8D
     if cov10 & 0x30:
         return 0x93
-    if score == 1:
+    if score == 1 and _is_security_road(tid):
         return 0x90
     return 0
 
@@ -692,16 +716,15 @@ def query_place(city: CityMap, x: int, y: int, eng=None) -> PlaceInfo:
         lines.append(_eng_skip(eng, 60, 5, "Forum Access"))
     else:
         lines.append(_eng_skip(eng, 60, 6, "NO Forum Access"))
-    sec = t.coverage & 0x30
-    if sec == 0x10:
+    # FUN_00063845: +10&0x30 = internal; signed +17>=16 = external; both = max.
+    internal = bool(t.coverage & SECURITY_COV_BITS)
+    external = i8(t.unknown17) >= 0x10
+    if internal and external:
+        lines.append(_eng_skip(eng, 60, 0x5C, "Maximum Security"))
+    elif internal:
         lines.append(_eng_skip(eng, 60, 7, "Internal Security Only"))
-    elif sec == 0x20:
+    elif external:
         lines.append(_eng_skip(eng, 60, 8, "External Security Only"))
-    elif sec == 0x30:
-        lines.append(
-            f"{_eng_skip(eng, 60, 7, 'Internal Security Only')} / "
-            f"{_eng_skip(eng, 60, 8, 'External Security Only')}"
-        )
     else:
         lines.append(_eng_skip(eng, 60, 9, "NO Security"))
     if t.coverage & 0xC0:
@@ -720,6 +743,65 @@ def query_place(city: CityMap, x: int, y: int, eng=None) -> PlaceInfo:
     lines.append(
         f"{_eng_skip(eng, 60, 16, 'Entertainment Level')} {t.unknown12}"
     )
+    if splash & BATH_SPLASH_BIT:
+        lines.append(_eng_skip(eng, 60, 17, "Near Baths"))
+    else:
+        lines.append(_eng_skip(eng, 60, 18, "Not Near Baths"))
+    hosp = hospital_cover_percent(city.tiles)
+    if hosp >= 100:
+        lines.append(_eng_skip(eng, 60, 19, "Complete Hospital Cover"))
+    elif hosp > 0:
+        lines.append(f"{_eng_skip(eng, 60, 20, 'Hospital Cover is')} {hosp}")
+    else:
+        lines.append(_eng_skip(eng, 60, 0x54, "No Hospital Cover"))
+    lib = library_cover_percent(city.tiles)
+    if lib >= 100:
+        lines.append(_eng_skip(eng, 60, 21, "Complete Library Cover"))
+    elif lib > 0:
+        lines.append(f"{_eng_skip(eng, 60, 22, 'Library Cover is')} {lib}")
+    else:
+        lines.append(_eng_skip(eng, 60, 0x55, "No Library Cover"))
+    if tid in (ID_HOSPITAL, ID_LIBRARY):
+        ox, oy = civic_stamp_origin(city.tiles, x, y)
+        has_road, has_forum = civic_edge_access(city.tiles, ox, oy)
+        if has_road:
+            lines.append(_eng_skip(eng, 60, 88, "Road Access"))
+        else:
+            lines.append(_eng_skip(eng, 60, 89, "No Road Access"))
+            lines.append(
+                _eng_skip(
+                    eng, 60, 90,
+                    "This building needs access to a road to function effectively.",
+                )
+            )
+        if has_forum:
+            lines.append(_eng_skip(eng, 60, 82, "This building is operational."))
+        else:
+            lines.append(
+                _eng_skip(
+                    eng, 60, 83,
+                    "This building is mothballed. Without access to a forum, "
+                    "most of your city cannot find it.",
+                )
+            )
+        cover = hosp if tid == ID_HOSPITAL else lib
+        if cover < 100:
+            if tid == ID_HOSPITAL:
+                lines.append(
+                    _eng_skip(
+                        eng, 60, 74,
+                        "Insufficient city-wide hospital facilities affects "
+                        "this dwelling's ability to grow further.",
+                    )
+                )
+            else:
+                lines.append(
+                    _eng_skip(
+                        eng, 60, 78,
+                        "Insufficient city-wide library facilities affect "
+                        "this dwelling's ability to grow further.",
+                    )
+                )
     if t.draw & 0x80:
         lines.append(f"fire risk  +3 bit7  timer +16={t.unknown16}")
     elif t.unknown16:
@@ -806,30 +888,116 @@ def _wrap_query_line(text: str, width: int = _DLG_LINE) -> list[str]:
     return out
 
 
-def place_dialog_contains(x: int, y: int) -> bool:
-    return _DLG_X <= x < _DLG_X + _DLG_W and _DLG_Y <= y < _DLG_Y + _DLG_H + 80
+def _query_layout(win_w: int, win_h: int) -> tuple[int, int, int]:
+    """Same integer scale as Forum — Query blit is native 420×280."""
+    from app.forum import forum_layout
+
+    return forum_layout(win_w, win_h)
+
+
+def _query_to_native(
+    x: int, y: int, frame_size: tuple[int, int] | None
+) -> tuple[int, int]:
+    if frame_size is None:
+        return int(x), int(y)
+    from app.forum import forum_to_native
+
+    return forum_to_native(int(x), int(y), frame_size[0], frame_size[1])
+
+
+def _place_dialog_wrapped(info: PlaceInfo | None) -> list[str]:
+    wrapped: list[str] = []
+    if info is None:
+        return wrapped
+    for line in info.lines:
+        wrapped.extend(_wrap_query_line(line))
+    return wrapped
+
+
+def place_dialog_rect(info: PlaceInfo | None = None) -> tuple[int, int, int, int]:
+    """Native 640×480 rect (x, y, w, h). Grows with wrapped Query lines."""
+    n = len(_place_dialog_wrapped(info))
+    body = 22 + 13 * n + 10
+    h = max(_DLG_H, body + _DLG_OK_H + _DLG_OK_PAD + 4)
+    return (_DLG_X, _DLG_Y, _DLG_W, h)
+
+
+def place_dialog_ok_rect(
+    info: PlaceInfo | None = None,
+) -> tuple[int, int, int, int]:
+    """Native OK gadget — bottom-right of the structure box."""
+    x0, y0, w, h = place_dialog_rect(info)
+    return (
+        x0 + w - _DLG_OK_PAD - _DLG_OK_W,
+        y0 + h - _DLG_OK_PAD - _DLG_OK_H,
+        _DLG_OK_W,
+        _DLG_OK_H,
+    )
+
+
+def place_dialog_contains(
+    x: int,
+    y: int,
+    info: PlaceInfo | None = None,
+    *,
+    frame_size: tuple[int, int] | None = None,
+) -> bool:
+    """Window pixels. Converts through Forum scale when ``frame_size`` is set."""
+    nx, ny = _query_to_native(x, y, frame_size)
+    x0, y0, w, h = place_dialog_rect(info)
+    return x0 <= nx < x0 + w and y0 <= ny < y0 + h
+
+
+def place_dialog_close_contains(
+    x: int,
+    y: int,
+    info: PlaceInfo | None = None,
+    *,
+    frame_size: tuple[int, int] | None = None,
+) -> bool:
+    """True on the OK gadget (window pixels, Forum-scaled)."""
+    nx, ny = _query_to_native(x, y, frame_size)
+    bx, by, bw, bh = place_dialog_ok_rect(info)
+    return bx <= nx < bx + bw and by <= ny < by + bh
 
 
 def blit_place_dialog(frame: Image.Image, info: PlaceInfo) -> Image.Image:
-    out = frame.convert("RGBA")
-    overlay = Image.new("RGBA", out.size, (0, 0, 0, 0))
-    draw = ImageDraw.Draw(overlay)
+    """Structure / walker-quote box. Native coords, Forum integer-upscale."""
     font = ImageFont.load_default()
-    wrapped: list[str] = []
-    for line in info.lines:
-        wrapped.extend(_wrap_query_line(line))
-    h = max(_DLG_H, 28 + 13 * len(wrapped) + 10)
-    x0, y0, w = _DLG_X, _DLG_Y, _DLG_W
+    wrapped = _place_dialog_wrapped(info)
+    x0, y0, w, h = place_dialog_rect(info)
+    bx, by, bw, bh = place_dialog_ok_rect(info)
+    overlay = Image.new("RGBA", (x0 + w, y0 + h), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
     draw.rectangle((x0, y0, x0 + w - 1, y0 + h - 1), fill=(8, 24, 22, 230))
     draw.rectangle((x0, y0, x0 + w - 1, y0 + h - 1), outline=(200, 180, 90, 255))
     draw.text((x0 + 8, y0 + 6), "Query", fill=(255, 228, 160, 255), font=font)  # C2.ENG [73]
     y = y0 + 22
+    text_bottom = by - 4
     for line in wrapped:
+        if y > text_bottom - 12:
+            break
         draw.text((x0 + 8, y), line, fill=(220, 230, 210, 255), font=font)
         y += 13
-        if y > y0 + h - 14:
-            break
-    return Image.alpha_composite(out, overlay).convert("RGB")
+    # EXE Query is click-outside (no X). Host OK so dismiss is obvious.
+    ok = "OK"
+    draw.rectangle((bx, by, bx + bw - 1, by + bh - 1), fill=(40, 36, 16, 255))
+    draw.rectangle((bx, by, bx + bw - 1, by + bh - 1), outline=(200, 180, 90, 255))
+    tw = draw.textlength(ok[:8], font=font) if hasattr(draw, "textlength") else 12
+    draw.text(
+        (bx + max(4, (bw - int(tw)) // 2), by + 3),
+        ok[:8],
+        fill=(255, 228, 160, 255),
+        font=font,
+    )
+    piece = overlay.crop((x0, y0, x0 + w, y0 + h))
+    scale, ox, oy = _query_layout(frame.width, frame.height)
+    if scale > 1:
+        piece = piece.resize((w * scale, h * scale), Image.Resampling.NEAREST)
+    out = frame.convert("RGBA")
+    dest = (ox + x0 * scale, oy + y0 * scale)
+    out.paste(piece, dest, piece)
+    return out.convert("RGB")
 
 
 def selftest() -> list[str]:
@@ -926,6 +1094,55 @@ def selftest() -> list[str]:
         lines.append("FAIL  security prefecture")
     else:
         lines.append("ok    security Praefecture -> 0x96")
+    off = put(19, 0, tid=0xE4, flags=0)
+    if overlay_pixel(tiles, off, OVERLAY_SECURITY) != 0x8B:
+        lines.append(
+            f"FAIL  security barracks {overlay_pixel(tiles, off, OVERLAY_SECURITY):#x}"
+        )
+    else:
+        lines.append("ok    security Barracks -> 0x8B")
+    off = put(20, 0, tid=0x1E, flags=0x10)
+    if overlay_pixel(tiles, off, OVERLAY_SECURITY) != 0:
+        lines.append(
+            f"FAIL  security river {overlay_pixel(tiles, off, OVERLAY_SECURITY):#x}"
+        )
+    else:
+        lines.append("ok    security river -> plane 0 (no 0x96 flood)")
+    off = put(21, 0, tid=0x14, flags=0, **{"17": 0x20})
+    if overlay_pixel(tiles, off, OVERLAY_SECURITY) != 0:
+        lines.append(
+            f"FAIL  security grass +17 {overlay_pixel(tiles, off, OVERLAY_SECURITY):#x}"
+        )
+    else:
+        lines.append("ok    security grass +17 -> plane 0")
+    off = put(22, 0, tid=0x52, flags=0x20, **{"17": 0x20})
+    if overlay_pixel(tiles, off, OVERLAY_SECURITY) != 0x90:
+        lines.append(
+            f"FAIL  security road {overlay_pixel(tiles, off, OVERLAY_SECURITY):#x}"
+        )
+    else:
+        lines.append("ok    security road +17 -> 0x90")
+    off = put(23, 0, tid=0x52, flags=0x20, **{"10": 0x30, "17": 0x20})
+    if overlay_pixel(tiles, off, OVERLAY_SECURITY) != 0x8D:
+        lines.append(
+            f"FAIL  security covered road {overlay_pixel(tiles, off, OVERLAY_SECURITY):#x}"
+        )
+    else:
+        lines.append("ok    security road +10&0x30 +17 -> 0x8D")
+    off = put(24, 0, tid=0x82, flags=0, **{"10": 0x30})
+    if overlay_pixel(tiles, off, OVERLAY_SECURITY) != 0x93:
+        lines.append(
+            f"FAIL  security house cover {overlay_pixel(tiles, off, OVERLAY_SECURITY):#x}"
+        )
+    else:
+        lines.append("ok    security house +10&0x30 -> 0x93")
+    off = put(25, 0, tid=0xBF, flags=0x04)
+    if overlay_pixel(tiles, off, OVERLAY_SECURITY) != 0:
+        lines.append(
+            f"FAIL  security tower {overlay_pixel(tiles, off, OVERLAY_SECURITY):#x}"
+        )
+    else:
+        lines.append("ok    security tower flags&6 -> plane 0")
 
     off = put(6, 0, tid=0x82, **{"11": 12})
     if overlay_pixel(tiles, off, OVERLAY_UNREST) != 0x77:
@@ -994,6 +1211,138 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  query house risk {house.lines}")
     else:
         lines.append("ok    query housing workers/water/risk")
+    from app.city_paint import (
+        paint_baths_emitter,
+        paint_education_emitter,
+        paint_entertainment_emitter,
+        paint_security_emitter,
+    )
+
+    goff = city.offset(4, 4)
+    city.tiles[goff] = 0xF3
+    city.tiles[goff + 5] = 0
+    paint_education_emitter(city.tiles, 4, 4)
+    h2 = city.offset(6, 4)
+    city.tiles[h2] = 0x83
+    city.tiles[h2 + 1] = 0x01
+    city.tiles[h2 + 13] = city.tiles[h2 + 13]
+    edu = query_place(city, 6, 4)
+    ejoin = " ".join(edu.lines)
+    if "Grammaticus Access" not in ejoin or "NO Grammaticus Access" in ejoin:
+        lines.append(f"FAIL  query grammaticus {edu.lines}")
+    else:
+        lines.append("ok    query house next to Grammaticus → access")
+    voff = city.offset(10, 4)
+    city.tiles[voff] = 0xE5
+    city.tiles[voff + 5] = 0
+    paint_entertainment_emitter(city.tiles, 10, 4)
+    h3 = city.offset(12, 4)
+    city.tiles[h3] = 0x83
+    city.tiles[h3 + 1] = 0x01
+    city.tiles[h3 + 12] = city.tiles[h3 + 12]
+    ent = query_place(city, 12, 4)
+    njoin = " ".join(ent.lines)
+    if "Entertainment Level 0" in njoin or "Entertainment Level" not in njoin:
+        lines.append(f"FAIL  query theater {ent.lines}")
+    else:
+        lines.append("ok    query house next to Theater → Entertainment > 0")
+    boff = city.offset(16, 4)
+    city.tiles[boff] = 0xDF
+    city.tiles[boff + 5] = 0
+    city.tiles[boff + 13] = 0x04
+    paint_baths_emitter(city.tiles, 16, 4)
+    h4 = city.offset(18, 4)
+    city.tiles[h4] = 0x83
+    city.tiles[h4 + 1] = 0x01
+    city.tiles[h4 + 13] = city.tiles[h4 + 13]
+    bath_q = query_place(city, 18, 4)
+    bjoin = " ".join(bath_q.lines)
+    if "Near Baths" not in bjoin or "Not Near Baths" in bjoin:
+        lines.append(f"FAIL  query baths {bath_q.lines}")
+    else:
+        lines.append("ok    query house next to Baths → Near Baths")
+    soff = city.offset(22, 4)
+    city.tiles[soff] = 0xE3
+    city.tiles[soff + 5] = 0
+    paint_security_emitter(city.tiles, 22, 4)
+    h5 = city.offset(23, 4)
+    city.tiles[h5] = 0x83
+    city.tiles[h5 + 1] = 0x01
+    city.tiles[h5 + 10] = city.tiles[h5 + 10]
+    sec_q = query_place(city, 23, 4)
+    sjoin = " ".join(sec_q.lines)
+    if "Internal Security Only" not in sjoin or "NO Security" in sjoin:
+        lines.append(f"FAIL  query prefecture {sec_q.lines}")
+    else:
+        lines.append("ok    query house next to Praefecture → Internal Security")
+    hosp_off = city.offset(26, 4)
+    city.tiles[hosp_off] = 0xFB
+    city.tiles[hosp_off + 5] = 0
+    dead = query_place(city, 26, 4)
+    dj = " ".join(dead.lines)
+    if (
+        "No Hospital Cover" not in dj
+        or "No Road Access" not in dj
+        or "mothballed" not in dj
+    ):
+        lines.append(f"FAIL  query hospital isolated {dead.lines}")
+    else:
+        lines.append("ok    isolated Hospital 0xFB → no road / no forum / no cover")
+    road = city.offset(26, 3)
+    city.tiles[road] = 0x52
+    city.tiles[road + 1] = 0x20
+    city.tiles[road + 10] = 0x0C
+    live = query_place(city, 26, 4)
+    lj = " ".join(live.lines)
+    if "Complete Hospital Cover" not in lj or "Road Access" not in lj:
+        lines.append(f"FAIL  query hospital working {live.lines}")
+    elif "No Road Access" in lj or "mothballed" in lj:
+        lines.append(f"FAIL  query hospital still dead {live.lines}")
+    else:
+        lines.append("ok    Hospital 0xFB road+forum → operational + complete cover")
+    lib_off = city.offset(30, 4)
+    city.tiles[lib_off] = 0xF5
+    city.tiles[lib_off + 5] = 0
+    lib_dead = query_place(city, 30, 4)
+    ldj = " ".join(lib_dead.lines)
+    if "No Library Cover" not in ldj or "No Road Access" not in ldj:
+        lines.append(f"FAIL  query library isolated {lib_dead.lines}")
+    else:
+        lines.append("ok    isolated Library 0xF5 → no road / no cover")
+    lroad = city.offset(30, 3)
+    city.tiles[lroad] = 0x52
+    city.tiles[lroad + 1] = 0x20
+    city.tiles[lroad + 10] = 0x0C
+    lib_live = query_place(city, 30, 4)
+    llj = " ".join(lib_live.lines)
+    if "Complete Library Cover" not in llj or "operational" not in llj:
+        lines.append(f"FAIL  query library working {lib_live.lines}")
+    else:
+        lines.append("ok    Library 0xF5 road+forum → operational + complete cover")
+    big = CityMap()
+    bo = big.offset(2, 2)
+    big.tiles[bo] = 0xFB
+    big.tiles[big.offset(2, 1)] = 0x52
+    big.tiles[big.offset(2, 1) + 1] = 0x20
+    big.tiles[big.offset(2, 1) + 10] = 0x0C
+    lo = big.offset(6, 2)
+    big.tiles[lo] = 0xF5
+    big.tiles[big.offset(6, 1)] = 0x52
+    big.tiles[big.offset(6, 1) + 1] = 0x20
+    big.tiles[big.offset(6, 1) + 10] = 0x0C
+    # 0x9C villa origin occupancy 100; 20 of them → pop 2000.
+    for i in range(20):
+        ho = big.offset(10 + i, 10)
+        big.tiles[ho] = 0x9C
+    hp = hospital_cover_percent(big.tiles)
+    lp = library_cover_percent(big.tiles)
+    qbig = " ".join(query_place(big, 2, 2).lines)
+    if hp != 50 or lp != 60:
+        lines.append(f"FAIL  cover formula hosp={hp} lib={lp} (want 50/60)")
+    elif "Hospital Cover is 50" not in qbig or "Insufficient city-wide hospital" not in qbig:
+        lines.append(f"FAIL  query pop-short {qbig}")
+    else:
+        lines.append("ok    cover n×1000×100/pop and n×1200×100/pop")
     if overlay_name(2) != "Water" or overlay_name(10) != "Cancel":
         lines.append("FAIL  names")
     else:
@@ -1002,6 +1351,33 @@ def selftest() -> list[str]:
         lines.append("FAIL  flyout over well")
     else:
         lines.append("ok    flyout left of sidebar")
+
+    qinfo = PlaceInfo(0, 0, "T", 0, 0, ("a",))
+    ox, oy, ow, oh = place_dialog_ok_rect(qinfo)
+    if not place_dialog_contains(20, 50, qinfo):
+        lines.append("FAIL  query box hit native")
+    elif place_dialog_contains(500, 50, qinfo):
+        lines.append("FAIL  query box miss native")
+    elif not place_dialog_close_contains(ox + 2, oy + 2, qinfo):
+        lines.append("FAIL  query OK hit native")
+    else:
+        lines.append("ok    query OK / box hit native")
+    wide = (1442, 960)
+    if not place_dialog_close_contains(ox * 2 + 2, oy * 2 + 2, qinfo, frame_size=wide):
+        lines.append("FAIL  query OK hit 2x Forum scale")
+    elif not place_dialog_contains(
+        (_DLG_X + _DLG_W - 8) * 2, (_DLG_Y + 20) * 2, qinfo, frame_size=wide
+    ):
+        lines.append("FAIL  query box right edge 2x")
+    elif place_dialog_contains(20, 50, qinfo, frame_size=wide):
+        lines.append("FAIL  query native click is not 2x")
+    else:
+        lines.append("ok    query hit-test uses Forum 2x scale")
+    painted = blit_place_dialog(Image.new("RGB", (640, 480), (0, 0, 0)), qinfo)
+    if painted.getpixel((ox + 4, oy + 4)) == (0, 0, 0):
+        lines.append("FAIL  query OK not painted")
+    else:
+        lines.append("ok    query OK painted")
 
     from app.city_map import iso_canvas_size, iso_tile_size, tile_iso_xy
 

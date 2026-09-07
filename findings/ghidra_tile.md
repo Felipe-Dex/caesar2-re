@@ -129,7 +129,7 @@ Only origin tiles (`+5 & 0xF == 0`). Radii from the listing (ECX).
 
 C2 names (shrine/temple, baths, theater, …) are **not** proven. 0xE5 vs 0xE6 (and E7/E8, E9–EC vs ED–F0) are the small/large pair of the same channel.
 
-`0xF3`/`0xF4` in this same function paint **+13** (`lane 0xD`, bits `0x10`/`0x20`), not +12.
+`0xF3`/`0xF4` in this same function paint **+13** (`lane 0xD`, bits `0x10`/`0x20`), not +12. Capstone on `c2_x.bin`: **0xF3** `tile_or_radius` r=**6** extra=**1** bits `0x10`; **0xF4** r=**8** extra=**2** bits `0x20`. **0xF5** is not in `FUN_0004034b`.
 
 ---
 

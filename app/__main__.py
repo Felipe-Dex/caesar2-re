@@ -74,7 +74,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--no-audio",
         action="store_true",
-        help="skip the optional 2s RAW preview",
+        help="mute boot RAW preview and advisor clips (Options Sound starts off)",
     )
     parser.add_argument(
         "--no-window",
@@ -169,9 +169,10 @@ def main(argv: list[str] | None = None) -> int:
         if sav is None:
             sav = pick_save(game)
     if sav is not None and not sav.is_file():
-        alt = game / sav.name
-        if alt.is_file():
-            sav = alt
+        for alt in (game / "sav" / sav.name, game / sav.name):
+            if alt.is_file():
+                sav = alt
+                break
 
     ctx = run_boot(
         game,
@@ -325,6 +326,17 @@ def main(argv: list[str] | None = None) -> int:
         if menu_fail:
             print("FAILED        : menu selftest")
             return 1
+        from app.sav import selftest as sav_selftest
+
+        print("-- sav_write selftest --")
+        sav_fail = 0
+        for line in sav_selftest():
+            print(f"  {line}")
+            if "FAIL" in line:
+                sav_fail += 1
+        if sav_fail:
+            print("FAILED        : sav_write selftest")
+            return 1
         print("-- forum selftest --")
         forum_fail = 0
         for line in forum_selftest():
@@ -333,6 +345,28 @@ def main(argv: list[str] | None = None) -> int:
                 forum_fail += 1
         if forum_fail:
             print("FAILED        : forum selftest")
+            return 1
+        from app.messages import selftest as message_selftest
+
+        print("-- advisor message selftest --")
+        msg_fail = 0
+        for line in message_selftest():
+            print(f"  {line}")
+            if "FAIL" in line:
+                msg_fail += 1
+        if msg_fail:
+            print("FAILED        : advisor message selftest")
+            return 1
+        from app.advisor_video import selftest as advisor_video_selftest
+
+        print("-- advisor video selftest --")
+        vid_fail = 0
+        for line in advisor_video_selftest(game):
+            print(f"  {line}")
+            if "FAIL" in line:
+                vid_fail += 1
+        if vid_fail:
+            print("FAILED        : advisor video selftest")
             return 1
         if args.new:
             from app.new_game import river_tile_count

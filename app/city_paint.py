@@ -6,7 +6,7 @@ Lane helpers match findings/ghidra_water.md and ghidra_tile.md.
 
 from __future__ import annotations
 
-from app.city_map import MAP_H, MAP_W, ROW_STRIDE, TILE_STRIDE
+from app.city_map import FLAG_PAD, MAP_H, MAP_W, ROW_STRIDE, TILE_STRIDE
 from app.walker_tick import tile_or_radius
 
 HOUSE_SIZE: tuple[int, ...] = (1,) * 26 + (2, 2, 2, 2, 3, 3)
@@ -58,7 +58,35 @@ ID_FOUNTAIN_LO, ID_FOUNTAIN_HI = 0xDB, 0xDE
 ID_BATH_LO, ID_BATH_HI = 0xDF, 0xE2
 ID_PREFECTURE = 0xE3
 ID_BARRACKS = 0xE4
+ID_THEATER = 0xE5
+ID_ODEUM = 0xE6
+ID_ARENA = 0xE7
+ID_COLISEUM = 0xE8
+ID_CIRCUS_LO, ID_CIRCUS_HI = 0xE9, 0xEC
+ID_CMAX_LO, ID_CMAX_HI = 0xED, 0xF0
+ID_GRAMMATICUS = 0xF3
+ID_RHETOR = 0xF4
+ID_LIBRARY = 0xF5
+ID_HOSPITAL = 0xFB
 ID_RIVER_LO, ID_RIVER_HI = 0x1E, 0x51
+
+# FUN_0004034b / tile_or_radius 0x6CD7E. extra grows +x/+y for the N×N origin.
+GRAMMATICUS_SPLASH_R = 6
+GRAMMATICUS_SPLASH_EXTRA = 1
+RHETOR_SPLASH_R = 8
+RHETOR_SPLASH_EXTRA = 2
+EDU_GRAMMATICUS_BIT = 0x10
+EDU_RHETOR_BIT = 0x20
+BATH_SPLASH_BIT = 0x08
+BATH_SPLASH_EXTRA = 1
+SECURITY_COV_BITS = 0x30
+PREFECTURE_SPLASH_R = 2
+BARRACKS_SPLASH_R = 3
+HOSPITAL_COVER_POP_FULL = 100
+HOSPITAL_COVER_UNIT = 1000
+LIBRARY_COVER_UNIT = 1200
+CIVIC_COVER_SIZE = 3
+FORUM_ACCESS_BITS = 0x0C
 
 
 def _off(x: int, y: int) -> int:
@@ -149,6 +177,215 @@ def count_taxed_factories(tiles: bytearray) -> int:
                 continue
             n += 1
     return n
+
+
+# goods_16x48 0xD2B6C / SavChunk 339. 41b33 reads +24 (supplied %) and +28 (raw).
+GOODS_RECORD = 48
+GOODS_COUNT = 16
+GOODS_SUPPLIED = 24
+GOODS_RAW = 28
+FACTORY_OCC_R = 2
+FACTORY_OCC_EXTRA = 2
+
+
+def goods_i32(goods: bytes | bytearray | None, nibble: int, off: int) -> int:
+    """One i32 from a 16×48 goods record. Missing / short table → 0."""
+    idx = nibble & 0xF
+    base = idx * GOODS_RECORD + off
+    if goods is None or base + 4 > len(goods):
+        return 0
+    return int.from_bytes(goods[base : base + 4], "little", signed=True)
+
+
+def housing_occupancy_box(
+    tiles: bytearray, x: int, y: int, *, radius: int = 2, extra: int = 2
+) -> int:
+    """FUN_0006df8d EAX=extra EDX=x EBX=y ECX=radius. Housing origins only."""
+    if len(tiles) < MAP_W * MAP_H * TILE_STRIDE:
+        return 0
+    x0 = x - radius
+    y0 = y - radius
+    span = radius * 2 + 1
+    if extra:
+        span = span + extra
+    width = span
+    height = span
+    if x0 < 0:
+        width += x0
+        x0 = 0
+    elif x0 + width > MAP_W:
+        width -= (x0 + width) - MAP_W
+    if y0 < 0:
+        height += y0
+        y0 = 0
+    elif y0 + height > MAP_H:
+        height -= (y0 + height) - MAP_H
+    if width <= 0 or height <= 0:
+        return 0
+    total = 0
+    for ny in range(y0, y0 + height):
+        for nx in range(x0, x0 + width):
+            off = _off(nx, ny)
+            hid = tiles[off]
+            if hid < ID_HOUSING_LO or hid > ID_HOUSING_HI:
+                continue
+            if tiles[off + 5] & 0xF:
+                continue
+            total += HOUSE_OCCUPANCY[hid - ID_HOUSING_LO]
+    return total
+
+
+def factory_produce(
+    tiles: bytearray,
+    x: int,
+    y: int,
+    *,
+    goods: bytes | bytearray | None = None,
+    labor: int = 0,
+    province_links: int = 0,
+) -> int:
+    """FUN_00041b33 — write +9 hi stock nibble (0–7) on a 0xFA origin.
+
+    Indexes goods_16x48 by origin +19 lo. Raw dword +28 ≤ 0 or supplied %
+    +24 ≤ 0 → stock 0. Does not invent raw and does not consume the table.
+    """
+    if not _in_map(x, y):
+        return 0
+    off = _off(x, y)
+    if tiles[off] != ID_FACTORY:
+        return 0
+    plus9 = tiles[off + 9]
+    stage = plus9 & 0x03
+    market = plus9 & 0x0C
+    nibble = tiles[off + 19] & 0xF
+    supplied = goods_i32(goods, nibble, GOODS_SUPPLIED)
+    raw = goods_i32(goods, nibble, GOODS_RAW)
+    occ = housing_occupancy_box(
+        tiles, x, y, radius=FACTORY_OCC_R, extra=FACTORY_OCC_EXTRA
+    )
+    if occ > 0x82:
+        stage += 4
+    elif occ > 0x5A:
+        stage += 3
+    elif occ > 0x32:
+        stage += 2
+    elif occ > 0x0A:
+        stage += 1
+    if stage <= 0:
+        prod = 0
+    elif stage <= 1:
+        prod = 3
+    elif stage <= 2:
+        prod = 5
+    else:
+        prod = 7
+    if market == 0:
+        labor -= 2
+        if prod > 4:
+            prod = 4
+    if raw <= 0:
+        prod = 0
+    elif raw <= 0x32:
+        labor -= 3
+        if prod > 1:
+            prod = 1
+    elif raw <= 0xC8:
+        labor -= 2
+        if prod > 3:
+            prod = 3
+    elif raw <= 0x190:
+        labor -= 1
+        if prod > 5:
+            prod = 5
+    elif raw <= 0x258:
+        pass
+    elif raw <= 0x320:
+        labor += 1
+    elif raw <= 0x3E8:
+        labor += 2
+    else:
+        labor += 3
+    if province_links <= 0:
+        if prod > 4:
+            prod = 4
+    elif province_links == 1:
+        labor += 1
+    else:
+        labor += 2
+    if supplied <= 0:
+        prod = 0
+    elif supplied <= 0x14:
+        if prod > 1:
+            prod = 1
+    elif supplied <= 0x22:
+        if prod > 2:
+            prod = 2
+    elif supplied <= 0x32:
+        if prod > 3:
+            prod = 3
+    elif supplied <= 0x43:
+        if prod > 4:
+            prod = 4
+    elif supplied <= 0x4B:
+        if prod > 5:
+            prod = 5
+    elif supplied <= 0x63:
+        if prod > 6:
+            prod = 6
+    stock = labor if labor < prod else prod
+    if stock < 0:
+        stock = 0
+    if stock > 7:
+        stock = 7
+    tiles[off + 9] = (tiles[off + 9] & 0x0F) | ((stock & 0xF) << 4)
+    if stage:
+        cur = tiles[off + 9] & 0xFC
+        if stage == 2:
+            cur |= 1
+        elif stage == 3:
+            cur |= 2
+        tiles[off + 9] = cur
+    if market:
+        cur = tiles[off + 9] & 0xF3
+        if market == 8:
+            cur |= 4
+        elif market == 0x0C:
+            cur |= 8
+        tiles[off + 9] = cur
+    return stock
+
+
+def factory_produce_row(
+    tiles: bytearray,
+    y0: int,
+    n: int,
+    *,
+    goods: bytes | bytearray | None = None,
+    labor: int = 0,
+    province_links: int = 0,
+) -> int:
+    """0x41719 factory arm: +3 |= 1 on every 0xFA; 41b33 on origins."""
+    written = 0
+    if len(tiles) < MAP_W * MAP_H * TILE_STRIDE:
+        return 0
+    for y in range(y0, min(MAP_H, y0 + n)):
+        for x in range(MAP_W):
+            off = _off(x, y)
+            if tiles[off] != ID_FACTORY:
+                continue
+            tiles[off + 3] |= 1
+            if tiles[off + 5] & 0xF:
+                continue
+            factory_produce(
+                tiles,
+                x,
+                y,
+                goods=goods,
+                labor=labor,
+                province_links=province_links,
+            )
+            written += 1
+    return written
 
 
 def add_land_value(
@@ -308,8 +545,14 @@ def paint_water_emitter(tiles: bytearray, x: int, y: int) -> int:
     return painted
 
 
-def paint_plus13_water(tiles: bytearray, y0: int, n: int) -> int:
-    """FUN_0003fef7 — river/well/reservoir-small/fountain rings onto +13."""
+def paint_plus13_water(
+    tiles: bytearray, y0: int, n: int, *, water_staffed: bool = True
+) -> int:
+    """FUN_0003fef7 — river/well/reservoir-small/fountain rings onto +13.
+
+    Fountain/bath splash is skipped when water labor is understaffed
+    (0x45069: water_pct ≤ 10 → [0x102724]=0).
+    """
     painted = 0
     for y in range(y0, min(MAP_H, y0 + n)):
         for x in range(MAP_W):
@@ -328,15 +571,289 @@ def paint_plus13_water(tiles: bytearray, y0: int, n: int) -> int:
                     painted += 1
             elif ID_FOUNTAIN_LO <= hid <= ID_FOUNTAIN_HI:
                 # EXE: +13&4 → 0x01 r=6. Dry fountain (no reservoir ring) is silent.
-                if tiles[off + 13] & 0x04:
+                if water_staffed and tiles[off + 13] & 0x04:
                     tile_or_radius(tiles, x, y, FOUNTAIN_SPLASH_R, 13, 0x01)
                     painted += 1
             elif ID_BATH_LO <= hid <= ID_BATH_HI:
-                if (tiles[off + 5] & 0xF) == 0 and _block_and(
-                    tiles, x, y, 2, 13, 0x04
-                ):
-                    tile_or_radius(tiles, x, y, 6, 13, 0x08, extra=1)
-                    painted += 1
+                if water_staffed:
+                    painted += paint_baths_emitter(tiles, x, y)
+    return painted
+
+
+def bath_splash_radius(hid: int) -> int:
+    """FUN_0003fef7: ECX = id − 0xDA → 0xDF…0xE2 = r=5/6/7/8, extra=1."""
+    if not (ID_BATH_LO <= hid <= ID_BATH_HI):
+        return 0
+    return hid - 0xDA
+
+
+def baths_in_reservoir_ring(tiles: bytearray, x: int, y: int) -> bool:
+    """EXE FUN_0006dba2 +13 0x04 over the 2×2 baths footprint."""
+    if _block_and(tiles, x, y, 2, 13, 0x04):
+        return True
+    for dy in range(2):
+        for dx in range(2):
+            if fountain_in_reservoir_ring(tiles, x + dx, y + dy):
+                return True
+    return False
+
+
+def paint_baths_emitter(tiles: bytearray, x: int, y: int) -> int:
+    """Place-time / 0x6E +13 0x08. Needs a charged reservoir ring."""
+    if not _in_map(x, y) or len(tiles) < MAP_W * MAP_H * TILE_STRIDE:
+        return 0
+    off = _off(x, y)
+    if tiles[off + 5] & 0xF:
+        return 0
+    hid = tiles[off]
+    radius = bath_splash_radius(hid)
+    if not radius:
+        return 0
+    if not baths_in_reservoir_ring(tiles, x, y):
+        return 0
+    tile_or_radius(
+        tiles, x, y, radius, 13, BATH_SPLASH_BIT, extra=BATH_SPLASH_EXTRA
+    )
+    return 1
+
+
+def paint_security_emitter(tiles: bytearray, x: int, y: int) -> int:
+    """Place-time / 0x5E prefecture + barracks onto +14 and +10&0x30.
+
+    +17 is the road flood (0xA2), not a building splash.
+    """
+    if not _in_map(x, y) or len(tiles) < MAP_W * MAP_H * TILE_STRIDE:
+        return 0
+    off = _off(x, y)
+    if tiles[off + 5] & 0xF:
+        return 0
+    hid = tiles[off]
+    if hid == ID_PREFECTURE:
+        tile_or_radius(tiles, x, y, PREFECTURE_SPLASH_R, 14, 0x02)
+        tile_or_radius(tiles, x, y, PREFECTURE_SPLASH_R, 10, SECURITY_COV_BITS)
+        return 1
+    if hid == ID_BARRACKS:
+        tile_or_radius(tiles, x, y, BARRACKS_SPLASH_R, 14, 0x01)
+        tile_or_radius(tiles, x, y, BARRACKS_SPLASH_R, 10, SECURITY_COV_BITS)
+        return 1
+    return 0
+
+
+def civic_stamp_origin(
+    tiles: bytearray, x: int, y: int, size: int = CIVIC_COVER_SIZE
+) -> tuple[int, int]:
+    """FUN_00069483: +5 lo-nibble → NW origin of the N×N stamp."""
+    if not _in_map(x, y) or size <= 1:
+        return x, y
+    piece = tiles[_off(x, y) + 5] & 0xF
+    return x - (piece % size), y - (piece // size)
+
+
+def civic_edge_access(
+    tiles: bytearray, x: int, y: int, size: int = CIVIC_COVER_SIZE
+) -> tuple[bool, bool]:
+    """FUN_00044deb (ECX=0): 3×3 rim pad +1&0x20, forum on that pad +10&0x0C.
+
+    Hospital 0xFB / Library 0xF5 only increment the working count when a
+    neighbour road/plaza (FLAG_PAD) also has tax/forum bits.
+    """
+    has_road = False
+    has_forum = False
+    if len(tiles) < MAP_W * MAP_H * TILE_STRIDE:
+        return False, False
+
+    def _look(nx: int, ny: int) -> None:
+        nonlocal has_road, has_forum
+        if not _in_map(nx, ny):
+            return
+        off = _off(nx, ny)
+        if not (tiles[off + 1] & FLAG_PAD):
+            return
+        has_road = True
+        if tiles[off + 10] & FORUM_ACCESS_BITS:
+            has_forum = True
+
+    if y > 0:
+        for i in range(size):
+            _look(x + i, y - 1)
+    if y + size < MAP_H:
+        for i in range(size):
+            _look(x + i, y + size)
+    if x > 0:
+        for i in range(size):
+            _look(x - 1, y + i)
+    if x + size < MAP_W:
+        for i in range(size):
+            _look(x + size, y + i)
+    return has_road, has_forum
+
+
+def civic_working(tiles: bytearray, x: int, y: int, size: int = CIVIC_COVER_SIZE) -> bool:
+    """Road access AND forum access on the same pad neighbour."""
+    _road, forum = civic_edge_access(tiles, x, y, size)
+    return forum
+
+
+def _count_civic_origins(
+    tiles: bytearray, tid: int, *, working: bool = True
+) -> int:
+    n = 0
+    if len(tiles) < MAP_W * MAP_H * TILE_STRIDE:
+        return 0
+    for y in range(MAP_H):
+        for x in range(MAP_W):
+            off = _off(x, y)
+            if tiles[off] != tid:
+                continue
+            if tiles[off + 5] & 0xF:
+                continue
+            if working and not civic_working(tiles, x, y):
+                continue
+            n += 1
+    return n
+
+
+def count_hospitals(tiles: bytearray, *, working: bool = True) -> int:
+    """0xFB origins. FUN_00044d26: raw [0x102868], working [0x10285c] after 0x44deb."""
+    return _count_civic_origins(tiles, ID_HOSPITAL, working=working)
+
+
+def count_libraries(tiles: bytearray, *, working: bool = True) -> int:
+    """0xF5 origins. FUN_00044d54: raw [0x102834], working [0x10286c] after 0x44deb."""
+    return _count_civic_origins(tiles, ID_LIBRARY, working=working)
+
+
+def _cover_percent(n: int, pop: int, unit: int) -> int:
+    """FUN_00045398 / 0x453e5 + 0x28219: 0 if n<=0; 100 if pop<100; else n*unit*100/pop."""
+    if n <= 0:
+        return 0
+    if pop < HOSPITAL_COVER_POP_FULL:
+        return 100
+    cover = (n * unit * 100) // pop
+    return 100 if cover > 100 else cover
+
+
+def hospital_cover_percent(tiles: bytearray, *, population: int | None = None) -> int:
+    """City-wide hospital cover 0…100. No per-tile splash (0x4034b / 0x3fef7).
+
+    Working 0xFB only (road+forum rim). 0x45398: n=0 → 0; pop<100 → 100;
+    else 0x28219(n*1000, pop) = n*1000*100/pop.
+    """
+    n = count_hospitals(tiles, working=True)
+    pop = recount_population(tiles) if population is None else population
+    return _cover_percent(n, pop, HOSPITAL_COVER_UNIT)
+
+
+def library_cover_percent(tiles: bytearray, *, population: int | None = None) -> int:
+    """City-wide library cover 0…100. 0xF5 has no tile_or_radius in 0x4034b.
+
+    Working 0xF5 only (same 0x44deb gate). 0x453e5: n=0 → 0; pop<100 → 100;
+    else 0x28219(n*1200, pop) = n*1200*100/pop.
+    """
+    n = count_libraries(tiles, working=True)
+    pop = recount_population(tiles) if population is None else population
+    return _cover_percent(n, pop, LIBRARY_COVER_UNIT)
+
+
+def tile_maxmerge_plus12(
+    tiles: bytearray,
+    x: int,
+    y: int,
+    radius: int,
+    value: int,
+    mask: int,
+    keep: int,
+    extra: int = 0,
+) -> None:
+    """FUN_0006ce67 — if (tile[+12] & mask) < value: keep | value."""
+    if not tiles or radius < 0:
+        return
+    span = radius + max(0, extra)
+    for ny in range(max(0, y - radius), min(MAP_H, y + span + 1)):
+        for nx in range(max(0, x - radius), min(MAP_W, x + span + 1)):
+            off = _off(nx, ny) + 12
+            if (tiles[off] & mask) < value:
+                tiles[off] = (tiles[off] & keep) | value
+
+
+def paint_education_emitter(tiles: bytearray, x: int, y: int) -> int:
+    """Place-time +13 so Query / Education overlay work before 0x66.
+
+    EXE FUN_0004034b: 0xF3 → +13 0x10 r=6 extra=1; 0xF4 → +13 0x20 r=8 extra=2.
+    0xF5 Library is not in that painter.
+    """
+    if not _in_map(x, y) or len(tiles) < MAP_W * MAP_H * TILE_STRIDE:
+        return 0
+    off = _off(x, y)
+    if tiles[off + 5] & 0xF:
+        return 0
+    hid = tiles[off]
+    if hid == ID_GRAMMATICUS:
+        tile_or_radius(
+            tiles, x, y, GRAMMATICUS_SPLASH_R, 13, EDU_GRAMMATICUS_BIT,
+            extra=GRAMMATICUS_SPLASH_EXTRA,
+        )
+        return 1
+    if hid == ID_RHETOR:
+        tile_or_radius(
+            tiles, x, y, RHETOR_SPLASH_R, 13, EDU_RHETOR_BIT,
+            extra=RHETOR_SPLASH_EXTRA,
+        )
+        return 1
+    return 0
+
+
+def paint_entertainment_emitter(tiles: bytearray, x: int, y: int) -> int:
+    """Place-time +12 so Query / Entert'ment overlay work before 0x66.
+
+    EXE FUN_0004034b → FUN_0006ce67 (EAX extra, ECX radius, origins only).
+    """
+    if not _in_map(x, y) or len(tiles) < MAP_W * MAP_H * TILE_STRIDE:
+        return 0
+    off = _off(x, y)
+    if tiles[off + 5] & 0xF:
+        return 0
+    hid = tiles[off]
+    if hid == ID_THEATER:
+        tile_maxmerge_plus12(tiles, x, y, 9, 1, 0x03, 0xFC, extra=1)
+        tile_maxmerge_plus12(tiles, x, y, 7, 2, 0x03, 0xFC, extra=1)
+        tile_maxmerge_plus12(tiles, x, y, 5, 3, 0x03, 0xFC, extra=1)
+        return 1
+    if hid == ID_ODEUM:
+        tile_maxmerge_plus12(tiles, x, y, 11, 1, 0x03, 0xFC, extra=1)
+        tile_maxmerge_plus12(tiles, x, y, 9, 2, 0x03, 0xFC, extra=1)
+        tile_maxmerge_plus12(tiles, x, y, 7, 3, 0x03, 0xFC, extra=1)
+        return 1
+    if hid == ID_ARENA:
+        tile_maxmerge_plus12(tiles, x, y, 9, 4, 0x0C, 0xF3, extra=2)
+        tile_maxmerge_plus12(tiles, x, y, 7, 8, 0x0C, 0xF3, extra=2)
+        tile_maxmerge_plus12(tiles, x, y, 5, 0x0C, 0x0C, 0xF3, extra=2)
+        return 1
+    if hid == ID_COLISEUM:
+        tile_maxmerge_plus12(tiles, x, y, 11, 4, 0x0C, 0xF3, extra=2)
+        tile_maxmerge_plus12(tiles, x, y, 9, 8, 0x0C, 0xF3, extra=2)
+        tile_maxmerge_plus12(tiles, x, y, 7, 0x0C, 0x0C, 0xF3, extra=2)
+        return 1
+    if ID_CIRCUS_LO <= hid <= ID_CIRCUS_HI:
+        tile_maxmerge_plus12(tiles, x, y, 10, 0x10, 0x30, 0xCF, extra=2)
+        tile_maxmerge_plus12(tiles, x, y, 8, 0x20, 0x30, 0xCF, extra=2)
+        tile_maxmerge_plus12(tiles, x, y, 6, 0x30, 0x30, 0xCF, extra=2)
+        return 1
+    if ID_CMAX_LO <= hid <= ID_CMAX_HI:
+        tile_maxmerge_plus12(tiles, x, y, 12, 0x10, 0x30, 0xCF, extra=3)
+        tile_maxmerge_plus12(tiles, x, y, 10, 0x20, 0x30, 0xCF, extra=3)
+        tile_maxmerge_plus12(tiles, x, y, 8, 0x30, 0x30, 0xCF, extra=3)
+        return 1
+    return 0
+
+
+def paint_plus12_amenities(tiles: bytearray, y0: int, n: int) -> int:
+    """FUN_0004034b — +12 entertainment rings and +13 education splash."""
+    painted = 0
+    for y in range(y0, min(MAP_H, y0 + n)):
+        for x in range(MAP_W):
+            painted += paint_education_emitter(tiles, x, y)
+            painted += paint_entertainment_emitter(tiles, x, y)
     return painted
 
 
@@ -349,14 +866,9 @@ def paint_plus14_security(tiles: bytearray, y0: int, n: int) -> int:
             if tiles[off + 5] & 0xF:
                 continue
             hid = tiles[off]
-            if hid == ID_PREFECTURE:
-                tile_or_radius(tiles, x, y, 2, 14, 0x02)
-                tile_or_radius(tiles, x, y, 2, 10, 0x30)
-                painted += 1
-            elif hid == ID_BARRACKS:
-                tile_or_radius(tiles, x, y, 3, 14, 0x01)
-                tile_or_radius(tiles, x, y, 3, 10, 0x30)
-                painted += 1
+            sec = paint_security_emitter(tiles, x, y)
+            if sec:
+                painted += sec
             elif hid == 0xC0:
                 tile_or_radius(tiles, x, y, 2, 14, 0x04)
                 painted += 1
@@ -435,12 +947,14 @@ def _housing_service_cap(
     tiles: bytearray, x: int, y: int, size: int, population: int
 ) -> tuple[int, str]:
     """FUN_00040d08 housing ladder — first failing gate writes the even cap."""
+    hosp = hospital_cover_percent(tiles, population=population)
+    lib = library_cover_percent(tiles, population=population)
     if not _block_and(tiles, x, y, size, 13, 0x02) and not _block_and(
         tiles, x, y, size, 13, 0x01
     ):
         return 2, "no-water +13&0x01|0x02"
     if not _block_max(tiles, x, y, size, 10, 0x0C):
-        return 6, "no-food +10&0x0C (market trader)"
+        return 6, "no-food +10&0x0C (stocked market trader)"
     if _block_and(tiles, x, y, size, 13, 0x80):
         return 10, "warehouse +13&0x80"
     if not _block_max(tiles, x, y, size, 10, 0xC0):
@@ -456,7 +970,7 @@ def _housing_service_cap(
     ch2 = (_block_max(tiles, x, y, size, 12, 0x30) >> 4) & 3
     ent = ch0 + ch1 + ch2
     if ent == 0:
-        return 20, "no-entertainment +12 (City Only skip 0x66-0x6D)"
+        return 20, "no-entertainment +12"
     if _block_and(tiles, x, y, size, 14, 0x01):
         return 24, "need more entertainment / security"
     road = i8(tiles[_off(x, y) + 17]) > 15
@@ -475,6 +989,8 @@ def _housing_service_cap(
         return 30, "need more entertainment / pop"
     if population < 20:
         return 30, "need pop>=20"
+    if hosp < 20:
+        return 30, "need hospital cover>=20"
     if ent <= 3:
         return 32, "need more entertainment"
     if not _block_and(tiles, x, y, size, 13, 0x10):
@@ -483,6 +999,8 @@ def _housing_service_cap(
         return 34, "need more security"
     if population < 40:
         return 36, "need pop>=40"
+    if hosp < 40:
+        return 36, "need hospital cover>=40"
     if ent <= 4:
         return 38, "need more entertainment"
     if _block_and(tiles, x, y, size, 13, 0x40):
@@ -491,20 +1009,30 @@ def _housing_service_cap(
         return 42, "need more security"
     if population < 60:
         return 44, "need pop>=60"
+    if hosp < 60:
+        return 44, "need hospital cover>=60"
     if ent <= 5:
         return 44, "need more entertainment"
     if not _block_and(tiles, x, y, size, 13, 0x20):
         return 46, "need +13&0x20"
+    if lib < 20:
+        return 46, "need library cover>=20"
     if population < 20:
         return 46, "need pop>=20"
     if ent <= 6:
         return 48, "need more entertainment"
     if population < 40:
         return 50, "need pop>=40"
+    if lib < 40:
+        return 50, "need library cover>=40"
     if population < 80:
         return 52, "need pop>=80"
+    if hosp < 80:
+        return 52, "need hospital cover>=80"
     if population < 60:
         return 54, "need pop>=60"
+    if lib < 60:
+        return 54, "need library cover>=60"
     if ent <= 7:
         return 56, "need more entertainment"
     if population < 100:

@@ -46,6 +46,7 @@ class BootContext:
     audio_status: str
     notes: list[str] = field(default_factory=list)
     start_in_map: bool = False
+    play_audio: bool = True
 
     @property
     def key_ok(self) -> bool:
@@ -92,7 +93,11 @@ def run_boot(
 
     # 4. miles_init @ 0x11758 — not AIL
     audio_status = "audio skipped (--no-audio)"
-    if play_audio:
+    if play_audio and city_only:
+        # City Only opens on the map with Hail. A01.RAW is a boot probe,
+        # not the briefing — playing it here sounds like a promotion sting.
+        audio_status = "advisor audio on (no boot RAW preview)"
+    elif play_audio:
         audio_status = audio.play_raw_preview(game)
     notes.append(audio_status)
 
@@ -181,4 +186,5 @@ def run_boot(
         audio_status=audio_status,
         notes=notes,
         start_in_map=start_in_map,
+        play_audio=play_audio,
     )

@@ -17,7 +17,7 @@ Saves: `20230610.SAV` (OneDrive), Achea, **`findings/D.SAV`**. Parsers: `tools/_
 | `+4` | Sheet cell 0x3E–0x46 (one each per 3×3). Same on Bakery / Winery / Ivory. **Not** the subtype |
 | Overlay | `city_tile_draw_flag80`: frame = `(+19 & 0xF) + 9` on the origin |
 
-`FUN_00041b33` (only from `FUN_00041719`, id `0xFA`, origin tile): `+19 & 0xF` indexes `goods_16x48` at `0xD2B6C` (stride 48). Writes production into **`+9`**, not back into +19.
+`FUN_00041b33` (only from `FUN_00041719`, id `0xFA`, origin tile): `+19 & 0xF` indexes `goods_16x48` at `0xD2B6C` (stride 48). Writes production into **`+9`**, not back into +19. Full rule: §5.
 
 User coords on this save were **`(y,x)`** except Excel **T66 = map (18,64)**.
 
@@ -92,3 +92,29 @@ Yellow `Desconhecido N` on `findings/20230610_grid.xlsx`. User names match the h
 **Yellow leftover on this save: none.** D2–D8 were already named. Well **`0xD7`** and Theater **`0xE5`** closed on **D.SAV** (`findings/sav_d.md`). This 20230610 map still **lacks** Fountain 3rd, Arena, Palatine 1/3, Temple 4 — those ids are **absent**, not unnamed blobs.
 
 This save has no `0xA8`/`0xA9` (Temple 3/4), no `0xB6`–`0xB8` (Palatine 1–3), no `0xE5`/`0xE7`.
+
+---
+
+## 5. Production (`FUN_00041b33` `0x41B33`)
+
+Called from market/factory emit `0x41719` (slots **`0x9A–0x9D`**) on every **origin** (`+5 & 0xF == 0`), **before** the pop≥2 spawn gate. Also `OR +3 bit 1` on every `0xFA` cell.
+
+| Input | VA / field | Role |
+|---|---|---|
+| Goods type | origin `+19 & 0xF` | index into `goods_16x48` |
+| Supplied % | record **+24** `0xD2B84` | cap 0–7; **≤0 → stock 0** |
+| Raw qty | record **+28** `0xD2B88` | cap / labor bump; **≤0 → stock 0** |
+| Labor seed | chunk **140** `[0x102B08]` | min’d with prod, clamp 0–7 → **+9 hi** |
+| Province links | chunk **276** `[0x102714]` | **≤0 cap prod 4** (City Only / no farms) |
+| Houses | `FUN_0006df8d` `0x6DF8D` EAX=2 r=2 | occupancy in 7×7; bumps +9 bits 0–1 → raw prod 0/3/5/7 |
+| Market bits | +9 `& 0x0C` | 0 → cap prod 4 and labor−2 |
+
+**Write:** stock 0–7 into **`+9` hi nibble**. Lo bits are restaged (3→2→1→0 / `0xC`→8→4→0) from the bumped stage. **Does not** decrement the goods table.
+
+Worker type 6 / state 10 (`0x4675C`) calls `0x4A7FF` **EDX=0** and packs scores into **+9 bits 0–3 only**. Hi stock stays.
+
+**No cart / load-to-market walker.** Type 2 traders scan factory splash `+13&0x80`; workers scan market splash `+13&0x40`. Industry tax still needs `+10&0x0C` and reads stock×70.
+
+### City Only / farms
+
+Farms are province. `province_goods_setup` `0x577E4` is skipped. New Game goods table is **zeros** → raw +28 = 0 → **stock 0**. D.SAV chunk 339 has supplied % (40–100) but **+28 = 0** and factory **+9 = 0** — nothing to fall back on. Do **not** invent free goods. Career SAVs (20230610 / FELIPE) already stock +28 in the thousands; load chunk 339 and 41b33 runs as in the EXE.

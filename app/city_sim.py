@@ -1,8 +1,9 @@
 """Host stand-in for city_sim_phase 0x3F60C — one slot per pulse.
 
 Implemented: housing evolve 1–0x50, wipes + paint +13/+14/+15, +17 flood,
-walker emit, wrap → calendar month. City Only stubs (0xC2–0xD1, 0xD3)
-advance the slot with no work — they are not jumped for a fake month.
+walker emit, fire tick / collapse 0x9E–0xA1, wrap → calendar month.
+City Only stubs (0xC2–0xD1, 0xD3) advance the slot with no work — they
+are not jumped for a fake month.
 """
 
 from __future__ import annotations
@@ -28,6 +29,9 @@ from app.city_map import (
     MAP_H,
     MAP_W,
     ROW_STRIDE,
+    SAV_HISTORY_BYTES,
+    SAV_SIZE,
+    SAV_TABLE_BYTES,
     TILE_STRIDE,
     load_chunk_sizes,
     walk_sav_chunks,
@@ -64,7 +68,8 @@ ID_TENT_GRASS = 0x1A  # 42fa4 after grade-0 down
 ADDEND_2X2: tuple[int, ...] = (0, 2, 1, 3)
 ADDEND_3X3: tuple[int, ...] = (0, 2, 5, 1, 4, 7, 3, 6, 8)
 
-# Origin shift for try 0..3 (SE / SW / NW / NE). Same for 2×2 and 3×3.
+# 42e25 ebx try 0..3: SE / SW / NW / NE. Same origin shift for 2×2 and 3×3.
+# pick_block 42bc4 returns try+1; evolve_up decs before stamp.
 TRY_ORIGIN: tuple[tuple[int, int], ...] = ((0, 0), (-1, 0), (-1, -1), (0, -1))
 
 # 0x99B64 — three *other* tiles of the 2×2, relative to firer.
@@ -103,7 +108,7 @@ def slot_name(phase: int) -> str:
     if 0x5E <= phase <= 0x65:
         return f"paint +14 security row {(phase - 0x5E) * 10}"
     if 0x66 <= phase <= 0x6D:
-        return "paint +12 amenities (City Only skip)"
+        return f"paint +12 amenities / +13 education row {(phase - 0x66) * 10}"
     if 0x6E <= phase <= 0x75:
         return f"paint +13 water row {(phase - 0x6E) * 10}"
     if 0x76 <= phase <= 0x7D:
@@ -117,7 +122,7 @@ def slot_name(phase: int) -> str:
     if 0x96 <= phase <= 0x99:
         return f"prefecture/barracks emit row {(phase - 0x96) * 20}"
     if 0x9A <= phase <= 0x9D:
-        return f"market emit row {(phase - 0x9A) * 20}"
+        return f"market/factory emit row {(phase - 0x9A) * 20}"
     if 0x9E <= phase <= 0xA1:
         return "immigrant / rioter 0x41DD4 (City Only skip)"
     if 0xA2 <= phase <= 0xC1:
@@ -151,9 +156,7 @@ def slot_implemented(phase: int) -> bool:
         return True
     if phase == 0x55:
         return True
-    if 0x56 <= phase <= 0x65:
-        return True
-    if 0x6E <= phase <= 0x8D:
+    if 0x56 <= phase <= 0x8D:
         return True
     if 0x8E <= phase <= 0x9D:
         return True
@@ -169,8 +172,6 @@ def slot_implemented(phase: int) -> bool:
 def slot_city_only_skip(phase: int) -> bool:
     """EXE still increments these; City Only has nothing to do."""
     if phase == 0:
-        return True
-    if 0x66 <= phase <= 0x6D:
         return True
     if 0x9E <= phase <= 0xA1:
         return True
@@ -217,6 +218,7 @@ class SimState:
     population: int = 0  # [0x102AB0] — emit needs >= 2
     pop_peak: int = 0  # FAQ latch: unlocks stay after pop drops
     flood_dir: int = 0  # [0x102678] 0…3
+    fire_ignited: int = 0  # one 69A37 per 0x9E–0xA1 pass
     # Forum / PLEBS — chunks 52 / 54 / 55 / 56. Oracle 286–289 + avg 46.
     # New City Only: forum.init_city_only_labor (0x563E2 / 0x346F6 / 0x3FCA0).
     plebs_ready: int = 0
@@ -230,6 +232,9 @@ class SimState:
     tax_wealth: int = 0  # [0x1028EC] market-served housing
     ind_wealth: int = 0  # [0x102934] factory stock×70
     factory_count: int = 0  # 0xFA origins; av-bill stand-in for [0x10279c]
+    goods: bytearray = field(default_factory=lambda: bytearray(768))  # chunk 339
+    factory_labor: int = 0  # chunk 140 [0x102b08] — 41b33 labor seed
+    province_links: int = 0  # chunk 276 [0x102714] — 0 = City Only / no farms
     tribute: int = 0  # chunk 157; City Only stays 0
     tax_ytd: int = 0  # [0x102924] raw pop-tax accumulator
     tax_months: int = 0  # [0x1028E4]
@@ -289,6 +294,19 @@ def _chunk_i32(chunks: Sequence[memoryview], index: int, default: int = 0) -> in
     return struct.unpack_from("<i", chunks[index], 0)[0]
 
 
+def _chunk_u8(chunks: Sequence[memoryview], index: int, default: int = 0) -> int:
+    """SavChunks 16 (skill) and 406 (city_only) are 1 byte in the writer table."""
+    if index >= len(chunks) or len(chunks[index]) < 1:
+        return default
+    return chunks[index][0]
+
+
+def _history_from_sav(data: bytes) -> bytearray:
+    if len(data) >= SAV_SIZE:
+        return bytearray(data[SAV_TABLE_BYTES:SAV_SIZE])
+    return bytearray(SAV_HISTORY_BYTES)
+
+
 def load_sim_from_sav(
     path: Path, sizes: Sequence[int] | None = None, *, game: Path | None = None
 ) -> SimState:
@@ -306,21 +324,32 @@ def load_sim_from_sav(
     if len(chunks) > 28 and len(chunks[28]) >= 4:
         treasury = _chunk_i32(chunks, 28, 0)
     assigned, need = _load_labor_table(chunks)
-    skill = _chunk_i32(chunks, 16, 0)
-    city_only = _chunk_i32(chunks, 406, 0)
+    skill = _chunk_u8(chunks, 16, 0)
+    city_only = _chunk_u8(chunks, 406, 0)
+    goods = bytearray(768)
+    if len(chunks) > 339 and len(chunks[339]) >= 768:
+        goods[:] = chunks[339][:768]
+    labor_index = _chunk_i32(chunks, 416, 0)
+    if labor_index <= 0:
+        labor_index = max(0, min(4, skill)) * 2 + 1
     return SimState(
         phase=phase,
         row=_chunk_i32(chunks, ROW_CHUNK, 0),
         year_raw=_chunk_i32(chunks, YEAR_CHUNK, -300),
         month=month,
         week_gate=_chunk_i32(chunks, WEEK_GATE_CHUNK, 0),
+        wrap3=_chunk_i32(chunks, 405, 0),
+        wrap4=_chunk_i32(chunks, 22, 0),
         source=path.name,
         skill=skill,
         city_only=city_only,
+        pid=_chunk_i32(chunks, 223, 0),
         treasury=treasury,
+        ratings_seed=_chunk_i32(chunks, 341, 0),
         tax_rate=_chunk_i32(chunks, 29, 5),
         industrial_tax=_chunk_i32(chunks, 30, 5),
-        labor_index=max(0, min(4, skill)) * 2 + 1,
+        history=_history_from_sav(data),
+        labor_index=labor_index,
         population=_chunk_i32(chunks, 32, 0),
         employed_pct=_chunk_i32(chunks, 31, 0),
         plebs_ready=_chunk_i32(chunks, 52, 0),
@@ -329,6 +358,9 @@ def load_sim_from_sav(
         welfare=_chunk_i32(chunks, 54, 0),
         labor_assigned=assigned,
         labor_need=need,
+        goods=goods,
+        factory_labor=_chunk_i32(chunks, 140, 0),
+        province_links=_chunk_i32(chunks, 276, 0),
         tribute=0 if city_only else _chunk_i32(chunks, 157, 0),
         surplus_last=_chunk_i32(chunks, 33, 0),
         pop_tax_last=_chunk_i32(chunks, 34, 0),
@@ -688,11 +720,16 @@ def diagnose_hut_insula(tiles: bytearray, *, population: int = 0, limit: int = 4
 
 
 def _phase_wrap(state: SimState) -> bool:
-    """Reset [0x1026A8] after 0xD6 and run calendar_advance 0x3FBCF."""
+    """Reset [0x1026A8] after 0xD6 and run calendar_advance 0x3FBCF + books."""
     state.wrap4 = (state.wrap4 + 1) % 4
     state.wrap3 = (state.wrap3 + 1) % 3
     state.phase = 0
-    return calendar_advance(state)
+    wrapped = calendar_advance(state)
+    if getattr(state, "city_only", 0):
+        from app.forum import apply_month_labor
+
+        apply_month_labor(state)
+    return wrapped
 
 
 def _band10(phase: int, lo: int) -> tuple[int, int]:
@@ -708,6 +745,192 @@ def _band5(phase: int, lo: int) -> tuple[int, int]:
 def _band20(phase: int, lo: int) -> tuple[int, int]:
     start = (phase - lo) * 20
     return start, 20
+
+
+# +3 bit7 + +16 countdown. Ignite 0x69A37 writes 10; overlay 0x3E8A2
+# paints +11 bits 4–5 (0x10/0x20/0x30). 445AF ignites when those bits
+# are 0x30. Collapse to host rubble 0x05 (Clear); leftover bit7 so
+# vigile state 9 can seek id<8 fires (4A716 / 4A57F).
+ID_RUBBLE = 0x05
+DRAW_FIRE = 0x80
+FIRE_TIMER_IGNITE = 10
+
+
+def tile_ignite(tiles: bytearray, off: int) -> None:
+    """FUN_00069a37: +11 &= 0xC0, +3 |= 0x81, +16 = 10."""
+    if off < 0 or off + 16 >= len(tiles):
+        return
+    tiles[off + 11] &= 0xC0
+    tiles[off + 3] = (tiles[off + 3] | 0x81) & 0xFF
+    tiles[off + 16] = FIRE_TIMER_IGNITE
+
+
+def _housing_footprint(tiles: bytearray, x: int, y: int) -> list[tuple[int, int]]:
+    """Origin from +5 lo-nibble; size from HOUSE_SIZE[grade]."""
+    if not _in_map(x, y):
+        return []
+    off = _off(x, y)
+    tid = tiles[off]
+    if tid < ID_HOUSING_LO or tid > ID_HOUSING_HI:
+        return [(x, y)]
+    grade = tid - ID_HOUSING_LO
+    size = HOUSE_SIZE[grade] if grade < len(HOUSE_SIZE) else 1
+    if size <= 1:
+        return [(x, y)]
+    piece = tiles[off + 5] & 0xF
+    col = piece % size
+    row = piece // size
+    ox, oy = x - col, y - row
+    cells = []
+    for dy in range(size):
+        for dx in range(size):
+            if _in_map(ox + dx, oy + dy):
+                cells.append((ox + dx, oy + dy))
+    return cells or [(x, y)]
+
+
+def tile_ignite_building(tiles: bytearray, x: int, y: int) -> int:
+    """693BB / 69408: ignite the housing footprint."""
+    n = 0
+    for cx, cy in _housing_footprint(tiles, x, y):
+        tile_ignite(tiles, _off(cx, cy))
+        n += 1
+    return n
+
+
+def tile_collapse_rubble(
+    tiles: bytearray, x: int, y: int, *, leave_fire: bool = True
+) -> int:
+    """691C4 / 696E8 host: whole footprint → rubble 0x05.
+
+    EXE 696E8 writes rng>>1 terrain. Host Clear / this pass stay on 0x05.
+    leave_fire keeps +3 bit7 and +16 so vigiles can seek id<8.
+    """
+    n = 0
+    for cx, cy in _housing_footprint(tiles, x, y):
+        off = _off(cx, cy)
+        tiles[off] = ID_RUBBLE
+        tiles[off + 1] &= 0x18
+        tiles[off + 4] = 0
+        tiles[off + 5] = 0
+        tiles[off + 9] = 0
+        tiles[off + 10] = 0
+        tiles[off + 11] &= 0xC0
+        if leave_fire:
+            tiles[off + 3] = (tiles[off + 3] | 0x81) & 0xFF
+            tiles[off + 16] = FIRE_TIMER_IGNITE
+        else:
+            tiles[off + 3] = (tiles[off + 3] & 0x7F) | 0x01
+            tiles[off + 16] = 0
+        n += 1
+    return n
+
+
+def _fire_neighbor(x: int, y: int, facing: int) -> tuple[int, int] | None:
+    if facing == 0:
+        nx, ny = x, y - 1
+    elif facing == 2:
+        nx, ny = x + 1, y
+    elif facing == 4:
+        nx, ny = x, y + 1
+    elif facing == 6:
+        nx, ny = x - 1, y
+    else:
+        return None
+    if not _in_map(nx, ny):
+        return None
+    return nx, ny
+
+
+def fire_spread_housing(tiles: bytearray, x: int, y: int, facing: int) -> int:
+    """FUN_00069334: ignite neighbor housing if that tile’s bit7 is clear."""
+    nb = _fire_neighbor(x, y, facing)
+    if nb is None:
+        return 0
+    nx, ny = nb
+    off = _off(nx, ny)
+    tid = tiles[off]
+    if tid < ID_HOUSING_LO or tid > ID_HOUSING_HI:
+        return 0
+    if tiles[off + 3] & DRAW_FIRE:
+        return 0
+    return tile_ignite_building(tiles, nx, ny)
+
+
+def _raise_fire_risk(tiles: bytearray, off: int) -> int:
+    """+11 bits 4–5: 0 → 0x10 → 0x20 → 0x30 (overlay 0x3E8A2)."""
+    bits = tiles[off + 11] & 0x30
+    if bits >= 0x30:
+        return 0x30
+    nxt = 0x10 if bits == 0 else 0x20 if bits == 0x10 else 0x30
+    tiles[off + 11] = (tiles[off + 11] & 0xCF) | nxt
+    return nxt
+
+
+def _lower_fire_risk(tiles: bytearray, off: int) -> int:
+    bits = tiles[off + 11] & 0x30
+    if bits == 0:
+        return 0
+    nxt = 0x20 if bits == 0x30 else 0x10 if bits == 0x20 else 0
+    tiles[off + 11] = (tiles[off + 11] & 0xCF) | nxt
+    return nxt
+
+
+def fire_tick_rows(
+    tiles: bytearray,
+    y0: int,
+    n: int,
+    state: SimState | None = None,
+) -> tuple[int, int, int]:
+    """41DD4 fire slice (City Only: skip immigrant / rioter spawn).
+
+    Returns (decremented, collapsed, ignited).
+    """
+    if state is not None and y0 == 0:
+        state.fire_ignited = 0
+    dec = col = ign = 0
+    y1 = min(MAP_H, y0 + n)
+    for y in range(y0, y1):
+        for x in range(MAP_W):
+            off = _off(x, y)
+            tid = tiles[off]
+            on_fire = bool(tiles[off + 3] & DRAW_FIRE)
+            if on_fire:
+                timer = tiles[off + 16]
+                nxt = (timer - 1) & 0xFF
+                tiles[off + 16] = nxt
+                dec += 1
+                if tid < 8:
+                    if nxt == 0:
+                        tiles[off + 3] &= 0x7F
+                    else:
+                        fire_spread_housing(
+                            tiles, x, y, (0, 2, 4, 6)[(x + y) & 3]
+                        )
+                    continue
+                if ID_HOUSING_LO <= tid <= ID_HOUSING_HI:
+                    tiles[off + 11] &= 0xCF
+                    if nxt == 0:
+                        col += tile_collapse_rubble(tiles, x, y, leave_fire=True)
+                    elif nxt != 9:
+                        fire_spread_housing(
+                            tiles, x, y, (0, 2, 4, 6)[(x + y) & 3]
+                        )
+                continue
+            if not (ID_HOUSING_LO <= tid <= ID_HOUSING_HI):
+                continue
+            if tiles[off + 5] & 0xF:
+                continue
+            covered = bool(tiles[off + 10] & 0x30)
+            if covered:
+                _lower_fire_risk(tiles, off)
+                continue
+            risk = _raise_fire_risk(tiles, off)
+            if risk == 0x30 and (state is None or state.fire_ignited == 0):
+                ign += tile_ignite_building(tiles, x, y)
+                if state is not None:
+                    state.fire_ignited = 1
+    return dec, col, ign
 
 
 def _walker_live_count(walkers) -> int:
@@ -770,6 +993,7 @@ def city_sim_phase(
         cap_housing_plus15,
         flood_plus17,
         paint_land_value,
+        paint_plus12_amenities,
         paint_plus13_buildings,
         paint_plus13_water,
         paint_plus14_security,
@@ -829,11 +1053,24 @@ def city_sim_phase(
         state.row = y0
         painted = paint_plus14_security(tiles, y0, n)
         note = f"written={painted}"
+    elif 0x66 <= phase <= 0x6D and can:
+        y0, n = _band10(phase, 0x66)
+        state.row = y0
+        painted = paint_plus12_amenities(tiles, y0, n)
+        note = f"amenity-splash={painted}"
     elif 0x6E <= phase <= 0x75 and can:
         y0, n = _band10(phase, 0x6E)
         state.row = y0
-        painted = paint_plus13_water(tiles, y0, n)
+        from app.forum import labor_shutoff, refresh_labor_need
+
+        refresh_labor_need(state, tiles)
+        shut = labor_shutoff(state)
+        painted = paint_plus13_water(
+            tiles, y0, n, water_staffed="water" not in shut
+        )
         note = f"water-splash={painted}"
+        if "water" in shut:
+            note += " understaffed"
     elif 0x76 <= phase <= 0x7D and can:
         y0, n = _band10(phase, 0x76)
         state.row = y0
@@ -861,10 +1098,30 @@ def city_sim_phase(
             kinds = "security"
         else:
             kinds = "market"
+        from app.forum import labor_shutoff, refresh_labor_need
+
+        refresh_labor_need(state, tiles)
+        shut = labor_shutoff(state)
         spawned = emit_walkers(
-            tiles, walkers, y0, n, population=state.population, kinds=kinds
+            tiles,
+            walkers,
+            y0,
+            n,
+            population=state.population,
+            kinds=kinds,
+            wrap4=state.wrap4,
+            goods=state.goods,
+            factory_labor=state.factory_labor,
+            province_links=state.province_links,
+            shutoff=shut,
         )
         note = wt.LAST_EMIT_NOTE or f"pop={state.population}"
+    elif 0x9E <= phase <= 0xA1 and can:
+        y0, n = _band20(phase, 0x9E)
+        state.row = y0
+        dec, col, ign = fire_tick_rows(tiles, y0, n, state)
+        painted = dec + col + ign
+        note = f"fire --={dec} collapse={col} ignite={ign}"
     elif 0xA2 <= phase <= 0xC1 and can:
         slot = phase - 0xA2
         state.flood_dir = slot // 8
@@ -888,6 +1145,8 @@ def city_sim_phase(
         log_this = True
     elif 0x8E <= phase <= 0x9D and note and "civic=0" not in note:
         log_this = True
+    elif 0x9E <= phase <= 0xA1 and painted:
+        log_this = True
     elif phase == 0xD2 and "walkers=0" not in note:
         log_this = True
     log_line = ""
@@ -907,6 +1166,12 @@ def city_sim_phase(
 
     state.phase = phase + 1
     if state.phase > PHASE_MAX:
+        if can:
+            from app.city_paint import housing_tax_wealth, industry_tax_wealth
+
+            state.tax_wealth = housing_tax_wealth(tiles)
+            state.ind_wealth = industry_tax_wealth(tiles)
+        treas_before = int(state.treasury)
         wrapped = _phase_wrap(state)
         if not log_this:
             _log_phase(
@@ -929,20 +1194,36 @@ def city_sim_phase(
         ) or "none"
         write(
             f"{state.date_label}  WRAP  pop={state.population}  "
-            f"houses={{{house_bits}}}  walkers={_walker_live_count(walkers)}"
+            f"houses={{{house_bits}}}  walkers={_walker_live_count(walkers)}  "
+            f"treas={state.treasury} d={state.treasury - treas_before}"
         )
         if can:
-            from app.city_paint import housing_tax_wealth, industry_tax_wealth
+            from app.forum import refresh_labor_need
 
-            state.tax_wealth = housing_tax_wealth(tiles)
-            state.ind_wealth = industry_tax_wealth(tiles)
+            refresh_labor_need(state, tiles)
             for line in diagnose_hut_insula(
                 tiles, population=state.population, limit=4
             ):
                 write(f"{state.date_label}  {line}")
-        from app.forum import collect_monthly_tax
 
-        collect_monthly_tax(state)
+    if getattr(state, "city_only", 0) and can:
+        from app.messages import scan_city_messages
+
+        ign = 0
+        if 0x9E <= phase <= 0xA1:
+            ign = int(getattr(state, "fire_ignited", 0))
+            if "ignite=" in note:
+                try:
+                    ign = max(ign, int(note.split("ignite=", 1)[1].split()[0]))
+                except ValueError:
+                    pass
+        scan_city_messages(
+            state,
+            tiles,
+            houses_up=up,
+            month_wrapped=wrapped,
+            fire_ignited=ign,
+        )
 
     return PhaseResult(
         phase=phase,
@@ -1023,7 +1304,7 @@ def slot_table_rows() -> list[tuple[str, str, str]]:
         ("0x55", slot_name(0x55), "Y"),
         ("0x56–0x5D", slot_name(0x56), "Y"),
         ("0x5E–0x65", slot_name(0x5E), "Y"),
-        ("0x66–0x6D", slot_name(0x66), "N"),
+        ("0x66–0x6D", slot_name(0x66), "Y"),
         ("0x6E–0x75", slot_name(0x6E), "Y"),
         ("0x76–0x7D", slot_name(0x76), "Y"),
         ("0x7E–0x8D", slot_name(0x7E), "Y"),
@@ -1031,7 +1312,7 @@ def slot_table_rows() -> list[tuple[str, str, str]]:
         ("0x92–0x95", slot_name(0x92), "Y"),
         ("0x96–0x99", slot_name(0x96), "Y"),
         ("0x9A–0x9D", slot_name(0x9A), "Y"),
-        ("0x9E–0xA1", slot_name(0x9E), "N"),
+        ("0x9E–0xA1", slot_name(0x9E), "Y"),
         ("0xA2–0xC1", slot_name(0xA2), "Y"),
         ("0xC2–0xC9", slot_name(0xC2), "N"),
         ("0xCA", slot_name(0xCA), "N"),
@@ -1115,6 +1396,201 @@ def selftest() -> list[str]:
     ok = ids == [0xA0] * 9 and piece == list(range(9)) and m == 1
     lines.append(
         f"palace SE merge 0x9F->0xA0: {'ok' if ok else 'FAIL'} ids={ids[:3]}.. +5={piece} m={m}"
+    )
+
+    def _house(
+        tiles: bytearray,
+        x: int,
+        y: int,
+        hid: int,
+        *,
+        lv: int = 0,
+        flags: int = 1,
+        piece: int = 0,
+        w7: int = 0,
+        w8: int = 0,
+    ) -> None:
+        off = _off(x, y)
+        tiles[off] = hid
+        tiles[off + 1] = flags
+        tiles[off + 5] = piece
+        tiles[off + 7] = w7
+        tiles[off + 8] = w8
+        tiles[off + 15] = lv & 0xFF
+
+    def _block_ids(tiles: bytearray, ox: int, oy: int, n: int) -> list[int]:
+        return [tiles[_off(ox + dx, oy + dy)] for dy in range(n) for dx in range(n)]
+
+    def _block_piece(tiles: bytearray, ox: int, oy: int, n: int) -> list[int]:
+        return [tiles[_off(ox + dx, oy + dy) + 5] & 0xF for dy in range(n) for dx in range(n)]
+
+    tiles = _blank_tiles()
+    for dx, dy in ((0, 0), (1, 0), (0, 1), (1, 1)):
+        _house(tiles, 30 + dx, 20 + dy, ID_GRAND_DOMUS, lv=60)
+    u, d, m = evolve_row(tiles, 20, decay=False)
+    ids = _block_ids(tiles, 30, 20, 2)
+    piece = _block_piece(tiles, 30, 20, 2)
+    ok = ids == [0x9C] * 4 and piece == [0, 1, 2, 3] and m == 1 and u == 1
+    lines.append(
+        f"villa 4-house SE 0x9B->0x9C: {'ok' if ok else 'FAIL'} "
+        f"ids={ids} +5={piece} m={m} u={u}"
+    )
+
+    tiles = _blank_tiles()
+    _house(tiles, 21, 20, ID_GRAND_DOMUS, lv=60)
+    tiles[_off(22, 20) + 1] = 0x20
+    tiles[_off(22, 20)] = 0x52
+    u, d, m = evolve_row(tiles, 20, decay=False)
+    ids = _block_ids(tiles, 20, 20, 2)
+    piece = _block_piece(tiles, 20, 20, 2)
+    ok = ids == [0x9C] * 4 and piece == [0, 1, 2, 3] and m == 1
+    lines.append(
+        f"villa SW merge (SE road): {'ok' if ok else 'FAIL'} "
+        f"ids={ids} +5={piece} m={m}"
+    )
+
+    tiles = _blank_tiles()
+    _house(tiles, 21, 21, ID_GRAND_DOMUS, lv=60)
+    tiles[_off(22, 21)] = 0x52
+    tiles[_off(22, 21) + 1] = 0x20
+    tiles[_off(21, 22)] = 0x52
+    tiles[_off(21, 22) + 1] = 0x20
+    u, d, m = evolve_row(tiles, 21, decay=False)
+    ids = _block_ids(tiles, 20, 20, 2)
+    piece = _block_piece(tiles, 20, 20, 2)
+    ok = ids == [0x9C] * 4 and piece == [0, 1, 2, 3] and m == 1
+    lines.append(
+        f"villa NW merge (SE+SW road): {'ok' if ok else 'FAIL'} "
+        f"ids={ids} +5={piece} m={m}"
+    )
+
+    tiles = _blank_tiles()
+    _house(tiles, 20, 21, ID_GRAND_DOMUS, lv=60)
+    tiles[_off(21, 22)] = 0x52
+    tiles[_off(21, 22) + 1] = 0x20
+    tiles[_off(19, 22)] = 0x52
+    tiles[_off(19, 22) + 1] = 0x20
+    tiles[_off(19, 20)] = 0x52
+    tiles[_off(19, 20) + 1] = 0x20
+    u, d, m = evolve_row(tiles, 21, decay=False)
+    ids = _block_ids(tiles, 20, 20, 2)
+    piece = _block_piece(tiles, 20, 20, 2)
+    ok = ids == [0x9C] * 4 and piece == [0, 1, 2, 3] and m == 1
+    lines.append(
+        f"villa NE merge (SE+SW+NW road): {'ok' if ok else 'FAIL'} "
+        f"ids={ids} +5={piece} m={m}"
+    )
+
+    tiles = _blank_tiles()
+    _house(tiles, 20, 20, ID_GRAND_DOMUS, lv=52)
+    u, d, m = evolve_row(tiles, 20, decay=False)
+    ok = tiles[_off(20, 20)] == ID_GRAND_DOMUS and m == 0 and u == 0
+    lines.append(
+        f"villa stay +15=52 no merge: {'ok' if ok else 'FAIL'} "
+        f"id={tiles[_off(20, 20)]:#x} m={m}"
+    )
+
+    tiles = _blank_tiles()
+    _house(tiles, 21, 20, ID_GRAND_DOMUS, lv=60)
+    tiles[_off(22, 20) + 7] = 1
+    u, d, m = evolve_row(tiles, 20, decay=False)
+    ids = _block_ids(tiles, 20, 20, 2)
+    piece = _block_piece(tiles, 20, 20, 2)
+    ok = ids == [0x9C] * 4 and piece == [0, 1, 2, 3] and m == 1
+    lines.append(
+        f"villa SW after SE walker: {'ok' if ok else 'FAIL'} "
+        f"ids={ids} +5={piece} m={m}"
+    )
+
+    tiles = _blank_tiles()
+    _house(tiles, 0, 10, ID_GRAND_DOMUS, lv=60)
+    u, d, m = evolve_row(tiles, 10, decay=False)
+    ok = tiles[_off(0, 10)] == ID_GRAND_DOMUS and m == 0
+    lines.append(
+        f"villa edge x=0 no merge: {'ok' if ok else 'FAIL'} "
+        f"id={tiles[_off(0, 10)]:#x} m={m}"
+    )
+
+    tiles = _blank_tiles()
+    for dx, dy in ((0, 0), (1, 0), (0, 1), (1, 1)):
+        _house(tiles, 30 + dx, 10 + dy, 0x89, lv=20)
+    u, d, m = evolve_row(tiles, 10, decay=False)
+    ids = _block_ids(tiles, 30, 10, 2)
+    ok = ids == [0x8A, 0x8A, 0x89, 0x89] and m == 0 and u == 2
+    lines.append(
+        f"four 0x89 stay 1x1 (no villa): {'ok' if ok else 'FAIL'} "
+        f"ids={[hex(v) for v in ids]} m={m} u={u}"
+    )
+
+    tiles = _blank_tiles()
+    for dy in range(2):
+        for dx in range(2):
+            _house(tiles, 21 + dx, 20 + dy, 0x9F, lv=64, piece=dy * 2 + dx)
+    tiles[_off(23, 20)] = 0x52
+    tiles[_off(23, 20) + 1] = 0x20
+    u, d, m = evolve_row(tiles, 20, decay=False)
+    ids = _block_ids(tiles, 20, 20, 3)
+    piece = _block_piece(tiles, 20, 20, 3)
+    ok = ids == [0xA0] * 9 and piece == list(range(9)) and m == 1
+    lines.append(
+        f"palace SW merge (SE road): {'ok' if ok else 'FAIL'} "
+        f"ids={ids[:3]}.. +5={piece} m={m}"
+    )
+
+    tiles = _blank_tiles()
+    for dy in range(2):
+        for dx in range(2):
+            _house(tiles, 20 + dx, 20 + dy, 0x9F, lv=64, piece=dy * 2 + dx)
+    for dy in range(2):
+        for dx in range(2):
+            _house(
+                tiles, 22 + dx, 20 + dy, 0x9D, lv=51, piece=dy * 2 + dx
+            )
+    u, d, m = evolve_row(tiles, 20, decay=False)
+    ids = _block_ids(tiles, 20, 20, 3)
+    piece = _block_piece(tiles, 20, 20, 3)
+    leftover = tiles[_off(23, 20)]
+    ok = (
+        ids == [0xA0] * 9
+        and piece == list(range(9))
+        and leftover == ID_GRAND_DOMUS
+        and m == 1
+    )
+    lines.append(
+        f"palace SE splits overlapping villa: {'ok' if ok else 'FAIL'} "
+        f"ids={ids[:3]}.. leftover={leftover:#x} m={m}"
+    )
+
+    from app.city_map import CityMap
+    from app.place import ID_RUBBLE, TOOL_CLEAR, try_place
+
+    tiles = _blank_tiles()
+    for dx, dy in ((0, 0), (1, 0), (0, 1), (1, 1)):
+        _house(tiles, 40 + dx, 40 + dy, ID_GRAND_DOMUS, lv=60)
+    evolve_row(tiles, 40, decay=False)
+    city = CityMap()
+    city.tiles[:] = tiles
+    r = try_place(city, 41, 41, TOOL_CLEAR, SimState(treasury=100))
+    rubble = [city.tiles[city.offset(40 + dx, 40 + dy)] for dy in range(2) for dx in range(2)]
+    ok = r.ok and rubble == [ID_RUBBLE] * 4
+    lines.append(
+        f"Clear N×N after villa merge: {'ok' if ok else 'FAIL'} "
+        f"{r.message} ids={[hex(v) for v in rubble]}"
+    )
+
+    tiles = _blank_tiles()
+    for dy in range(2):
+        for dx in range(2):
+            _house(tiles, 50 + dx, 50 + dy, 0x9F, lv=64, piece=dy * 2 + dx)
+    evolve_row(tiles, 50, decay=False)
+    city = CityMap()
+    city.tiles[:] = tiles
+    r = try_place(city, 52, 52, TOOL_CLEAR, SimState(treasury=100))
+    rubble = [city.tiles[city.offset(50 + dx, 50 + dy)] for dy in range(3) for dx in range(3)]
+    ok = r.ok and rubble == [ID_RUBBLE] * 9
+    lines.append(
+        f"Clear N×N after palace merge: {'ok' if ok else 'FAIL'} "
+        f"{r.message} ids={[hex(v) for v in rubble]}"
     )
 
     tiles = _blank_tiles()
@@ -1220,7 +1696,14 @@ def selftest() -> list[str]:
         f"phase={state.phase:#x} +13={tiles[_off(4, 4) + 13]}"
     )
 
-    from app.city_paint import paint_plus13_buildings, paint_plus13_water
+    from app.city_paint import (
+        EDU_GRAMMATICUS_BIT,
+        EDU_RHETOR_BIT,
+        GRAMMATICUS_SPLASH_R,
+        paint_plus12_amenities,
+        paint_plus13_buildings,
+        paint_plus13_water,
+    )
 
     tiles = _blank_tiles()
     off = _off(10, 10)
@@ -1238,6 +1721,118 @@ def selftest() -> list[str]:
     lines.append(
         f"reservoir +13 0x04 / fountain +13 0x01: {'ok' if ok else 'FAIL'} "
         f"ring={ring:#x} splash={splash:#x}"
+    )
+
+    tiles = _blank_tiles()
+    goff = _off(40, 20)
+    tiles[goff] = 0xF3
+    tiles[goff + 5] = 0
+    hoff = _off(42, 20)
+    tiles[hoff] = 0x83
+    paint_plus12_amenities(tiles, 20, 1)
+    gram = tiles[hoff + 13] & EDU_GRAMMATICUS_BIT
+    far = _off(40 + GRAMMATICUS_SPLASH_R + 2, 20)
+    tiles[far] = 0x83
+    paint_plus12_amenities(tiles, 20, 1)
+    far_bit = tiles[far + 13] & EDU_GRAMMATICUS_BIT
+    ok = gram == EDU_GRAMMATICUS_BIT and far_bit == 0
+    lines.append(
+        f"grammaticus +13 0x10 r=6 extra=1: {'ok' if ok else 'FAIL'} "
+        f"adj={gram:#x} far={far_bit:#x}"
+    )
+
+    tiles = _blank_tiles()
+    roff = _off(30, 30)
+    tiles[roff] = 0xF4
+    tiles[_off(32, 32)] = 0x83
+    paint_plus12_amenities(tiles, 30, 1)
+    rhe = tiles[_off(32, 32) + 13] & EDU_RHETOR_BIT
+    ok = rhe == EDU_RHETOR_BIT
+    lines.append(
+        f"rhetor +13 0x20 r=8 extra=2: {'ok' if ok else 'FAIL'} bit={rhe:#x}"
+    )
+
+    tiles = _blank_tiles()
+    tiles[_off(10, 5)] = 0xF3
+    tiles[_off(12, 5)] = 0x83
+    tiles[_off(12, 5) + 13] = EDU_GRAMMATICUS_BIT
+    wipe_state = SimState(phase=0x51, year_raw=-300, month=0)
+    city_sim_clock_pulse(tiles, wipe_state)
+    wiped = tiles[_off(12, 5) + 13]
+    wipe_state.phase = 0x66
+    city_sim_clock_pulse(tiles, wipe_state)
+    restored = tiles[_off(12, 5) + 13] & EDU_GRAMMATICUS_BIT
+    ok = wiped == 0 and restored == EDU_GRAMMATICUS_BIT
+    lines.append(
+        f"0x51 wipe + 0x66 education restore: {'ok' if ok else 'FAIL'} "
+        f"wiped={wiped:#x} rest={restored:#x}"
+    )
+
+    tiles = _blank_tiles()
+    tiles[_off(10, 5)] = 0xE5
+    tiles[_off(12, 5)] = 0x83
+    paint_plus12_amenities(tiles, 5, 1)
+    near = tiles[_off(12, 5) + 12] & 0x03
+    ok = near == 3
+    lines.append(
+        f"theater +12 bits 0-1 r=5 extra=1: {'ok' if ok else 'FAIL'} +12={near}"
+    )
+    wipe_state = SimState(phase=0x54, year_raw=-300, month=0)
+    city_sim_clock_pulse(tiles, wipe_state)
+    wiped = tiles[_off(12, 5) + 12]
+    wipe_state.phase = 0x66
+    city_sim_clock_pulse(tiles, wipe_state)
+    restored = tiles[_off(12, 5) + 12] & 0x03
+    ok = wiped == 0 and restored == 3
+    lines.append(
+        f"0x54 wipe + 0x66 entertainment restore: {'ok' if ok else 'FAIL'} "
+        f"wiped={wiped:#x} rest={restored:#x}"
+    )
+
+    tiles = _blank_tiles()
+    tiles[_off(10, 8)] = 0xBE
+    tiles[_off(10, 8) + 10] = 3
+    tiles[_off(10, 8) + 13] = 4
+    tiles[_off(12, 8)] = 0xDF
+    tiles[_off(12, 8) + 5] = 0
+    tiles[_off(12, 8) + 13] = 4
+    tiles[_off(14, 8)] = 0x83
+    from app.city_paint import BATH_SPLASH_BIT, paint_plus13_water, paint_plus14_security
+
+    paint_plus13_water(tiles, 8, 1)
+    bath = tiles[_off(14, 8) + 13] & BATH_SPLASH_BIT
+    ok = bath == BATH_SPLASH_BIT
+    lines.append(
+        f"baths +13 0x08 r=5 extra=1: {'ok' if ok else 'FAIL'} bit={bath:#x}"
+    )
+    wipe_state = SimState(
+        phase=0x51,
+        year_raw=-300,
+        month=0,
+        plebs_ready=42,
+        labor_assigned=[20, 12, 4, 4, 0, 0, 0],
+    )
+    city_sim_clock_pulse(tiles, wipe_state)
+    wiped = tiles[_off(14, 8) + 13]
+    tiles[_off(10, 8) + 13] = 4
+    tiles[_off(12, 8) + 13] = 4
+    wipe_state.phase = 0x6E
+    city_sim_clock_pulse(tiles, wipe_state)
+    restored = tiles[_off(14, 8) + 13] & BATH_SPLASH_BIT
+    ok = wiped == 0 and restored == BATH_SPLASH_BIT
+    lines.append(
+        f"0x51 wipe + 0x6E baths restore: {'ok' if ok else 'FAIL'} "
+        f"wiped={wiped:#x} rest={restored:#x}"
+    )
+
+    tiles = _blank_tiles()
+    tiles[_off(20, 10)] = 0xE3
+    tiles[_off(21, 10)] = 0x83
+    paint_plus14_security(tiles, 10, 1)
+    sec10 = tiles[_off(21, 10) + 10] & 0x30
+    ok = sec10 == 0x30
+    lines.append(
+        f"prefecture +10 0x30 r=2: {'ok' if ok else 'FAIL'} +10={sec10:#x}"
     )
 
     tiles = _blank_tiles()
@@ -1384,6 +1979,32 @@ def selftest() -> list[str]:
     )
 
     tiles = _blank_tiles()
+    for dy in range(2):
+        for dx in range(2):
+            foff = _off(20 + dx, 20 + dy)
+            tiles[foff] = 0xAF
+            tiles[foff + 1] = 0x01
+            tiles[foff + 5] = dy * 2 + dx
+    tiles[_off(20, 19)] = 0x52
+    tiles[_off(20, 19) + 1] = 0x20
+    walkers = []
+    nsp = emit_walkers(
+        tiles,
+        walkers,
+        20,
+        3,
+        population=4,
+        kinds="forum",
+        shutoff=frozenset({"forum"}),
+    )
+    wait = tiles[_off(20, 20) + 6] & 0x0F
+    ok = nsp == 0 and wait > 0
+    lines.append(
+        f"understaffed forum emit off: {'ok' if ok else 'FAIL'} "
+        f"n={nsp} wait={wait}"
+    )
+
+    tiles = _blank_tiles()
     toff = _off(8, 9)
     tiles[toff] = 0x82
     tiles[toff + 1] = 0x01
@@ -1439,6 +2060,54 @@ def selftest() -> list[str]:
         f"id={tiles[toff]:#x} +15={tiles[toff + 15]} {reason}"
     )
 
+    from app.city_paint import factory_produce, GOODS_RAW, GOODS_SUPPLIED
+    from app.walker_tick import pack_home_plus9
+
+    fac = _blank_tiles()
+    foff = _off(10, 10)
+    fac[foff] = 0xFA
+    fac[foff + 9] = 0x03
+    fac[foff + 19] = 0
+    zero = factory_produce(fac, 10, 10)
+    ok = zero == 0 and (fac[foff + 9] & 0xF0) == 0
+    lines.append(
+        f"City Only no raw → stock 0: {'ok' if ok else 'FAIL'} "
+        f"stock={zero} +9={fac[foff + 9]:#04x}"
+    )
+
+    d_like = bytearray(768)
+    struct.pack_into("<i", d_like, GOODS_SUPPLIED, 100)
+    fac[foff + 9] = 0x03
+    d_stock = factory_produce(fac, 10, 10, goods=d_like, labor=4, province_links=3)
+    ok = d_stock == 0 and (fac[foff + 9] & 0xF0) == 0
+    lines.append(
+        f"D.SAV pct-only +28=0 → stock 0: {'ok' if ok else 'FAIL'} stock={d_stock}"
+    )
+
+    live = bytearray(768)
+    struct.pack_into("<i", live, GOODS_SUPPLIED, 100)
+    struct.pack_into("<i", live, GOODS_RAW, 3000)
+    fac[foff + 9] = 0x0F  # stage 3 + market 0xC
+    live_stock = factory_produce(
+        fac, 10, 10, goods=live, labor=4, province_links=3
+    )
+    ok = live_stock == 7 and (fac[foff + 9] & 0xF0) == 0x70
+    lines.append(
+        f"career raw+supplied → stock 7: {'ok' if ok else 'FAIL'} "
+        f"stock={live_stock} +9={fac[foff + 9]:#04x}"
+    )
+
+    packed = _blank_tiles()
+    poff = _off(4, 4)
+    packed[poff] = 0xFA
+    packed[poff + 9] = 0x70  # stock 7
+    pack_home_plus9(packed, poff, 9, 9)
+    ok = (packed[poff + 9] & 0xF0) == 0x70 and (packed[poff + 9] & 0x0F) == 0x0F
+    lines.append(
+        f"worker pack keeps stock hi: {'ok' if ok else 'FAIL'} "
+        f"+9={packed[poff + 9]:#04x}"
+    )
+
     from app.walker_tick import selftest as walker_selftest
     from app.walker_quotes import selftest as quote_selftest
 
@@ -1484,4 +2153,144 @@ def selftest() -> list[str]:
     lines.append(
         f"M on_month_step City Only: {'ok' if ok else 'FAIL'} {state.date_label}"
     )
+
+    from app.forum import monthly_pop_tax_raw, ytd_tax_dn
+
+    tiles = _blank_tiles()
+    wrap = SimState(
+        phase=PHASE_MAX,
+        year_raw=-300,
+        month=0,
+        city_only=1,
+        treasury=12000,
+        welfare=8,
+        tax_rate=5,
+        tax_wealth=100,
+    )
+    city_sim_phase(tiles, wrap)
+    # empty map: wealth refresh → 0; operating still debits.
+    ok = wrap.month == 1 and wrap.treasury == 11992 and wrap.tax_months == 1
+    lines.append(
+        f"WRAP empty City Only -op 8: {'ok' if ok else 'FAIL'} "
+        f"treas={wrap.treasury} {wrap.date_label}"
+    )
+    tiles = _blank_tiles()
+    toff = _off(10, 10)
+    tiles[toff] = 0x9B  # grand domus wealth 100
+    tiles[toff + 10] = 0x0C
+    rich = SimState(
+        phase=PHASE_MAX,
+        year_raw=-300,
+        month=0,
+        city_only=1,
+        treasury=12000,
+        welfare=8,
+        tax_rate=5,
+        tax_wealth=0,
+    )
+    city_sim_phase(tiles, rich)
+    pop5 = ytd_tax_dn(monthly_pop_tax_raw(100, 5))
+    hi = SimState(
+        phase=PHASE_MAX,
+        year_raw=-300,
+        month=0,
+        city_only=1,
+        treasury=12000,
+        welfare=8,
+        tax_rate=25,
+        tax_wealth=0,
+    )
+    tiles2 = bytearray(tiles)
+    city_sim_phase(tiles2, hi)
+    pop25 = ytd_tax_dn(monthly_pop_tax_raw(100, 25))
+    ok = (
+        rich.treasury == 12000 + pop5 - 8
+        and hi.treasury == 12000 + pop25 - 8
+        and hi.treasury > rich.treasury
+    )
+    lines.append(
+        f"raise tax WRAP Dn: {'ok' if ok else 'FAIL'} "
+        f"5%={rich.treasury} 25%={hi.treasury}"
+    )
+
+    tiles = _blank_tiles()
+    hoff = _off(10, 10)
+    tiles[hoff] = 0x82
+    tiles[hoff + 1] = 0x01
+    tile_ignite(tiles, hoff)
+    dec, col, ign = fire_tick_rows(tiles, 10, 1)
+    ok = dec == 1 and tiles[hoff + 16] == 9 and tiles[hoff + 3] & DRAW_FIRE
+    lines.append(
+        f"fire tick --+16: {'ok' if ok else 'FAIL'} "
+        f"dec={dec} +16={tiles[hoff + 16]} bit7={tiles[hoff + 3] & DRAW_FIRE:#x}"
+    )
+
+    tiles = _blank_tiles()
+    hoff = _off(10, 10)
+    tiles[hoff] = 0x89
+    tiles[hoff + 1] = 0x01
+    tiles[hoff + 3] = DRAW_FIRE
+    tiles[hoff + 16] = 1
+    dec, col, ign = fire_tick_rows(tiles, 10, 1)
+    ok = (
+        col >= 1
+        and tiles[hoff] == ID_RUBBLE
+        and tiles[hoff + 3] & DRAW_FIRE
+    )
+    lines.append(
+        f"fire collapse rubble 0x05: {'ok' if ok else 'FAIL'} "
+        f"col={col} id={tiles[hoff]:#x} bit7={tiles[hoff + 3] & DRAW_FIRE:#x}"
+    )
+
+    tiles = _blank_tiles()
+    aoff = _off(10, 10)
+    boff = _off(10, 9)  # (10+10)&3 → facing 0 north
+    tiles[aoff] = 0x82
+    tiles[aoff + 1] = 0x01
+    tiles[aoff + 3] = DRAW_FIRE
+    tiles[aoff + 16] = 8
+    tiles[boff] = 0x83
+    tiles[boff + 1] = 0x01
+    fire_tick_rows(tiles, 10, 1)
+    ok = bool(tiles[boff + 3] & DRAW_FIRE) and tiles[boff + 16] == FIRE_TIMER_IGNITE
+    lines.append(
+        f"fire spread neighbor house: {'ok' if ok else 'FAIL'} "
+        f"bit7={tiles[boff + 3] & DRAW_FIRE:#x} +16={tiles[boff + 16]}"
+    )
+
+    tiles = _blank_tiles()
+    hoff = _off(10, 10)
+    tiles[hoff] = 0x82
+    tiles[hoff + 1] = 0x01
+    st = SimState(phase=0x9E, year_raw=-300, month=0, city_only=1)
+    risks = []
+    ignited = False
+    for step in range(4):
+        fire_tick_rows(tiles, 10, 1, st)
+        risks.append(tiles[hoff + 11] & 0x30)
+        if tiles[hoff + 3] & DRAW_FIRE:
+            ignited = True
+            break
+    ok = ignited and tiles[hoff + 16] == FIRE_TIMER_IGNITE
+    lines.append(
+        f"uncovered house ignites at +11 0x30: {'ok' if ok else 'FAIL'} "
+        f"risks={[hex(r) for r in risks]} +16={tiles[hoff + 16]}"
+    )
+
+    tiles = _blank_tiles()
+    hoff = _off(10, 10)
+    tiles[hoff] = 0x82
+    tiles[hoff + 1] = 0x01
+    tiles[hoff + 10] = 0x30
+    tiles[hoff + 11] = 0x30
+    fire_tick_rows(tiles, 10, 1)
+    ok = (tiles[hoff + 11] & 0x30) == 0x20 and not (tiles[hoff + 3] & DRAW_FIRE)
+    lines.append(
+        f"prefect +10 0x30 lowers fire risk: {'ok' if ok else 'FAIL'} "
+        f"+11={tiles[hoff + 11] & 0x30:#x}"
+    )
+
+    from app.messages import selftest as message_selftest
+
+    lines.extend(message_selftest())
     return lines

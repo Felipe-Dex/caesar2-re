@@ -6,8 +6,9 @@ walker_set_sprite → life_phase. Movement is walker_anim_roam 0x47EFA /
 walker_anim_path 0x48084 → walker_step 0x488DC (tile[+7]/[+8]).
 
 city_sim_phase 0x3F60C lives in app/city_sim.py (called before this).
-Not implemented here: actors26_tick 0x45A7A,
-state-9 seek helpers, path-fail helpers. See findings/app_tick.md.
+Not implemented here: actors26_tick 0x45A7A, path-fail helpers.
+State 8→9 fire seek is 0x4A397 / 0x4A57F / 0x4A716 / 0x4A76D.
+See findings/app_tick.md.
 """
 
 from __future__ import annotations
@@ -64,6 +65,7 @@ _ANIM_DONE = 0x01
 _ANIM_FAIL = 0x02
 
 _TILE_FLAGS = 1
+_TILE_DRAW = 3
 _TILE_SLOT0 = 7
 _TILE_SLOT1 = 8
 _TILE_QUEUE = 18
@@ -94,7 +96,9 @@ _MAP_MAX = MAP_W - 1  # 79; diagonal edge uses 78 ('N')
 # (0xD5/0xD6) and leftover grass, which put walkers on the pipe.
 # Shared: city roads 0x52–0x5C, bridges 0x4E–0x51, plaza 0x7C–0x7E
 # (plaza stays walkable even if +1 lost 0x20).
-# Clerks (type 1) also use forum interiors 0xAE–0xB9 (no FLAG_PAD).
+# Clerks (type 1) also use forum interiors 0xAE–0xB9 (no FLAG_PAD)
+# so they can *cross* the courtyard to reach a road. Spawn / seat /
+# pick_pad prefer 0x52–0x5C (and plaza) — they must not patrol 0xAE–0xB9.
 # Types 2–7 (trader / soldier / vigile / worker / …) stay off 0xAE–0xB9.
 ID_ROAD_LO = 0x52
 ID_ROAD_HI = 0x5C
@@ -105,6 +109,20 @@ ID_PLAZA_HI = 0x7E
 ID_FORUM_LO = 0xAE
 ID_FORUM_HI = 0xB9
 TYPE_CLERK = 1
+# After this many step-dones still on 0xAE–0xB9, force dest toward road.
+_CLERK_FORUM_LINGER = 2
+
+
+def _is_forum_floor(tid: int) -> bool:
+    return ID_FORUM_LO <= tid <= ID_FORUM_HI
+
+
+def _is_city_pavement(tid: int) -> bool:
+    return (
+        ID_ROAD_LO <= tid <= ID_ROAD_HI
+        or ID_BRIDGE_LO <= tid <= ID_BRIDGE_HI
+        or ID_PLAZA_LO <= tid <= ID_PLAZA_HI
+    )
 
 
 @dataclass
@@ -175,8 +193,8 @@ def is_walker_road(tiles: bytearray, off: int, type_id: int | None = None) -> bo
 
     All types: city road 0x52–0x5C, bridge 0x4E–0x51, plaza 0x7C–0x7E.
     Type 1 only: forum interiors 0xAE–0xB9 (clerk platform, no FLAG_PAD).
-    Aqueduct is an elevated pipe — not a patrol surface even when +1 has
-    FLAG_PAD (host T/cross 0xD5/0xD6). Residual grass+PAD is also out.
+    Aqueduct is an elevated pipe except the road-under combo (``+3&0x80``,
+    LUT ``0x94E37``). Grass T/cross may carry FLAG_PAD and stay blocked.
     ``type_id is None`` is city pavement only (no forum) so a missed type
     cannot reopen the courtyard to traders.
     """
@@ -185,7 +203,8 @@ def is_walker_road(tiles: bytearray, off: int, type_id: int | None = None) -> bo
     tid = tiles[off]
     flags = tiles[off + _TILE_FLAGS]
     if is_aqueduct_id(tid):
-        return False
+        # Grass T/cross may carry FLAG_PAD; only +3&0x80 is road-under-pipe.
+        return bool(flags & FLAG_PAD) and bool(tiles[off + _TILE_DRAW] & 0x80)
     if ID_FORUM_LO <= tid <= ID_FORUM_HI:
         return type_id == TYPE_CLERK
     if ID_PLAZA_LO <= tid <= ID_PLAZA_HI:
@@ -315,6 +334,53 @@ def walker_can_step(tiles: bytearray, rec: bytearray, facing: int) -> int:
     return walker_dest_ok(tiles, _tile_off(nx, ny), rec[_OFF_TYPE])
 
 
+def _nearest_city_pavement(
+    tiles: bytearray, x: int, y: int, *, radius: int = 12
+) -> tuple[int, int] | None:
+    best: tuple[int, int] | None = None
+    best_d = 10**9
+    for ny in range(max(0, y - radius), min(MAP_H, y + radius + 1)):
+        for nx in range(max(0, x - radius), min(MAP_W, x + radius + 1)):
+            off = _tile_off(nx, ny)
+            if off >= len(tiles):
+                continue
+            if not _is_city_pavement(tiles[off]):
+                continue
+            d = abs(nx - x) + abs(ny - y)
+            if d < best_d:
+                best_d = d
+                best = (nx, ny)
+    return best
+
+
+def _clerk_exit_facing(
+    tiles: bytearray, x: int, y: int, facing: int
+) -> int | None:
+    """Cardinal step that shrinks distance to the nearest road/plaza."""
+    target = _nearest_city_pavement(tiles, x, y)
+    if target is None:
+        return None
+    tx, ty = target
+    opposite = (facing + 4) & 7
+    best_f: int | None = None
+    best_d = 10**9
+    best_rev = True
+    for f, (dx, dy) in ((0, (0, -1)), (2, (1, 0)), (4, (0, 1)), (6, (-1, 0))):
+        nx, ny = x + dx, y + dy
+        if not _in_map(nx, ny):
+            continue
+        off = _tile_off(nx, ny)
+        if not is_walker_road(tiles, off, TYPE_CLERK):
+            continue
+        d = abs(nx - tx) + abs(ny - ty)
+        rev = f == opposite
+        if d < best_d or (d == best_d and best_rev and not rev):
+            best_d = d
+            best_f = f
+            best_rev = rev
+    return best_f
+
+
 def walker_pick_pad_facing(
     tiles: bytearray,
     x: int,
@@ -323,9 +389,15 @@ def walker_pick_pad_facing(
     rng: int,
     type_id: int | None = None,
 ) -> int:
-    """walker_pick_pad_facing 0x48C9F — cardinal pads; 8 = stuck."""
+    """walker_pick_pad_facing 0x48C9F — cardinal pads; 8 = stuck.
+
+    Type 1: road/plaza/bridge wins over courtyard 0xAE–0xB9 when both
+    exist. Forum pads stay legal so a clerk already inside can walk out.
+    """
     opposite = (facing + 4) & 7
     pads: dict[int, tuple[int, int]] = {}
+    city: dict[int, tuple[int, int]] = {}
+    forum: dict[int, tuple[int, int]] = {}
     for f, (dx, dy) in ((0, (0, -1)), (2, (1, 0)), (4, (0, 1)), (6, (-1, 0))):
         nx, ny = x + dx, y + dy
         if not _in_map(nx, ny):
@@ -333,8 +405,20 @@ def walker_pick_pad_facing(
         off = _tile_off(nx, ny)
         if off + TILE_BYTES > len(tiles):
             continue
-        if is_walker_road(tiles, off, type_id):
-            pads[f] = (tiles[off + _TILE_SLOT0], tiles[off + _TILE_SLOT1])
+        if not is_walker_road(tiles, off, type_id):
+            continue
+        slots = (tiles[off + _TILE_SLOT0], tiles[off + _TILE_SLOT1])
+        pads[f] = slots
+        if _is_forum_floor(tiles[off]):
+            forum[f] = slots
+        else:
+            city[f] = slots
+    if type_id == TYPE_CLERK and city:
+        pads = city
+    elif type_id == TYPE_CLERK and forum:
+        exit_f = _clerk_exit_facing(tiles, x, y, facing)
+        if exit_f is not None:
+            return exit_f
     if not pads:
         return 8
     if len(pads) == 1:
@@ -425,6 +509,10 @@ def walker_spawn(
     if flags & 0x8B:
         return 0
     if pad:
+        # Courtyard 0xAE–0xB9 is walkable for type 1 (exit path) but is
+        # never a spawn dest — clerks sit on the class-4 road rim.
+        if _is_forum_floor(tiles[off]):
+            return 0
         if not is_walker_road(tiles, off, type_id):
             if is_aqueduct_id(tiles[off]):
                 _path_log(f"walker spawn skip aqueduct  xy={x},{y}  id={tiles[off]:#x}")
@@ -574,8 +662,12 @@ def _find_connected_pad(
     *,
     radius: int = 6,
     type_id: int | None = None,
+    city_only: bool = False,
 ) -> tuple[int, int] | None:
-    """Prefer a road/plaza with a walkable neighbour, else any walkable pad."""
+    """Prefer a road/plaza with a walkable neighbour, else any walkable pad.
+
+    ``city_only`` skips courtyard 0xAE–0xB9 (clerk spawn / seat).
+    """
     ranked: list[tuple[int, int, int, int, int]] = []
     for ny in range(max(0, y - radius), min(MAP_H, y + radius + 1)):
         for nx in range(max(0, x - radius), min(MAP_W, x + radius + 1)):
@@ -583,6 +675,8 @@ def _find_connected_pad(
             if not is_walker_road(tiles, off, type_id):
                 continue
             tid = tiles[off]
+            if city_only and _is_forum_floor(tid):
+                continue
             deg = _pad_degree(tiles, nx, ny, type_id)
             dist = abs(nx - x) + abs(ny - y)
             kind = 0
@@ -624,29 +718,22 @@ def _relocate_walker(
 
 
 def _seat_on_connected_pad(pool: bytearray, tiles: bytearray, slot: int) -> None:
-    """Move a clerk off a dead-end forum floor onto plaza / road.
+    """Seat a clerk on adjacent road / plaza, never the courtyard.
 
-    Traders (and other non-clerks) already on 0xAE–0xB9 snap to the
-    nearest city road / plaza — they may not stay on the courtyard.
+    0xAE–0xB9 stays walkable so they can exit; they must not start there.
+    Traders already on the courtyard snap to the nearest city pad.
     """
     rec = _rec(pool, slot)
     typ = rec[_OFF_TYPE]
     x, y = _i8(rec, _OFF_X), _i8(rec, _OFF_Y)
     here = _tile_off(x, y)
-    if is_walker_road(tiles, here, typ) and _pad_degree(tiles, x, y, typ) > 0:
-        tid = tiles[here] if here < len(tiles) else 0
-        if ID_ROAD_LO <= tid <= ID_ROAD_HI or ID_PLAZA_LO <= tid <= ID_PLAZA_HI:
-            return
-        # Clerk on forum with a road/plaza neighbour — step dest onto that pad.
-        found = _find_connected_pad(tiles, x, y, radius=2, type_id=typ)
-        if found and found != (x, y):
-            fx, fy = found
-            ft = tiles[_tile_off(fx, fy)]
-            if ID_FORUM_LO <= ft <= ID_FORUM_HI:
-                return
-            _relocate_walker(pool, tiles, slot, fx, fy)
+    if here < 0 or here >= len(tiles):
         return
-    found = _find_connected_pad(tiles, x, y, radius=6, type_id=typ)
+    if _is_city_pavement(tiles[here]):
+        return
+    found = _find_connected_pad(
+        tiles, x, y, radius=8, type_id=typ, city_only=True
+    )
     if found and found != (x, y):
         _relocate_walker(pool, tiles, slot, found[0], found[1])
 
@@ -677,20 +764,22 @@ def _spawn_on_forum_or_plaza(
     size: int = 2,
     rng: int = 1,
 ) -> int:
-    """Last clerk fallback: plaza 0x7C then a forum platform tile."""
+    """Last clerk fallback: road 0x52–0x5C / plaza on the building rim.
+
+    Same idea as market class-4 rim. Courtyard tiles are never a dest.
+    """
     found = _find_connected_pad(
-        tiles, x + size // 2, y + size // 2, radius=size + 2, type_id=type_id
+        tiles,
+        x + size // 2,
+        y + size // 2,
+        radius=size + 2,
+        type_id=type_id,
+        city_only=True,
     )
     if found and walker_spawn(
         pool, tiles, type_id, found[0], found[1], pad=0x20, rng=rng
     ):
         return 1
-    for dy in range(size):
-        for dx in range(size):
-            if walker_spawn(
-                pool, tiles, type_id, x + dx, y + dy, pad=0x20, rng=rng
-            ):
-                return 1
     return 0
 
 
@@ -723,19 +812,53 @@ def emit_walkers(
     population: int,
     rng: int = 1,
     kinds: str | None = None,
+    wrap4: int = 0,
+    goods: bytes | bytearray | None = None,
+    factory_labor: int = 0,
+    province_links: int = 0,
+    shutoff: frozenset[str] | None = None,
 ) -> int:
     """Spawn from civic buildings onto adjacent roads. Mutates walkers."""
     global LAST_EMIT_NOTE
+    want_market = kinds in (None, "civic", "market")
+    produced = 0
+    closed = shutoff or frozenset()
+    prod_labor = 0 if "factory" in closed else factory_labor
+    if want_market:
+        from app.city_paint import factory_produce_row
+
+        produced = factory_produce_row(
+            tiles,
+            y0,
+            n,
+            goods=goods,
+            labor=prod_labor,
+            province_links=province_links,
+        )
     if walkers is None:
-        LAST_EMIT_NOTE = "skip walkers=None"
+        LAST_EMIT_NOTE = f"skip walkers=None produced={produced}"
         return 0
     if population < 2:
-        LAST_EMIT_NOTE = f"skip pop={population}<2"
+        LAST_EMIT_NOTE = f"skip pop={population}<2 produced={produced}"
         _path_log(f"walker emit skip pop={population}<2")
+        if want_market:
+            restage_market_band(tiles, y0, n, wrap4=wrap4)
         return 0
     pool = _pool_from(walkers)
     spawned = emit_walkers_row(
-        tiles, pool, y0, n, population=population, rng=rng, kinds=kinds
+        tiles,
+        pool,
+        y0,
+        n,
+        population=population,
+        rng=rng,
+        kinds=kinds,
+        wrap4=wrap4,
+        goods=goods,
+        factory_labor=factory_labor,
+        province_links=province_links,
+        produced=produced,
+        shutoff=shutoff,
     )
     _write_back(walkers, pool)
     return spawned
@@ -760,11 +883,19 @@ def emit_walkers_row(
     population: int,
     rng: int = 1,
     kinds: str | None = None,
+    wrap4: int = 0,
+    goods: bytes | bytearray | None = None,
+    factory_labor: int = 0,
+    province_links: int = 0,
+    produced: int | None = None,
+    shutoff: frozenset[str] | None = None,
 ) -> int:
     """Forum 0xAE–0xB9, prefecture 0xE3, barracks 0xE4, market 0xFC–0xFF.
 
     ``kinds`` is the city_sim band: forum / tower / security / market.
     None keeps the old combined scan (tests).
+    ``wrap4`` is [0x102694]; odd values decay market +9 in 0x41A4E.
+    Factory stock (0x41b33) runs from emit_walkers before the pop gate.
     """
     global LAST_EMIT_NOTE
     spawned = 0
@@ -772,13 +903,28 @@ def emit_walkers_row(
     waiting = 0
     noroad = 0
     markets = 0
-    if population < 2:
-        LAST_EMIT_NOTE = f"skip pop={population}<2"
-        return 0
     want_forum = kinds in (None, "civic", "forum")
     want_tower = kinds in (None, "civic", "tower")
     want_security = kinds in (None, "civic", "security")
     want_market = kinds in (None, "civic", "market")
+    closed = shutoff or frozenset()
+    prod_labor = 0 if "factory" in closed else factory_labor
+    if produced is None and want_market:
+        from app.city_paint import factory_produce_row
+
+        produced = factory_produce_row(
+            tiles,
+            y0,
+            n,
+            goods=goods,
+            labor=prod_labor,
+            province_links=province_links,
+        )
+    if produced is None:
+        produced = 0
+    if population < 2:
+        LAST_EMIT_NOTE = f"skip pop={population}<2 produced={produced}"
+        return 0
     for y in range(y0, min(MAP_H, y0 + n)):
         for x in range(MAP_W):
             off = _tile_off(x, y)
@@ -817,8 +963,10 @@ def emit_walkers_row(
                 size = 3
             elif 0xFC <= hid <= 0xFF and want_market:
                 # FUN_00041719 / 0x417F9: type 2, next_state 4, pad,
-                # retry class 4 (DAT_00094FE5[0xFC]=4 → 2×2 rim). No
-                # factory-stock gate — 0x41A4E only restages the sprite.
+                # retry class 4 (DAT_00094FE5[0xFC]=4 → 2×2 rim).
+                # 0x41A4E restages from +9 before the wait gate.
+                restage_market_origin(tiles, off, wrap4=wrap4)
+                hid = tiles[off]
                 typ, nxt, cls, tries = 2, 4, 4, 8
                 size = 2
             else:
@@ -826,6 +974,26 @@ def emit_walkers_row(
             civic += 1
             if typ == 2:
                 markets += 1
+            kind = (
+                "forum"
+                if typ == 1
+                else (
+                    "factory"
+                    if typ == 6
+                    else ("prefect" if hid == 0xE3 else "")
+                )
+            )
+            if kind and kind in closed:
+                # Labor vs building +6 wait / emit gate: hold countdown, no spawn.
+                hold = 3 if wait == 0 else (wait - 1) & 0x0F
+                tiles[off + 6] = (tiles[off + 6] & 0xF0) | hold
+                waiting += 1
+                if typ in (1, 6):
+                    _path_log(
+                        f"{kind} skip understaffed wait={hold} "
+                        f"home={x},{y} id={hid:#x}"
+                    )
+                continue
             if wait:
                 tiles[off + 6] = (tiles[off + 6] & 0xF0) | ((wait - 1) & 0x0F)
                 waiting += 1
@@ -896,7 +1064,8 @@ def emit_walkers_row(
     LAST_EMIT_NOTE = (
         f"civic={civic} markets={markets} spawned={spawned} "
         f"waiting={waiting} no-road={noroad} pop={population} "
-        f"y0={y0} n={n} kinds={kinds or 'civic'}"
+        f"y0={y0} n={n} kinds={kinds or 'civic'} produced={produced} "
+        f"shutoff={'+'.join(sorted(closed)) or 'none'}"
     )
     return spawned
 
@@ -1097,17 +1266,126 @@ def walker_find_type3or7(pool: bytearray, x: int, y: int, radius: int) -> int:
     return best
 
 
-def walker_housing_scan(rec: bytearray, tiles: bytearray, *, factory_bit: bool) -> None:
-    """FUN_0004a7ff 0x4A7FF. EAX=1; EDX=1 factory +13&0x80, EDX=0 market +13&0x40.
+# 0x41A4E / 0x41b33 / state 4+10: +9 bits 0–1 usage, 2–3 goods.
+# Factory 0x41b33 keeps production in the hi nibble — never smash 0xF0.
+_MARKET_PLUS9_USAGE = 0x03
+_MARKET_PLUS9_GOODS = 0x0C
+_ADDEND_2X2 = (0, 2, 1, 3)
 
-    score_a += houses 0x82–0xA1 in Chebyshev r=1, then −1 decay, cap 100.
-    score_b += the +13 mask bit (0x80 once hits the cap). State 4 packs
-    both into home[+9] when home is a market; state 10 when home is 0xFA.
+
+def _pack_score_nibble(score: int, *, shift: int) -> int:
+    """State 4/10: score>0 → 2 or 8; score≥8 → 3 or 0xC."""
+    if score <= 0:
+        return 0
+    if score < 8:
+        return 2 << shift
+    return 3 << shift
+
+
+def pack_home_plus9(tiles: bytearray, home: int, score_a: int, score_b: int) -> None:
+    """Write usage/goods into +9 bits 0–3. Keep factory stock in bits 4–7."""
+    if home < 0 or home + 9 >= len(tiles):
+        return
+    cur = tiles[home + 9]
+    nxt = cur
+    if score_a > 0:
+        nxt = (nxt & ~_MARKET_PLUS9_USAGE) | _pack_score_nibble(score_a, shift=0)
+    if score_b > 0:
+        nxt = (nxt & ~_MARKET_PLUS9_GOODS) | _pack_score_nibble(score_b, shift=2)
+    tiles[home + 9] = nxt
+
+
+def decay_plus9_service(v: int) -> int:
+    """0x41A4E / 0x41b33 tail: 3→2→1→0 and 0xC→8→4→0. Hi nibble stays."""
+    usage, goods = v & _MARKET_PLUS9_USAGE, v & _MARKET_PLUS9_GOODS
+    if usage:
+        v = (v & ~_MARKET_PLUS9_USAGE) | (
+            1 if usage == 2 else 2 if usage == 3 else 0
+        )
+    if goods:
+        v = (v & ~_MARKET_PLUS9_GOODS) | (
+            4 if goods == 8 else 8 if goods == 0x0C else 0
+        )
+    return v
+
+
+def _stamp_market_stage(tiles: bytearray, off: int, stage: int) -> None:
+    """0x6A368 stand-in: 2×2 id 0xFC+stage, +4 = 0x30+stage*4 + addend."""
+    tid = 0xFC + (stage & 3)
+    base = 0x30 + (stage & 3) * 4
+    x = (off % 0x640) // 0x14
+    y = off // 0x640
+    for dy in range(2):
+        for dx in range(2):
+            nx, ny = x + dx, y + dy
+            if not _in_map(nx, ny):
+                continue
+            cell = _tile_off(nx, ny)
+            hid = tiles[cell]
+            if cell != off and not (0xFC <= hid <= 0xFF):
+                continue
+            tiles[cell] = tid
+            tiles[cell + 4] = (base + _ADDEND_2X2[dy * 2 + dx]) & 0xFF
+
+
+def restage_market_band(tiles: bytearray, y0: int, n: int, *, wrap4: int = 0) -> int:
+    """0x41719 market arm: 0x41A4E on every origin in the emit band."""
+    n_ok = 0
+    for y in range(y0, min(MAP_H, y0 + n)):
+        for x in range(MAP_W):
+            off = _tile_off(x, y)
+            if off + 9 >= len(tiles):
+                continue
+            if tiles[off + 5] & 0xF:
+                continue
+            if 0xFC <= tiles[off] <= 0xFF:
+                restage_market_origin(tiles, off, wrap4=wrap4)
+                n_ok += 1
+    return n_ok
+
+
+def restage_market_origin(tiles: bytearray, off: int, *, wrap4: int = 0) -> int:
+    """FUN_00041a4e 0x41A4E. Stage from +9; decay bits 0–3 when wrap4&1.
+
+    No goods (bits 2–3==0) forces stage 1 (0xFD). Else stage = bits 0–1.
+    """
+    if off < 0 or off + 9 >= len(tiles):
+        return 0
+    hid = tiles[off]
+    if not (0xFC <= hid <= 0xFF):
+        return 0
+    plus9 = tiles[off + 9]
+    usage = plus9 & _MARKET_PLUS9_USAGE
+    goods = plus9 & _MARKET_PLUS9_GOODS
+    stage = 1 if goods == 0 else usage
+    want = 0xFC + stage
+    if hid != want:
+        _stamp_market_stage(tiles, off, stage)
+    if wrap4 & 1:
+        tiles[off + 9] = decay_plus9_service(plus9)
+    return stage
+
+
+def market_has_goods(tiles: bytearray, home: int) -> bool:
+    """Market +9 bits 2–3: factory contact packed by state 4."""
+    if home < 0 or home + 9 >= len(tiles):
+        return False
+    hid = tiles[home]
+    return 0xFC <= hid <= 0xFF and bool(tiles[home + 9] & _MARKET_PLUS9_GOODS)
+
+
+def walker_housing_scan(rec: bytearray, tiles: bytearray, *, factory_bit: bool) -> None:
+    """FUN_0004a7ff 0x4A7FF. EAX=1 (r=1); EDX=1 factory +13&0x80, EDX=0 market +13&0x40.
+
+    score_a += houses 0x82–0xA1, then −2 if >4 else −1 if >0, cap 100.
+    score_b += 2 per factory-bit tile (EDX=1) or 3 per market-bit (EDX=0),
+    then −1 if >0, cap 100. State 4/10 pack bits 0–3 of home[+9] only —
+    factory production stock lives in the hi nibble (0x41b33).
     """
     x, y = _i8(rec, _OFF_X), _i8(rec, _OFF_Y)
     houses = 0
-    bits = 0
-    mask = 0x80 if factory_bit else 0x40
+    factory_tiles = 0
+    market_tiles = 0
     for ny in range(max(0, y - 1), min(MAP_H, y + 2)):
         for nx in range(max(0, x - 1), min(MAP_W, x + 2)):
             off = _tile_off(nx, ny)
@@ -1116,17 +1394,32 @@ def walker_housing_scan(rec: bytearray, tiles: bytearray, *, factory_bit: bool) 
             tid = tiles[off]
             if 0x82 <= tid <= 0xA1:
                 houses += 1
-            bits += tiles[off + 13] & mask
-    rec[_OFF_SCORE_A] = min(100, max(0, rec[_OFF_SCORE_A] - 1) + houses)
-    if bits:
-        rec[_OFF_SCORE_B] = min(100, rec[_OFF_SCORE_B] + min(bits, 100))
+            splash = tiles[off + 13]
+            if splash & 0x80:
+                factory_tiles += 1
+            if splash & 0x40:
+                market_tiles += 1
+    score_a = rec[_OFF_SCORE_A] + houses
+    if score_a > 4:
+        score_a -= 2
+    elif score_a > 0:
+        score_a -= 1
+    rec[_OFF_SCORE_A] = min(100, max(0, score_a))
+    score_b = rec[_OFF_SCORE_B]
+    if factory_bit:
+        score_b += factory_tiles * 2
+    else:
+        score_b += market_tiles * 3
+    if score_b > 0:
+        score_b -= 1
+    rec[_OFF_SCORE_B] = min(100, max(0, score_b))
     home = struct.unpack_from("<i", rec, _OFF_HOME)[0]
     if home < 0 or home + 9 >= len(tiles):
         return
     hid = tiles[home]
     typ = rec[_OFF_TYPE]
     if (typ == 2 and 0xFC <= hid <= 0xFF) or (typ == 6 and hid == 0xFA):
-        tiles[home + 9] = ((rec[_OFF_SCORE_B] >> 3) << 4) | (rec[_OFF_SCORE_A] >> 3)
+        pack_home_plus9(tiles, home, rec[_OFF_SCORE_A], rec[_OFF_SCORE_B])
 
 
 def _roam_step_done(
@@ -1162,13 +1455,33 @@ def _pick_or_die(
     wait_on_stuck: int,
     slot: int = 0,
 ) -> None:
+    x, y = _i8(rec, _OFF_X), _i8(rec, _OFF_Y)
+    typ = rec[_OFF_TYPE]
+    here = _tile_off(x, y)
+    on_forum = (
+        typ == TYPE_CLERK
+        and 0 <= here < len(tiles)
+        and _is_forum_floor(tiles[here])
+    )
+    if on_forum:
+        linger = (rec[_OFF_LINGER] + 1) & 0xFF
+        rec[_OFF_LINGER] = linger
+        if linger >= _CLERK_FORUM_LINGER:
+            exit_f = _clerk_exit_facing(tiles, x, y, rec[_OFF_FACING])
+            if exit_f is not None:
+                walker_set_dest(rec, exit_f)
+                rec[_OFF_WANT_MOVE] = 1
+                rec[_OFF_LINGER] = 0
+                return
+    elif typ == TYPE_CLERK:
+        rec[_OFF_LINGER] = 0
     facing = walker_pick_pad_facing(
         tiles,
-        _i8(rec, _OFF_X),
-        _i8(rec, _OFF_Y),
+        x,
+        y,
         rec[_OFF_FACING],
         clock.rng,
-        rec[_OFF_TYPE],
+        typ,
     )
     clock.rng = (clock.rng + 1) & 0x7FFF
     if facing >= 8:
@@ -1176,8 +1489,8 @@ def _pick_or_die(
         if wait_on_stuck:
             rec[_OFF_WAIT] = wait_on_stuck
         _path_log(
-            f"walker path stuck  slot={slot}  type={rec[_OFF_TYPE]}  "
-            f"xy={_i8(rec, _OFF_X)},{_i8(rec, _OFF_Y)}  no road neighbour"
+            f"walker path stuck  slot={slot}  type={typ}  "
+            f"xy={x},{y}  no road neighbour"
         )
         return
     walker_set_dest(rec, facing)
@@ -1210,6 +1523,144 @@ def _roam_then_pick(
         return
     _pick_or_die(rec, tiles, clock, wait_on_stuck=wait_on_stuck, slot=slot)
     _put(pool, slot, rec)
+
+
+def _tile_on_fire_water(tiles: bytearray, off: int) -> bool:
+    """id < 8 and +3 bit7 — 4A716 / 4A57F / 4A76D predicate."""
+    if off < 0 or off + _TILE_DRAW >= len(tiles):
+        return False
+    return tiles[off] < 8 and bool(tiles[off + _TILE_DRAW] & 0x80)
+
+
+def _manhattan(ax: int, ay: int, bx: int, by: int) -> int:
+    """FUN_00028247 after the Watcom __CHK prologue."""
+    return abs(ax - bx) + abs(ay - by)
+
+
+def _sector_xy(x: int, y: int) -> tuple[int, int]:
+    return x >> 3, y >> 3
+
+
+def _sector_has_burning(tiles: bytearray, cx: int, cy: int) -> bool:
+    if cx < 0 or cy < 0 or cx > 9 or cy > 9:
+        return False
+    x0, y0 = cx * 8, cy * 8
+    for ty in range(y0, min(MAP_H, y0 + 8)):
+        for tx in range(x0, min(MAP_W, x0 + 8)):
+            if _tile_on_fire_water(tiles, _tile_off(tx, ty)):
+                return True
+    return False
+
+
+def vigile_sector_has_fire(tiles: bytearray, x: int, y: int) -> bool:
+    """FUN_0004a397 — current 8×8 sector or a neighbor has id<8 + bit7."""
+    cx, cy = _sector_xy(x, y)
+    if _sector_has_burning(tiles, cx, cy):
+        return True
+    for dcx, dcy in (
+        (0, -1),
+        (-1, -1),
+        (1, -1),
+        (0, 1),
+        (-1, 1),
+        (1, 1),
+        (-1, 0),
+        (1, 0),
+    ):
+        if _sector_has_burning(tiles, cx + dcx, cy + dcy):
+            return True
+    return False
+
+
+def vigile_fire_claimed(pool: bytearray, tile_off: int) -> bool:
+    """FUN_0004a7ae: another live state-9 walker already has this home."""
+    for slot in range(1, WALKER_COUNT):
+        rec = _rec(pool, slot)
+        if rec[_OFF_OCCUPIED] == 0:
+            continue
+        if rec[_OFF_STATE] != 9:
+            continue
+        if struct.unpack_from("<i", rec, _OFF_HOME)[0] == tile_off:
+            return True
+    return False
+
+
+def vigile_extinguish_here(tiles: bytearray, rec: bytearray) -> bool:
+    """FUN_0004a716: standing on burning water/rubble — --+16 or clear bit7."""
+    off = struct.unpack_from("<i", rec, _OFF_TILE)[0]
+    if not _tile_on_fire_water(tiles, off):
+        return False
+    if tiles[off + 16] == 1:
+        tiles[off + _TILE_DRAW] &= 0x7F
+    else:
+        tiles[off + 16] = (tiles[off + 16] - 1) & 0xFF
+    return True
+
+
+def vigile_still_on_target(tiles: bytearray, rec: bytearray) -> bool:
+    """FUN_0004a76D: home_walker set and home tile still id<8 + bit7."""
+    if rec[_OFF_HOME_WALKER] == 0:
+        return False
+    home = struct.unpack_from("<i", rec, _OFF_HOME)[0]
+    return _tile_on_fire_water(tiles, home)
+
+
+def vigile_pick_fire(
+    tiles: bytearray, pool: bytearray, rec: bytearray
+) -> tuple[int, int, int] | None:
+    """4A397 sector + 4A57F closest burning id<8 in that 8×8."""
+    wx, wy = _i8(rec, _OFF_X), _i8(rec, _OFF_Y)
+    cx, cy = _sector_xy(wx, wy)
+    chosen = (cx, cy) if _sector_has_burning(tiles, cx, cy) else None
+    if chosen is None:
+        for dcx, dcy in (
+            (0, -1),
+            (-1, -1),
+            (1, -1),
+            (0, 1),
+            (-1, 1),
+            (1, 1),
+            (-1, 0),
+            (1, 0),
+        ):
+            ncx, ncy = cx + dcx, cy + dcy
+            if _sector_has_burning(tiles, ncx, ncy):
+                chosen = (ncx, ncy)
+                break
+    if chosen is None:
+        return None
+    sx, sy = chosen[0] * 8, chosen[1] * 8
+    best_free: tuple[int, int, int, int] | None = None
+    best_taken: tuple[int, int, int, int] | None = None
+    for ty in range(sy, min(MAP_H, sy + 8)):
+        for tx in range(sx, min(MAP_W, sx + 8)):
+            off = _tile_off(tx, ty)
+            if not _tile_on_fire_water(tiles, off):
+                continue
+            dist = _manhattan(wx, wy, tx, ty)
+            claimed = vigile_fire_claimed(pool, off)
+            row = (dist, tx, ty, off)
+            if claimed:
+                if best_taken is None or dist < best_taken[0]:
+                    best_taken = row
+            elif best_free is None or dist < best_free[0]:
+                best_free = row
+    free_d = best_free[0] if best_free else 100
+    taken_d = best_taken[0] if best_taken else 100
+    pick = None
+    if free_d > 0x28 and taken_d < 0x24 and best_taken:
+        pick = best_taken
+    elif free_d > 0x0C and taken_d < 6 and best_taken:
+        pick = best_taken
+    elif free_d > 8 and taken_d < 4 and best_taken:
+        pick = best_taken
+    elif best_free and free_d < 100:
+        pick = best_free
+    elif best_taken and taken_d < 100:
+        pick = best_taken
+    if pick is None:
+        return None
+    return pick[1], pick[2], pick[3]
 
 
 def _lock_chase(pool: bytearray, rec: bytearray, target_slot: int) -> None:
@@ -1251,17 +1702,26 @@ def _state_dispatch(
         )
         return
     if state == 4:
-        _roam_then_pick(
+        rec = _roam_step_done(
             pool,
             tiles,
             slot,
-            clock,
             or_bits=0xC0,
             or_r=3,
-            wait_on_stuck=0,
             housing=True,
             factory_bit=True,
         )
+        if rec is None:
+            return
+        # Food +10 0x0C only when the home market holds goods (+9 bits 2–3).
+        # Access 0xC0 is unconditional (state 4). Empty 0xFC does not feed.
+        home = struct.unpack_from("<i", rec, _OFF_HOME)[0]
+        if market_has_goods(tiles, home):
+            tile_or_radius(
+                tiles, _i8(rec, _OFF_X), _i8(rec, _OFF_Y), 3, 10, 0x0C
+            )
+        _pick_or_die(rec, tiles, clock, wait_on_stuck=0, slot=slot)
+        _put(pool, slot, rec)
         return
     if state == 5:
         rec[_OFF_WANT_MOVE] = 1
@@ -1337,7 +1797,10 @@ def _state_dispatch(
         rec = _roam_step_done(pool, tiles, slot, or_bits=0x30, or_r=3)
         if rec is None:
             return
-        # FUN_0004a397 → state 9 (fire/building seek) — stub: stay in 8
+        if vigile_sector_has_fire(tiles, _i8(rec, _OFF_X), _i8(rec, _OFF_Y)):
+            rec[_OFF_STATE] = 9
+            _put(pool, slot, rec)
+            return
         if clock.latch7 or clock.latch3:
             found = walker_find_type3or7(
                 pool, _i8(rec, _OFF_X), _i8(rec, _OFF_Y), 10
@@ -1351,8 +1814,6 @@ def _state_dispatch(
         _put(pool, slot, rec)
         return
     if state == 9:
-        # Seek helpers 0x4A716 / 0x4A76D / 0x4A397 / 0x4A57F unread.
-        # Keep dest; still walk if want_move + dest are set.
         rec[_OFF_NEXT_STATE] = 9
         _put(pool, slot, rec)
         if walker_anim_path(pool, tiles, slot) == 0:
@@ -1362,8 +1823,35 @@ def _state_dispatch(
             return
         if rec[_OFF_ANIM_FLAGS] & _ANIM_FAIL:
             rec[_OFF_STATE] = 9
+            rec[_OFF_HOME_WALKER] = 0
             rec[_OFF_ANIM_FLAGS] &= ~_ANIM_FAIL
-        # Do not free on unread seek fail — keep last heading
+        if (rec[_OFF_ANIM_FLAGS] & _ANIM_DONE) == 0:
+            _put(pool, slot, rec)
+            return
+        if vigile_extinguish_here(tiles, rec):
+            rec[_OFF_WANT_MOVE] = 0
+            rec[_OFF_HOME_WALKER] = 0
+            _put(pool, slot, rec)
+            return
+        if vigile_still_on_target(tiles, rec):
+            rec[_OFF_WANT_MOVE] = 1
+            _put(pool, slot, rec)
+            return
+        rec[_OFF_HOME_WALKER] = 0
+        rec[_OFF_WANT_MOVE] = 0
+        struct.pack_into("<i", rec, _OFF_HOME, 0)
+        dest = vigile_pick_fire(tiles, pool, rec)
+        if dest is not None:
+            dx, dy, hoff = dest
+            _set_i8(rec, _OFF_DEST_X, dx)
+            _set_i8(rec, _OFF_DEST_Y, dy)
+            struct.pack_into("<i", rec, _OFF_HOME, hoff)
+            rec[_OFF_BUMP] = 0
+            rec[_OFF_HOME_WALKER] = 1
+            rec[_OFF_WANT_MOVE] = 1
+            _put(pool, slot, rec)
+            return
+        rec[_OFF_STATE] = 2
         _put(pool, slot, rec)
         return
     if state == 10:
@@ -1538,6 +2026,10 @@ def selftest() -> list[str]:
     aq = _tile_off(11, 10)
     tiles[aq] = 0xD6
     tiles[aq + _TILE_FLAGS] = FLAG_PAD | 0x40
+    combo = _tile_off(11, 11)
+    tiles[combo] = 0xD6
+    tiles[combo + _TILE_FLAGS] = FLAG_PAD | 0x40
+    tiles[combo + _TILE_DRAW] = 0x90
     grass = _tile_off(12, 10)
     tiles[grass + _TILE_FLAGS] = FLAG_PAD
     bridge = _tile_off(13, 10)
@@ -1548,6 +2040,7 @@ def selftest() -> list[str]:
     ok = (
         walker_dest_ok(tiles, road) == 1
         and walker_dest_ok(tiles, aq) == 0
+        and walker_dest_ok(tiles, combo) == 1
         and walker_dest_ok(tiles, grass) == 0
         and walker_dest_ok(tiles, bridge) == 1
         and walker_dest_ok(tiles, empty) == 2
@@ -1555,6 +2048,7 @@ def selftest() -> list[str]:
     lines.append(
         f"dest_ok road/bridge vs aqueduct/grass-pad: {'ok' if ok else 'FAIL'} "
         f"r={walker_dest_ok(tiles, road)} aq={walker_dest_ok(tiles, aq)} "
+        f"combo={walker_dest_ok(tiles, combo)} "
         f"g={walker_dest_ok(tiles, grass)} br={walker_dest_ok(tiles, bridge)}"
     )
 
@@ -1719,10 +2213,14 @@ def selftest() -> list[str]:
         nsp >= 1
         and rec is not None
         and nxt == 3
-        and (ID_PLAZA_LO <= tid <= ID_PLAZA_HI or ID_FORUM_LO <= tid <= ID_FORUM_HI)
+        and (
+            ID_PLAZA_LO <= tid <= ID_PLAZA_HI
+            or ID_ROAD_LO <= tid <= ID_ROAD_HI
+        )
+        and not (ID_FORUM_LO <= tid <= ID_FORUM_HI)
     )
     lines.append(
-        f"clerk pad plaza/forum next=3: {'ok' if ok else 'FAIL'} "
+        f"clerk pad plaza/road next=3: {'ok' if ok else 'FAIL'} "
         f"spawn={nsp} next={nxt} xy={wx},{wy} id={tid:#x}"
     )
     if rec is not None:
@@ -1737,6 +2235,134 @@ def selftest() -> list[str]:
             moved += result.stepped + result.animated
         ok = moved >= 1
         lines.append(f"clerk animates on forum/plaza: {'ok' if ok else 'FAIL'} moved={moved}")
+
+    reset_clock()
+    pool = bytearray(WALKER_BYTES)
+    tiles = bytearray(MAP_W * MAP_H * TILE_BYTES)
+    # 2×2 Aventine at a T — class-4 rim is 0x52–0x5C, not the courtyard.
+    for dy in range(2):
+        for dx in range(2):
+            off = _tile_off(20 + dx, 20 + dy)
+            tiles[off] = 0xAE
+            tiles[off + 1] = 0x01
+            tiles[off + 5] = dy * 2 + dx
+    for y in range(19, 23):
+        off = _tile_off(19, y)
+        tiles[off] = 0x52
+        tiles[off + 1] = FLAG_PAD
+    for x in range(19, 23):
+        off = _tile_off(x, 22)
+        tiles[off] = 0x52
+        tiles[off + 1] = FLAG_PAD
+    nsp = emit_walkers_row(tiles, pool, 20, 3, population=4, kinds="forum")
+    rec = None
+    slot = 0
+    for i in range(WALKER_COUNT):
+        cand = _rec(pool, i)
+        if cand[_OFF_OCCUPIED] and cand[_OFF_TYPE] == 1:
+            rec = cand
+            slot = i
+            break
+    nxt = rec[_OFF_NEXT_STATE] if rec is not None else -1
+    wx = wy = tid = -1
+    if rec is not None:
+        wx, wy = _i8(rec, _OFF_X), _i8(rec, _OFF_Y)
+        tid = tiles[_tile_off(wx, wy)]
+    ok = (
+        nsp == 1
+        and rec is not None
+        and nxt == 3
+        and ID_ROAD_LO <= tid <= ID_ROAD_HI
+    )
+    lines.append(
+        f"clerk spawn dest road 0x52-0x5C: {'ok' if ok else 'FAIL'} "
+        f"spawn={nsp} next={nxt} xy={wx},{wy} id={tid:#x}"
+    )
+    tiles[_tile_off(20, 20) + 6] = 0
+    n2 = emit_walkers_row(tiles, pool, 20, 3, population=4, kinds="forum")
+    live1 = [
+        s
+        for s in range(WALKER_COUNT)
+        if pool[s * WALKER_STRIDE + _OFF_OCCUPIED]
+        and pool[s * WALKER_STRIDE + _OFF_TYPE] == 1
+        and pool[s * WALKER_STRIDE + _OFF_STATE] != 2
+    ]
+    ok = n2 >= 1 and len(live1) == 1
+    lines.append(
+        f"one clerk per forum origin: {'ok' if ok else 'FAIL'} "
+        f"n2={n2} live={len(live1)}"
+    )
+    rec = None
+    slot = 0
+    for i in live1:
+        rec = _rec(pool, i)
+        slot = i
+        break
+    if rec is not None:
+        rec[_OFF_STATE] = 3
+        rec[_OFF_WAIT] = 0
+        rec[_OFF_ANIM_FLAGS] = _ANIM_DONE
+        _put(pool, slot, rec)
+        clock = WalkerClock()
+        moved = 0
+        forum_hits = 0
+        last_tid = tid
+        for _ in range(80):
+            result = walkers_tick(tiles, pool, clock=clock)
+            moved += result.stepped
+            live = _rec(pool, slot)
+            if live[_OFF_OCCUPIED] == 0:
+                continue
+            tx, ty = _i8(live, _OFF_X), _i8(live, _OFF_Y)
+            last_tid = tiles[_tile_off(tx, ty)]
+            if ID_FORUM_LO <= last_tid <= ID_FORUM_HI:
+                forum_hits += 1
+        taxed = False
+        for y in range(19, 23):
+            for x in range(19, 23):
+                off = _tile_off(x, y)
+                if ID_ROAD_LO <= tiles[off] <= ID_ROAD_HI and tiles[off + 10] & 0x0C:
+                    taxed = True
+        ok = (
+            moved >= 1
+            and forum_hits <= 4
+            and ID_ROAD_LO <= last_tid <= ID_ROAD_HI
+            and taxed
+        )
+        lines.append(
+            f"clerk roams roads tax +10 0x0C: {'ok' if ok else 'FAIL'} "
+            f"moved={moved} forum_hits={forum_hits} last={last_tid:#x} tax={taxed}"
+        )
+        _relocate_walker(pool, tiles, slot, 21, 21)
+        rec = _rec(pool, slot)
+        rec[_OFF_STATE] = 3
+        rec[_OFF_WAIT] = 0
+        rec[_OFF_ANIM_FLAGS] = _ANIM_DONE
+        rec[_OFF_LINGER] = 0
+        _put(pool, slot, rec)
+        clock = WalkerClock()
+        left = False
+        for _ in range(24):
+            walkers_tick(tiles, pool, clock=clock)
+            live = _rec(pool, slot)
+            if live[_OFF_OCCUPIED] == 0:
+                break
+            tx, ty = _i8(live, _OFF_X), _i8(live, _OFF_Y)
+            hid = tiles[_tile_off(tx, ty)]
+            if ID_ROAD_LO <= hid <= ID_ROAD_HI:
+                left = True
+                break
+        foff = _tile_off(21, 21)
+        ok = (
+            left
+            and walker_dest_ok(tiles, foff, 1) == 1
+            and walker_dest_ok(tiles, foff, 2) == 0
+        )
+        lines.append(
+            f"clerk exits courtyard dest_ok: {'ok' if ok else 'FAIL'} "
+            f"left={left} clerk_f={walker_dest_ok(tiles, foff, 1)} "
+            f"trader_f={walker_dest_ok(tiles, foff, 2)}"
+        )
 
     reset_clock()
     pool = bytearray(WALKER_BYTES)
@@ -1959,11 +2585,86 @@ def selftest() -> list[str]:
     _put(pool, slot, rec)
     walkers_tick(tiles, pool, clock=WalkerClock())
     rec = _rec(pool, slot)
-    cov = tiles[_tile_off(11, 10) + 10] & 0xC0
-    ok = rec[_OFF_SCORE_A] >= 1 and cov == 0xC0
+    road10 = tiles[_tile_off(11, 10) + 10]
+    house10 = tiles[hoff + 10]
+    goods = tiles[moff + 9] & _MARKET_PLUS9_GOODS
+    ok = (
+        rec[_OFF_SCORE_B] >= 1
+        and road10 & 0xC0 == 0xC0
+        and goods == 0x08
+        and road10 & 0x0C == 0x0C
+        and house10 & 0x0C == 0x0C
+    )
     lines.append(
-        f"trader 4a7ff + +10 0xC0: {'ok' if ok else 'FAIL'} "
-        f"score_a={rec[_OFF_SCORE_A]} cov={cov:#x}"
+        f"trader goods + food +10 0x0C: {'ok' if ok else 'FAIL'} "
+        f"score_b={rec[_OFF_SCORE_B]} +9={tiles[moff + 9]:#x} "
+        f"road={road10:#x} house={house10:#x}"
+    )
+
+    reset_clock()
+    pool = bytearray(WALKER_BYTES)
+    tiles = bytearray(MAP_W * MAP_H * TILE_BYTES)
+    for x in range(10, 14):
+        off = _tile_off(x, 10)
+        tiles[off] = 0x52
+        tiles[off + 1] = FLAG_PAD
+    hoff = _tile_off(11, 9)
+    tiles[hoff] = 0x83
+    tiles[hoff + 1] = 0x01
+    moff = _tile_off(10, 10)
+    tiles[moff] = 0xFC
+    slot = walker_spawn(pool, tiles, 2, 11, 10, pad=0x20)
+    rec = _rec(pool, slot)
+    rec[_OFF_STATE] = 4
+    rec[_OFF_NEXT_STATE] = 4
+    rec[_OFF_ANIM_FLAGS] = _ANIM_DONE
+    rec[_OFF_WANT_MOVE] = 0
+    struct.pack_into("<i", rec, _OFF_HOME, moff)
+    _put(pool, slot, rec)
+    walkers_tick(tiles, pool, clock=WalkerClock())
+    rec = _rec(pool, slot)
+    road10 = tiles[_tile_off(11, 10) + 10]
+    ok = (
+        rec[_OFF_SCORE_B] == 0
+        and tiles[moff + 9] & _MARKET_PLUS9_GOODS == 0
+        and road10 & 0xC0 == 0xC0
+        and road10 & 0x0C == 0
+    )
+    lines.append(
+        f"empty market no food +10 0x0C: {'ok' if ok else 'FAIL'} "
+        f"score_b={rec[_OFF_SCORE_B]} +9={tiles[moff + 9]:#x} road={road10:#x}"
+    )
+
+    tiles[moff] = 0xFC
+    tiles[moff + 9] = 0x2F  # stock 2 + goods 0xC + usage 3
+    stage = restage_market_origin(tiles, moff, wrap4=1)
+    ok = (
+        tiles[moff] == 0xFF
+        and stage == 3
+        and tiles[moff + 9] & 0xF0 == 0x20
+        and tiles[moff + 9] & 0x0F == 0x0A
+    )
+    lines.append(
+        f"41A4E restage+decay keeps stock: {'ok' if ok else 'FAIL'} "
+        f"id={tiles[moff]:#x} stage={stage} +9={tiles[moff + 9]:#x}"
+    )
+    tiles[moff] = 0xFC
+    tiles[moff + 9] = 0x00
+    stage = restage_market_origin(tiles, moff, wrap4=0)
+    ok = tiles[moff] == 0xFD and stage == 1
+    lines.append(
+        f"empty market restage 0xFD: {'ok' if ok else 'FAIL'} "
+        f"id={tiles[moff]:#x} stage={stage}"
+    )
+
+    foff = _tile_off(12, 12)
+    tiles[foff] = 0xFA
+    tiles[foff + 9] = 0x50  # stock 5
+    pack_home_plus9(tiles, foff, 9, 9)
+    ok = tiles[foff + 9] == 0x5F  # stock 5 + usage 3 + goods 0xC
+    lines.append(
+        f"factory +9 pack keeps hi stock: {'ok' if ok else 'FAIL'} "
+        f"+9={tiles[foff + 9]:#x}"
     )
 
     from app.walkers import slide_walk_frame, walker_draw_ltlmen_index
@@ -1989,4 +2690,145 @@ def selftest() -> list[str]:
         f"frame={frame} idx={idx} idle={sid_base}"
     )
     clear_walker_slides()
+
+    reset_clock()
+    tiles = bytearray(MAP_W * MAP_H * TILE_BYTES)
+    foff = _tile_off(12, 10)
+    tiles[foff] = 0x05
+    tiles[foff + _TILE_DRAW] = 0x80
+    tiles[foff + 16] = 4
+    ok = vigile_sector_has_fire(tiles, 10, 10) and not vigile_sector_has_fire(
+        tiles, 40, 40
+    )
+    lines.append(
+        f"vigile 4A397 sector fire: {'ok' if ok else 'FAIL'}"
+    )
+
+    rec = bytearray(WALKER_STRIDE)
+    struct.pack_into("<i", rec, _OFF_TILE, foff)
+    rec[_OFF_HOME_WALKER] = 1
+    struct.pack_into("<i", rec, _OFF_HOME, foff)
+    ok = vigile_still_on_target(tiles, rec)
+    tiles[foff + 16] = 1
+    did = vigile_extinguish_here(tiles, rec)
+    ok = ok and did and (tiles[foff + _TILE_DRAW] & 0x80) == 0
+    lines.append(
+        f"vigile 4A716 +16==1 clears bit7: {'ok' if ok else 'FAIL'} "
+        f"+3={tiles[foff + _TILE_DRAW]:#x}"
+    )
+
+    reset_clock()
+    pool = bytearray(WALKER_BYTES)
+    tiles = bytearray(MAP_W * MAP_H * TILE_BYTES)
+    for x in range(10, 14):
+        off = _tile_off(x, 10)
+        tiles[off] = 0x52
+        tiles[off + 1] = FLAG_PAD
+    foff = _tile_off(12, 10)
+    tiles[foff] = 0x05
+    tiles[foff + _TILE_DRAW] = 0x80
+    tiles[foff + 16] = 6
+    slot = walker_spawn(pool, tiles, 5, 10, 10, pad=0x20)
+    rec = _rec(pool, slot) if slot else None
+    if rec is not None:
+        rec[_OFF_STATE] = 8
+        rec[_OFF_NEXT_STATE] = 8
+        rec[_OFF_WAIT] = 0
+        rec[_OFF_WANT_MOVE] = 0
+        rec[_OFF_ANIM_FLAGS] = _ANIM_DONE
+        _put(pool, slot, rec)
+        walkers_tick(tiles, pool, clock=WalkerClock())
+        rec = _rec(pool, slot)
+        ok = rec[_OFF_OCCUPIED] != 0 and rec[_OFF_STATE] == 9
+        lines.append(
+            f"vigile state 8→9 on sector fire: {'ok' if ok else 'FAIL'} "
+            f"state={rec[_OFF_STATE]}"
+        )
+        rec[_OFF_STATE] = 9
+        rec[_OFF_NEXT_STATE] = 9
+        rec[_OFF_WANT_MOVE] = 0
+        rec[_OFF_ANIM_FLAGS] = _ANIM_DONE
+        rec[_OFF_HOME_WALKER] = 0
+        struct.pack_into("<i", rec, _OFF_HOME, 0)
+        _put(pool, slot, rec)
+        walkers_tick(tiles, pool, clock=WalkerClock())
+        rec = _rec(pool, slot)
+        home = struct.unpack_from("<i", rec, _OFF_HOME)[0]
+        ok = (
+            rec[_OFF_STATE] == 9
+            and rec[_OFF_HOME_WALKER] == 1
+            and rec[_OFF_WANT_MOVE] == 1
+            and home == foff
+        )
+        lines.append(
+            f"vigile state 9 seeks burning rubble: {'ok' if ok else 'FAIL'} "
+            f"home={home} dest={_i8(rec, _OFF_DEST_X)},{_i8(rec, _OFF_DEST_Y)}"
+        )
+        _relocate_walker(pool, tiles, slot, 12, 10)
+        rec = _rec(pool, slot)
+        rec[_OFF_STATE] = 9
+        rec[_OFF_NEXT_STATE] = 9
+        rec[_OFF_WANT_MOVE] = 0
+        rec[_OFF_ANIM_FLAGS] = _ANIM_DONE
+        rec[_OFF_HOME_WALKER] = 1
+        struct.pack_into("<i", rec, _OFF_HOME, foff)
+        struct.pack_into("<i", rec, _OFF_TILE, foff)
+        tiles[foff + 16] = 1
+        tiles[foff + _TILE_DRAW] = 0x80
+        _put(pool, slot, rec)
+        walkers_tick(tiles, pool, clock=WalkerClock())
+        ok = (tiles[foff + _TILE_DRAW] & 0x80) == 0
+        lines.append(
+            f"vigile state 9 extinguishes: {'ok' if ok else 'FAIL'} "
+            f"+3={tiles[foff + _TILE_DRAW]:#x}"
+        )
+    else:
+        lines.append("vigile state 8→9 on sector fire: FAIL no spawn")
+        lines.append("vigile state 9 seeks burning rubble: FAIL no spawn")
+        lines.append("vigile state 9 extinguishes: FAIL no spawn")
+
+    reset_clock()
+    pool = bytearray(WALKER_BYTES)
+    tiles = bytearray(MAP_W * MAP_H * TILE_BYTES)
+    for dy in range(2):
+        for dx in range(2):
+            off = _tile_off(20 + dx, 20 + dy)
+            tiles[off] = 0xAF
+            tiles[off + 1] = 0x01
+            tiles[off + 5] = dy * 2 + dx
+    road = _tile_off(20, 19)
+    tiles[road] = 0x52
+    tiles[road + 1] = 0x20
+    nsp = emit_walkers_row(
+        tiles, pool, 20, 3, population=4, kinds="forum", shutoff=frozenset({"forum"})
+    )
+    wait = tiles[_tile_off(20, 20) + 6] & 0x0F
+    ok = nsp == 0 and wait > 0
+    lines.append(
+        f"understaffed forum +6 wait no clerk: {'ok' if ok else 'FAIL'} "
+        f"spawn={nsp} wait={wait}"
+    )
+
+    reset_clock()
+    pool = bytearray(WALKER_BYTES)
+    tiles = bytearray(MAP_W * MAP_H * TILE_BYTES)
+    for dy in range(3):
+        for dx in range(3):
+            off = _tile_off(20 + dx, 20 + dy)
+            tiles[off] = 0xFA
+            tiles[off + 1] = 0x01
+            tiles[off + 5] = dy * 3 + dx
+    tiles[_tile_off(20, 20) + 19] = 1
+    tiles[_tile_off(20, 23)] = 0x52
+    tiles[_tile_off(20, 23) + 1] = 0x20
+    nsp = emit_walkers_row(
+        tiles, pool, 20, 4, population=4, kinds="market", shutoff=frozenset({"factory"})
+    )
+    stock = (tiles[_tile_off(20, 20) + 9] & 0xF0) >> 4
+    wait = tiles[_tile_off(20, 20) + 6] & 0x0F
+    ok = nsp == 0 and wait > 0 and stock == 0
+    lines.append(
+        f"understaffed factory leftover no worker: {'ok' if ok else 'FAIL'} "
+        f"spawn={nsp} wait={wait} stock={stock}"
+    )
     return lines

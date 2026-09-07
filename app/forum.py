@@ -2,17 +2,23 @@
 
 Forum is a submode (view_submode=1): no sim tick. Open from a Forum
 building (0xAF / 0xB2–0xB4 / 0xB7–0xB9) or INT_CITY view-tab sprite 11.
-Career EMPIRE / ROME / PERSONAL stay stubs. Oracle ratings are cheap
-(chunks 286–289) and stay on this screen.
+Career EMPIRE / ROME / PERSONAL stay stubs. Oracle is chunks 286–289
+(+ avg 46). Scribe is HISTORY graphs only (no letters).
 
 Labor table = SavChunk 56 (8× assigned/need). Need is recomputed from
-the city map; assigned is player-controlled (sliders). Ready pool is
-chunk 52 [0x102A68], set by labor_init 0x563E2 (not population//20).
+the city map; assigned is player-controlled (sliders) except
+construction, which is locked to need 20 (EXE labor_init; no +/-).
+Ready pool is chunk 52 [0x102A68], set by labor_init 0x563E2
+(not population//20). Idle still subtracts those 20.
+assigned < need (0x28219) shuts that row: construction → forums,
+fire → prefect, water → fountain/bath paint; idle+factory_labor==0
+→ factory leftover / no type-6 emit (tile +6 wait gate).
 """
 
 from __future__ import annotations
 
 import math
+import struct
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -27,12 +33,13 @@ from app.city_paint import (
 )
 from app.city_sim import SimState
 
-# forum_panel_draw kinds we actually host.
+# Host kinds (not the EXE [0x117A5C] numbers — TREASURER took 3 first).
 KIND_CHROME = 0
 KIND_ORACLE = 1
 KIND_TREASURER = 3
 KIND_PLEBS = 8
 KIND_EXIT = 9
+KIND_SCRIBE = 10
 
 # C2.ENG [28]+0…11 in file order → visual 4×3 (forum_qa.md).
 _BUTTON_SKIP: tuple[int, ...] = (
@@ -42,7 +49,7 @@ _BUTTON_SKIP: tuple[int, ...] = (
 )
 _BUTTON_KIND: tuple[int, ...] = (
     KIND_ORACLE, 0, 0, KIND_TREASURER,
-    0, 0, KIND_PLEBS, 0,
+    KIND_SCRIBE, 0, KIND_PLEBS, 0,
     0, 0, 0, KIND_EXIT,
 )
 _BUTTON_FALLBACK: tuple[str, ...] = (
@@ -53,7 +60,12 @@ _BUTTON_FALLBACK: tuple[str, ...] = (
 
 LABOR_ROWS = 7  # [36]+12…18; +19 Idle is the remainder
 LABOR_LABEL_SKIP = tuple(range(12, 20))
-# labor_init 0x563E2: construction need always 20; slider defaults below.
+LABOR_CONSTRUCTION = 0
+LABOR_FIRE = 1
+LABOR_ROADS = 2
+LABOR_WATER = 3
+LABOR_WALLS = 4
+# labor_init 0x563E2: construction need always 20; assigned = need (locked).
 CREW = 20
 # FAQ / 0x444A5: 2 per fountain origin 0xDB–0xDE + 2 per baths 0xDF–0xE2.
 WATER_PER_BUILDING = 2
@@ -77,6 +89,14 @@ TAX_RATE_X = 0x1B0
 _FORUMBIT_LEFT = 0x23
 _FORUMBIT_RIGHT = 0x25
 
+# HISTORY.DAT / .SAV trailer — 200 × 20 B (history_dat.md). Scribe scales
+# are the UI caps from C2.ENG [32]+1…+4, not extra stored fields.
+HIST_REC = 20
+HIST_CAP = 200
+HIST_BYTES = HIST_REC * HIST_CAP
+SCRIBE_WINDOWS = (10, 20, 30)
+SCRIBE_SCALES = (10_000, 50_000, 8_000, 4_000)
+
 FORUM_IDS = frozenset(
     {0xAE, 0xAF, 0xB0, 0xB2, 0xB3, 0xB4, 0xB6, 0xB7, 0xB8, 0xB9}
 )
@@ -87,6 +107,14 @@ _BTN_GAP = 4
 
 _PANEL_X, _PANEL_Y = 16, 36
 _PANEL_W, _PANEL_H = 608, 320
+
+# Native C2 Forum overlay. Integer-upscaled to the city well (left of the
+# 162 px INT_CITY strip — same as city_chrome.SIDEBAR_W). At 640×480 the
+# overlay is full-window; the sidebar is never stretched.
+FORUM_NATIVE_W = 640
+FORUM_NATIVE_H = 480
+_FORUM_SIDEBAR_W = 162
+_FORUM_LETTERBOX = (12, 16, 28)
 
 _SLIDER_X = 220
 _SLIDER_W = 160
@@ -106,21 +134,29 @@ class LaborState:
 
     @property
     def idle(self) -> int:
-        used = sum(max(0, n) for n in self.assigned)
+        used = CREW
+        for i, n in enumerate(self.assigned):
+            if i == LABOR_CONSTRUCTION:
+                continue
+            used += max(0, n)
         return max(0, self.ready - used)
 
     def clamp(self) -> None:
         for i in range(LABOR_ROWS):
             self.assigned[i] = max(0, int(self.assigned[i]))
             self.need[i] = max(0, int(self.need[i]))
+        self.assigned[LABOR_CONSTRUCTION] = CREW
         extra = sum(self.assigned) - self.ready
         if extra > 0:
             for i in range(LABOR_ROWS - 1, -1, -1):
+                if i == LABOR_CONSTRUCTION:
+                    continue
                 take = min(self.assigned[i], extra)
                 self.assigned[i] -= take
                 extra -= take
                 if extra <= 0:
                     break
+        self.assigned[LABOR_CONSTRUCTION] = CREW
 
 
 @dataclass
@@ -132,6 +168,7 @@ class ForumState:
     bg: Image.Image | None = None
     bits: list = field(default_factory=list)
     oracle_advice: int | None = None  # 0…3 column, or None
+    scribe_years: int = 10  # 10 / 20 / 30 — arrows only change the window
 
 
 def _eng(eng, slot: int, skip: int, fallback: str) -> str:
@@ -275,6 +312,28 @@ def labor_tick_ready(ready: int, welfare: int, labor_index: int) -> int:
     return 1 if nxt < 1 else nxt
 
 
+def apply_month_labor(sim: SimState) -> int:
+    """0x56440 on WRAP — ready pool then clamp sliders to the new total."""
+    ready = max(0, int(getattr(sim, "plebs_ready", 0)))
+    sim.plebs_last = ready
+    idx = int(getattr(sim, "labor_index", 0) or labor_index_from_skill(getattr(sim, "skill", 0)))
+    nxt = labor_tick_ready(ready, max(0, int(getattr(sim, "welfare", 0))), idx)
+    sim.plebs_ready = nxt
+    asg = list(getattr(sim, "labor_assigned", None) or [0] * LABOR_ROWS)
+    while len(asg) < LABOR_ROWS:
+        asg.append(0)
+    extra = sum(asg[:LABOR_ROWS]) - nxt
+    if extra > 0:
+        for i in range(LABOR_ROWS - 1, -1, -1):
+            take = min(asg[i], extra)
+            asg[i] -= take
+            extra -= take
+            if extra <= 0:
+                break
+    sim.labor_assigned = asg[:LABOR_ROWS]
+    return nxt
+
+
 def forecast_ready(labor: LaborState, sim: SimState) -> int:
     """0x5660B first tick: next-month ready, live ready unchanged."""
     idx = int(getattr(sim, "labor_index", 0) or labor_index_from_skill(getattr(sim, "skill", 0)))
@@ -301,6 +360,11 @@ def year_ind_tax_estimate(wealth: int, tax_rate: int, ytd: int = 0, months: int 
     return year_pop_tax_estimate(wealth, tax_rate, ytd=ytd, months=months)
 
 
+def ytd_tax_dn(ytd: int) -> int:
+    """Raw YTD → Dn. Same (//12)//100 as year_pop_tax_estimate when left=0."""
+    return (max(0, int(ytd)) // 12) // 100
+
+
 def collect_monthly_tax(sim: SimState) -> None:
     """0x45696 / 0x456C6 — month wrap uses live rates (chunks 29 / 30)."""
     pop_raw = monthly_pop_tax_raw(
@@ -315,6 +379,143 @@ def collect_monthly_tax(sim: SimState) -> None:
     )
     sim.ind_tax_ytd = int(getattr(sim, "ind_tax_ytd", 0)) + ind_raw
     sim.ind_tax_months = int(getattr(sim, "ind_tax_months", 0)) + 1
+
+
+def parse_history(blob: bytes | bytearray | None) -> list[tuple[int, int, int, int, int]]:
+    """Non-empty 20 B records: (pop, treasury, taxP, taxI, year)."""
+    raw = bytes(blob or b"")
+    if len(raw) < HIST_REC:
+        return []
+    recs: list[tuple[int, int, int, int, int]] = []
+    n = min(HIST_CAP, len(raw) // HIST_REC)
+    for i in range(n):
+        vals = struct.unpack_from("<5i", raw, i * HIST_REC)
+        if any(v != 0 for v in vals):
+            recs.append(vals)
+    return recs
+
+
+def history_window(
+    recs: list[tuple[int, int, int, int, int]], years: int
+) -> list[tuple[int, int, int, int, int]]:
+    """Last N records (Scribe arrows: 10 / 20 / 30)."""
+    n = 10 if years not in SCRIBE_WINDOWS else int(years)
+    if not recs:
+        return []
+    return recs[-n:]
+
+
+def _history_next_slot(blob: bytearray) -> int:
+    last = -1
+    n = min(HIST_CAP, len(blob) // HIST_REC)
+    for i in range(n):
+        vals = struct.unpack_from("<5i", blob, i * HIST_REC)
+        if any(v != 0 for v in vals):
+            last = i
+    nxt = last + 1
+    return 0 if nxt >= HIST_CAP else nxt
+
+
+def append_history_year(sim: SimState) -> None:
+    """FUN_00070ae3 — one 20 B trailer rec. close_year_books calls this."""
+    blob = getattr(sim, "history", None)
+    if not isinstance(blob, bytearray):
+        blob = bytearray(blob or b"")
+    if len(blob) < HIST_BYTES:
+        blob.extend(b"\x00" * (HIST_BYTES - len(blob)))
+    sim.history = blob
+    rec = (
+        int(getattr(sim, "population", 0)),
+        int(getattr(sim, "treasury", 0)),
+        int(getattr(sim, "pop_tax_last", 0)),
+        int(getattr(sim, "ind_tax_last", 0)),
+        int(getattr(sim, "year_raw", 0)),
+    )
+    struct.pack_into("<5i", blob, _history_next_slot(blob) * HIST_REC, *rec)
+
+
+def oracle_advice_skip(sim: SimState, col: int) -> int:
+    """0x57450 + city-only force id 17 → [31]+24. col 0…3.
+
+    Empire / Peace (ids < 9) stay the city-only stub. Prosperity uses
+    surplus / housing wealth we already store. Culture has no coverage
+    mins in SimState — else branch is services ([31]+23).
+    """
+    if col < 0 or col > 3:
+        return 7
+    if getattr(sim, "city_only", 0) and col < 2:
+        return 24
+    if col == 2:
+        books = treasurer_estimate(sim)
+        if books.surplus < 0:
+            return 17
+        if int(getattr(sim, "tax_wealth", 0)) < 10:
+            return 18
+        return 19
+    if col == 3:
+        return 23
+    return 24
+
+
+def apply_month_treasury(sim: SimState) -> TreasurerBooks:
+    """WRAP cash: +pop +ind −welfare. City Only tribute 0.
+
+    Constructions are already deducted at place (`construct_ytd` is books only).
+    Tax Dn is the increment of ytd_tax_dn so 12 months = year ESTIMATE.
+    Operating is one month of welfare (0x565f9 / ESTIMATE welfare×months).
+    """
+    if not hasattr(sim, "treasury"):
+        return TreasurerBooks()
+    pop0 = ytd_tax_dn(getattr(sim, "tax_ytd", 0))
+    ind0 = ytd_tax_dn(getattr(sim, "ind_tax_ytd", 0))
+    collect_monthly_tax(sim)
+    pop_dn = ytd_tax_dn(sim.tax_ytd) - pop0
+    ind_dn = ytd_tax_dn(sim.ind_tax_ytd) - ind0
+    operating = max(0, int(getattr(sim, "welfare", 0)))
+    sim.operating_ytd = int(getattr(sim, "operating_ytd", 0)) + operating
+    tribute = 0
+    constructions = 0
+    delta = pop_dn + ind_dn - operating - constructions - tribute
+    sim.treasury = int(sim.treasury) + delta
+    return TreasurerBooks(
+        pop_tax=pop_dn,
+        ind_tax=ind_dn,
+        constructions=constructions,
+        operating=operating,
+        tribute=tribute,
+        surplus=delta,
+        wealth=max(0, int(getattr(sim, "tax_wealth", 0))),
+        months_left=max(0, 12 - max(0, min(11, int(getattr(sim, "month", 0))))),
+    )
+
+
+def close_year_books(sim: SimState) -> None:
+    """December→January: chunks 33–37 last-year + reset YTD (0x56c1c).
+
+    Tax was already credited monthly. Career tribute hits treasury here;
+    City Only tribute stays 0.
+    """
+    if not hasattr(sim, "pop_tax_last"):
+        return
+    pop = ytd_tax_dn(getattr(sim, "tax_ytd", 0))
+    ind = ytd_tax_dn(getattr(sim, "ind_tax_ytd", 0))
+    constructions = max(0, int(getattr(sim, "construct_ytd", 0)))
+    operating = max(0, int(getattr(sim, "operating_ytd", 0)))
+    tribute = 0 if getattr(sim, "city_only", 0) else max(0, int(getattr(sim, "tribute", 0)))
+    if tribute:
+        sim.treasury = int(sim.treasury) - tribute
+    sim.pop_tax_last = pop
+    sim.ind_tax_last = ind
+    sim.construct_last = constructions
+    sim.operating_last = operating
+    sim.surplus_last = pop + ind - constructions - operating - tribute
+    append_history_year(sim)
+    sim.tax_ytd = 0
+    sim.tax_months = 0
+    sim.ind_tax_ytd = 0
+    sim.ind_tax_months = 0
+    sim.operating_ytd = 0
+    sim.construct_ytd = 0
 
 
 @dataclass
@@ -409,6 +610,66 @@ def sync_labor(labor: LaborState, tiles: bytearray, sim: SimState) -> LaborState
     return labor
 
 
+def labor_percent(assigned: int, need: int) -> int:
+    """0x28219 assigned×100/need, cap 100. need==0 → 100 (0x45200 early-out)."""
+    assigned = max(0, int(assigned))
+    need = int(need)
+    if need <= 0:
+        return 100
+    pct = assigned * 100 // need
+    return 100 if pct > 100 else pct
+
+
+def labor_row_staffed(assigned: int, need: int) -> bool:
+    """Row can run: need 0, or assigned covers need (percent 100)."""
+    return labor_percent(assigned, need) >= 100
+
+
+def labor_idle_of(sim: SimState) -> int:
+    ready = max(0, int(getattr(sim, "plebs_ready", 0)))
+    asg = list(getattr(sim, "labor_assigned", None) or [])[:LABOR_ROWS]
+    used = CREW
+    for i, n in enumerate(asg):
+        if i == LABOR_CONSTRUCTION:
+            continue
+        used += max(0, int(n))
+    return max(0, ready - used)
+
+
+def refresh_labor_need(sim: SimState, tiles: bytearray) -> list[int]:
+    """Recompute chunk-56 need from the live map. Sliders / ready unchanged."""
+    need = labor_need_from_city(tiles, city_only=bool(getattr(sim, "city_only", 0)))
+    sim.labor_need = list(need)
+    return need
+
+
+def labor_shutoff(sim: SimState) -> frozenset[str]:
+    """Kinds that do not run this cycle (assigned < need, or no idle factory seed).
+
+    Construction (need always 20) gates forums. Fire gates prefect 0xE3.
+    Water gates fountain/bath paint. Idle==0 and factory_labor==0 gates
+    0xFA workers (leftover +9 stock). 0x28219 / 0x45200 / 0x56654.
+    """
+    asg = list(getattr(sim, "labor_assigned", None) or [0] * LABOR_ROWS)
+    need = list(getattr(sim, "labor_need", None) or [0] * LABOR_ROWS)
+    while len(asg) < LABOR_ROWS:
+        asg.append(0)
+    while len(need) < LABOR_ROWS:
+        need.append(0)
+    off: set[str] = set()
+    if not labor_row_staffed(asg[LABOR_CONSTRUCTION], need[LABOR_CONSTRUCTION]):
+        off.add("forum")
+        off.add("construction")
+    if not labor_row_staffed(asg[LABOR_FIRE], need[LABOR_FIRE]):
+        off.add("prefect")
+    if not labor_row_staffed(asg[LABOR_WATER], need[LABOR_WATER]):
+        off.add("water")
+    idle = labor_idle_of(sim)
+    if idle <= 0 and int(getattr(sim, "factory_labor", 0) or 0) <= 0:
+        off.add("factory")
+    return frozenset(off)
+
+
 def labor_from_sim(sim: SimState) -> LaborState:
     assigned = list(getattr(sim, "labor_assigned", None) or [0] * LABOR_ROWS)
     need = list(getattr(sim, "labor_need", None) or [0] * LABOR_ROWS)
@@ -416,6 +677,7 @@ def labor_from_sim(sim: SimState) -> LaborState:
         assigned.append(0)
     while len(need) < LABOR_ROWS:
         need.append(0)
+    assigned[LABOR_CONSTRUCTION] = CREW
     return LaborState(
         ready=int(getattr(sim, "plebs_ready", 0)),
         estimate=int(getattr(sim, "plebs_estimate", 0)),
@@ -456,6 +718,28 @@ def open_forum(sim: SimState, tiles: bytearray, game: Path | None = None) -> For
         state.bits = load_forum_bits(game)
     sync_labor(state.labor, tiles, sim)
     return state
+
+
+def forum_layout(win_w: int, win_h: int) -> tuple[int, int, int]:
+    """Integer nearest-neighbor scale + origin for the 640×480 Forum overlay.
+
+    ``scale = max(1, min(well_w // 640, well_h // 480))``. The well is the
+    iso area left of the 162 px chrome when the window is wider than 640;
+    at native size Forum is full-window so the sidebar is not reserved.
+    Origin is the well's top-left (0, 0) — HUD still paints on top.
+    """
+    w = max(1, int(win_w))
+    h = max(1, int(win_h))
+    well_w = w - _FORUM_SIDEBAR_W if w > FORUM_NATIVE_W else w
+    well_h = h
+    scale = max(1, min(well_w // FORUM_NATIVE_W, well_h // FORUM_NATIVE_H))
+    return scale, 0, 0
+
+
+def forum_to_native(mx: int, my: int, win_w: int, win_h: int) -> tuple[int, int]:
+    """Window pixel → native 640×480 Forum space (same layout as blit)."""
+    scale, ox, oy = forum_layout(win_w, win_h)
+    return (int(mx) - ox) // scale, (int(my) - oy) // scale
 
 
 def button_rect(index: int) -> tuple[int, int, int, int]:
@@ -506,6 +790,8 @@ def hit_plebs(mx: int, my: int, labor: LaborState) -> str | None:
     if _in_rect(mx, my, wp):
         return "welfare+"
     for i in range(LABOR_ROWS):
+        if i == LABOR_CONSTRUCTION:
+            continue
         minus, bar, plus = _slider_rects(i)
         if _in_rect(mx, my, minus):
             return f"row{i}-"
@@ -551,19 +837,24 @@ def apply_plebs_hit(labor: LaborState, action: str, sim: SimState) -> None:
         labor.welfare = min(WELFARE_MAX, labor.welfare + 1)
     elif action.endswith("-") and action.startswith("row"):
         i = int(action[3:-1])
-        if 0 <= i < LABOR_ROWS and labor.assigned[i] > 0:
+        if 0 <= i < LABOR_ROWS and i != LABOR_CONSTRUCTION and labor.assigned[i] > 0:
             labor.assigned[i] -= 1
     elif action.endswith("+") and action.startswith("row"):
         i = int(action[3:-1])
-        if 0 <= i < LABOR_ROWS and labor.idle > 0:
+        if 0 <= i < LABOR_ROWS and i != LABOR_CONSTRUCTION and labor.idle > 0:
             labor.assigned[i] += 1
     elif "=" in action and action.startswith("row"):
         left, _, raw = action.partition("=")
         i = int(left[3:])
         want = max(0, int(raw))
-        if 0 <= i < LABOR_ROWS:
-            others = sum(labor.assigned[j] for j in range(LABOR_ROWS) if j != i)
+        if 0 <= i < LABOR_ROWS and i != LABOR_CONSTRUCTION:
+            others = sum(
+                CREW if j == LABOR_CONSTRUCTION else labor.assigned[j]
+                for j in range(LABOR_ROWS)
+                if j != i
+            )
             labor.assigned[i] = max(0, min(want, labor.ready - others))
+    labor.assigned[LABOR_CONSTRUCTION] = CREW
     labor.clamp()
     sim.welfare = labor.welfare
     sim.labor_assigned = list(labor.assigned)
@@ -572,9 +863,21 @@ def apply_plebs_hit(labor: LaborState, action: str, sim: SimState) -> None:
 
 
 def click_forum(
-    state: ForumState, mx: int, my: int, sim: SimState, *, eng=None
+    state: ForumState,
+    mx: int,
+    my: int,
+    sim: SimState,
+    *,
+    eng=None,
+    frame_size: tuple[int, int] | None = None,
 ) -> str:
-    """One left-click. Empty string = consumed, no HUD. 'exit' leaves forum."""
+    """One left-click. Empty string = consumed, no HUD. 'exit' leaves forum.
+
+    ``mx``/``my`` are window pixels. Pass ``frame_size`` so hits use the
+    same integer-scaled rects as ``blit_forum``.
+    """
+    if frame_size is not None:
+        mx, my = forum_to_native(mx, my, frame_size[0], frame_size[1])
     hit = button_at(mx, my)
     if hit is not None:
         skip = _BUTTON_SKIP[hit]
@@ -582,7 +885,7 @@ def click_forum(
         label = _eng(eng, 28, skip, _BUTTON_FALLBACK[hit])
         if kind == KIND_EXIT:
             return "exit"
-        if kind in (KIND_PLEBS, KIND_ORACLE, KIND_TREASURER):
+        if kind in (KIND_PLEBS, KIND_ORACLE, KIND_TREASURER, KIND_SCRIBE):
             state.kind = kind
             state.oracle_advice = None
             return label
@@ -613,7 +916,37 @@ def click_forum(
         if col is not None:
             state.oracle_advice = col
             return ""
+        return ""
+
+    if state.kind == KIND_SCRIBE:
+        action = hit_scribe(mx, my)
+        if action:
+            apply_scribe_hit(state, action)
+            return ""
+        return ""
     return ""
+
+
+def _scribe_year_rects() -> tuple[tuple[int, int, int, int], tuple[int, int, int, int]]:
+    y = _PANEL_Y + 28
+    return ((_PANEL_X + 220, y, 16, 16), (_PANEL_X + 320, y, 16, 16))
+
+
+def hit_scribe(mx: int, my: int) -> str | None:
+    minus, plus = _scribe_year_rects()
+    if _in_rect(mx, my, minus):
+        return "years-"
+    if _in_rect(mx, my, plus):
+        return "years+"
+    return None
+
+
+def apply_scribe_hit(state: ForumState, action: str) -> None:
+    years = 10 if state.scribe_years not in SCRIBE_WINDOWS else int(state.scribe_years)
+    if action == "years-":
+        state.scribe_years = 10 if years <= 10 else years - 10
+    elif action == "years+":
+        state.scribe_years = 30 if years >= 30 else years + 10
 
 
 def _oracle_column(mx: int, my: int) -> int | None:
@@ -633,22 +966,37 @@ def blit_forum(
     *,
     eng=None,
 ) -> Image.Image:
+    """Compose native 640×480 Forum, then integer-upscale into ``frame_size``."""
     w, h = frame_size
+    scale, ox, oy = forum_layout(w, h)
+    native = _blit_forum_native(state, sim, eng=eng)
+    if scale > 1:
+        native = native.resize(
+            (FORUM_NATIVE_W * scale, FORUM_NATIVE_H * scale),
+            Image.Resampling.NEAREST,
+        )
+    if native.size == (w, h) and ox == 0 and oy == 0:
+        return native
+    canvas = Image.new("RGB", (w, h), _FORUM_LETTERBOX)
+    canvas.paste(native, (ox, oy))
+    return canvas
+
+
+def _blit_forum_native(state: ForumState, sim: SimState, *, eng=None) -> Image.Image:
+    """Paint the C2 Forum at 640×480 (panel, sliders, 4×3 chrome)."""
     if state.bg is not None:
-        out = state.bg.resize((640, 480), Image.Resampling.NEAREST)
-        if (w, h) != (640, 480):
-            canvas = Image.new("RGB", (w, h), (12, 16, 28))
-            canvas.paste(out, (0, 0))
-            out = canvas
+        out = state.bg.resize((FORUM_NATIVE_W, FORUM_NATIVE_H), Image.Resampling.NEAREST)
     else:
-        out = Image.new("RGB", (w, h), (28, 24, 20))
+        out = Image.new("RGB", (FORUM_NATIVE_W, FORUM_NATIVE_H), (28, 24, 20))
     out = out.convert("RGBA")
     draw = ImageDraw.Draw(out)
     font = _font()
     title = _eng(eng, 36, 0, "Plebeian Tribune") if state.kind == KIND_PLEBS else (
         _eng(eng, 31, 0, "Your Ratings") if state.kind == KIND_ORACLE else (
-            _eng(eng, 28, 12, "Treasury") if state.kind == KIND_TREASURER else
-            _eng(eng, 28, 0, "CLEAR FORUM")
+            _eng(eng, 28, 12, "Treasury") if state.kind == KIND_TREASURER else (
+                _eng(eng, 32, 0, "Your Scribe") if state.kind == KIND_SCRIBE else
+                _eng(eng, 28, 0, "CLEAR FORUM")
+            )
         )
     )
     if state.kind != KIND_CHROME:
@@ -664,6 +1012,8 @@ def blit_forum(
             _draw_oracle(draw, font, sim, state.oracle_advice, eng)
         elif state.kind == KIND_TREASURER:
             _draw_treasurer(draw, font, sim, eng, image=out, bits=state.bits)
+        elif state.kind == KIND_SCRIBE:
+            _draw_scribe(draw, font, sim, state.scribe_years, eng)
     for i, skip in enumerate(_BUTTON_SKIP):
         x, y, bw, bh = button_rect(i)
         kind = _BUTTON_KIND[i]
@@ -673,7 +1023,9 @@ def blit_forum(
         if kind == state.kind and kind != 0:
             lit = True
         fill = (40, 70, 50, 230) if not lit else (160, 40, 30, 240)
-        if kind == state.kind and kind in (KIND_PLEBS, KIND_ORACLE, KIND_TREASURER):
+        if kind == state.kind and kind in (
+            KIND_PLEBS, KIND_ORACLE, KIND_TREASURER, KIND_SCRIBE
+        ):
             fill = (160, 40, 30, 240)
         draw.rectangle((x, y, x + bw - 1, y + bh - 1), fill=fill, outline=(200, 190, 140, 255))
         lab = _eng(eng, 28, skip, _BUTTON_FALLBACK[i])
@@ -744,16 +1096,18 @@ def _draw_plebs(draw: ImageDraw.ImageDraw, font, labor: LaborState, eng) -> None
         y = _PANEL_Y + 86 + i * _ROW_H
         if i < LABOR_ROWS:
             name = _eng(eng, 36, LABOR_LABEL_SKIP[i], f"row {i}")
-            assigned = labor.assigned[i]
-            need = labor.need[i]
+            locked = i == LABOR_CONSTRUCTION
+            assigned = CREW if locked else labor.assigned[i]
+            need = CREW if locked else labor.need[i]
             if i >= 5:
                 need_s = na
             else:
                 need_s = str(need)
             minus, bar, plus = _slider_rects(i)
             draw.text((_PANEL_X + 10, y), name[:20], fill=(240, 230, 180), font=font)
-            draw.rectangle((minus[0], minus[1], minus[0] + 15, minus[1] + 15), outline=(200, 180, 90))
-            draw.text((minus[0] + 4, minus[1] + 1), "-", fill=(255, 228, 160), font=font)
+            if not locked:
+                draw.rectangle((minus[0], minus[1], minus[0] + 15, minus[1] + 15), outline=(200, 180, 90))
+                draw.text((minus[0] + 4, minus[1] + 1), "-", fill=(255, 228, 160), font=font)
             draw.rectangle((bar[0], bar[1], bar[0] + bar[2], bar[1] + bar[3]), outline=(120, 110, 70))
             if labor.ready:
                 fill_w = int(bar[2] * assigned / labor.ready)
@@ -761,8 +1115,9 @@ def _draw_plebs(draw: ImageDraw.ImageDraw, font, labor: LaborState, eng) -> None
                     (bar[0], bar[1], bar[0] + max(0, fill_w), bar[1] + bar[3]),
                     fill=(180, 140, 40),
                 )
-            draw.rectangle((plus[0], plus[1], plus[0] + 15, plus[1] + 15), outline=(200, 180, 90))
-            draw.text((plus[0] + 4, plus[1] + 1), "+", fill=(255, 228, 160), font=font)
+            if not locked:
+                draw.rectangle((plus[0], plus[1], plus[0] + 15, plus[1] + 15), outline=(200, 180, 90))
+                draw.text((plus[0] + 4, plus[1] + 1), "+", fill=(255, 228, 160), font=font)
             short = assigned < need and i < 5
             col = (255, 120, 90) if short else (220, 230, 210)
             draw.text(
@@ -802,7 +1157,13 @@ def _draw_oracle(draw, font, sim: SimState, advice: int | None, eng) -> None:
         draw.rectangle((x + 8, _PANEL_Y + 40, x + w - 8, _PANEL_Y + 110), outline=(200, 180, 90))
         draw.text((x + 16, _PANEL_Y + 48), name, fill=(255, 228, 160), font=font)
         draw.text((x + 16, _PANEL_Y + 68), f"{val} %", fill=(220, 230, 210), font=font)
-        draw.text((x + 16, _PANEL_Y + 84), f"{_eng(eng, 31, 6, '(Need')} 0 %)", fill=(180, 180, 160), font=font)
+        if not getattr(sim, "city_only", 0):
+            draw.text(
+                (x + 16, _PANEL_Y + 84),
+                f"{_eng(eng, 31, 6, '(Need')} 0 %)",
+                fill=(180, 180, 160),
+                font=font,
+            )
     draw.text(
         (_PANEL_X + 10, _PANEL_Y + 120),
         f"{_eng(eng, 31, 5, 'Average rating: ')}{avg} %",
@@ -814,22 +1175,94 @@ def _draw_oracle(draw, font, sim: SimState, advice: int | None, eng) -> None:
             eng, 31, 7,
             "Select any of the ratings above to receive advice on improving them.",
         )
-    elif sim.city_only and advice < 2:
-        prompt = _eng(
-            eng, 31, 24,
-            "You cannot get promoted when playing in city-only mode. "
-            "Get ADVICE on your city's Prosperity or Culture ratings by clicking on their boxes.",
-        )
     else:
-        # Prosperity 9…12 / Culture 13…16 → skip 16…23; pick the “grow” line.
-        skip = 19 if advice == 2 else 23
-        prompt = _eng(eng, 31, skip, "")
+        skip = oracle_advice_skip(sim, advice)
+        fallback = (
+            "You cannot get promoted when playing in city-only mode. "
+            "Get ADVICE on your city's Prosperity or Culture ratings by clicking on their boxes."
+            if skip == 24 else ""
+        )
+        prompt = _eng(eng, 31, skip, fallback)
     draw.text((_PANEL_X + 10, _PANEL_Y + 150), prompt[:86], fill=(200, 210, 190), font=font)
     y = _PANEL_Y + 166
     for chunk in (prompt[86:172], prompt[172:258]):
         if chunk:
             draw.text((_PANEL_X + 10, y), chunk, fill=(200, 210, 190), font=font)
             y += 14
+
+
+def _year_label(year_raw: int) -> str:
+    if year_raw < 0:
+        return f"{-int(year_raw)} BC"
+    return f"{int(year_raw)} AD"
+
+
+def _draw_scribe(draw, font, sim: SimState, years: int, eng) -> None:
+    """HISTORY graphs only — pop / funds / pop tax / industry tax."""
+    recs = history_window(parse_history(getattr(sim, "history", None)), years)
+    window = 10 if years not in SCRIBE_WINDOWS else int(years)
+    look = _eng(eng, 32, 5, "Look at records")
+    last = _eng(eng, 32, 6, "for the last")
+    yrs = _eng(eng, 32, 7, "years.")
+    to = _eng(eng, 32, 8, "to")
+    if recs:
+        span = f"{_year_label(recs[0][4])} {to} {_year_label(recs[-1][4])}"
+    else:
+        span = f"{_year_label(int(getattr(sim, 'year_raw', 0)))} {to} {_year_label(int(getattr(sim, 'year_raw', 0)))}"
+    draw.text(
+        (_PANEL_X + 10, _PANEL_Y + 30),
+        f"{look} {last} {window} {yrs}  {span}",
+        fill=(200, 210, 190),
+        font=font,
+    )
+    minus, plus = _scribe_year_rects()
+    draw.rectangle((minus[0], minus[1], minus[0] + 15, minus[1] + 15), outline=(200, 180, 90))
+    draw.text((minus[0] + 4, minus[1] + 1), "-", fill=(255, 228, 160), font=font)
+    draw.rectangle((plus[0], plus[1], plus[0] + 15, plus[1] + 15), outline=(200, 180, 90))
+    draw.text((plus[0] + 4, plus[1] + 1), "+", fill=(255, 228, 160), font=font)
+
+    labels = (
+        _eng(eng, 32, 1, "City population: 0 - "),
+        _eng(eng, 32, 2, "City funds: 0 - "),
+        _eng(eng, 32, 3, "Pop. taxes: 0 -"),
+        _eng(eng, 32, 4, "Industry taxes: 0 -"),
+    )
+    series = (
+        [r[0] for r in recs],
+        [r[1] for r in recs],
+        [r[2] for r in recs],
+        [r[3] for r in recs],
+    )
+    gx = _PANEL_X + 12
+    gw = _PANEL_W - 24
+    gh = 44
+    gy0 = _PANEL_Y + 52
+    for i, (lab, scale, vals) in enumerate(zip(labels, SCRIBE_SCALES, series)):
+        y = gy0 + i * (gh + 10)
+        draw.text((gx, y), f"{lab}{scale}", fill=(255, 228, 160), font=font)
+        bx = gx
+        by = y + 14
+        bw = gw
+        bh = gh - 16
+        draw.rectangle((bx, by, bx + bw - 1, by + bh - 1), outline=(120, 110, 70))
+        n = max(window, 1)
+        slot_w = max(1, bw // n)
+        for k, val in enumerate(vals):
+            frac = max(0.0, min(1.0, int(val) / scale)) if scale else 0.0
+            bar_h = max(1, int((bh - 2) * frac)) if val else 0
+            x0 = bx + (n - len(vals) + k) * slot_w
+            if bar_h:
+                draw.rectangle(
+                    (x0 + 1, by + bh - 1 - bar_h, x0 + slot_w - 2, by + bh - 2),
+                    fill=(180, 140, 40),
+                )
+        if vals:
+            draw.text(
+                (bx + bw - 70, y),
+                str(vals[-1]),
+                fill=(220, 230, 210),
+                font=font,
+            )
 
 
 def _paste_bit(image, bits, index: int, x: int, y: int) -> bool:
@@ -1050,6 +1483,46 @@ def selftest() -> list[str]:
         )
     else:
         lines.append("ok    City Only Normal ready 42 welfare 8 sliders 20/12/4/4")
+    if labor_percent(12, 12) != 100 or labor_percent(6, 12) != 50:
+        lines.append(f"FAIL  labor percent {labor_percent(12, 12)} {labor_percent(6, 12)}")
+    else:
+        lines.append("ok    0x28219 assigned*100/need")
+    if labor_percent(4, 0) != 100:
+        lines.append(f"FAIL  need 0 percent {labor_percent(4, 0)}")
+    else:
+        lines.append("ok    need 0 staffed 100")
+    sim_gate = SimState(
+        city_only=1,
+        plebs_ready=42,
+        labor_assigned=list(LABOR_ASSIGNED_INIT),
+        labor_need=[CREW, 0, 0, 0, 0, 0, 0],
+        factory_labor=0,
+    )
+    shut0 = labor_shutoff(sim_gate)
+    if shut0:
+        lines.append(f"FAIL  fresh Normal shutoff {sorted(shut0)}")
+    else:
+        lines.append("ok    Normal 20/12/4/4 idle 2 nothing shut")
+    sim_gate.labor_assigned = [0, 12, 4, 4, 0, 0, 0]
+    shut_c = labor_shutoff(sim_gate)
+    if "forum" not in shut_c or "construction" not in shut_c:
+        lines.append(f"FAIL  construction 0 shutoff {sorted(shut_c)}")
+    else:
+        lines.append("ok    construction assigned 0 forum/construction off")
+    sim_gate.labor_assigned = list(LABOR_ASSIGNED_INIT)
+    sim_gate.labor_need = [CREW, 0, 0, 6, 0, 0, 0]
+    shut_w = labor_shutoff(sim_gate)
+    if "water" not in shut_w:
+        lines.append(f"FAIL  water 4<6 shutoff {sorted(shut_w)}")
+    else:
+        lines.append("ok    water assigned 4 need 6 fountains/baths off")
+    sim_gate.labor_need = [CREW, 0, 0, 0, 0, 0, 0]
+    sim_gate.labor_assigned = [20, 12, 4, 6, 0, 0, 0]
+    shut_f = labor_shutoff(sim_gate)
+    if "factory" not in shut_f:
+        lines.append(f"FAIL  idle 0 factory shutoff {sorted(shut_f)}")
+    else:
+        lines.append("ok    idle 0 factory_labor 0 factory leftover")
     labor_pop = LaborState()
     sync_labor(labor_pop, tiles, SimState(city_only=1, population=400))
     if labor_pop.ready != 0:
@@ -1068,10 +1541,20 @@ def selftest() -> list[str]:
         lines.append("ok    PLEBS is grid cell 6")
     state = ForumState(kind=KIND_PLEBS, labor=labor)
     apply_plebs_hit(labor, "row0+", sim)
-    if labor.assigned[0] != 1:
-        lines.append(f"FAIL  slider {labor.assigned}")
+    apply_plebs_hit(labor, "row0-", sim)
+    apply_plebs_hit(labor, "row0=0", sim)
+    if labor.assigned[0] != CREW or labor.need[0] != CREW:
+        lines.append(f"FAIL  construction locked {labor.assigned[0]} need {labor.need[0]}")
     else:
-        lines.append("ok    plebs slider +1")
+        lines.append("ok    construction +/- do nothing, still 20 Need 20")
+    fire0 = labor.assigned[1]
+    apply_plebs_hit(labor, "row1+", sim)
+    if labor.assigned[0] != CREW:
+        lines.append(f"FAIL  fire+ stole construction {labor.assigned}")
+    elif labor.assigned[1] != fire0:
+        lines.append(f"FAIL  fire+ from idle 0 {labor.assigned}")
+    else:
+        lines.append("ok    construction 20 reserved; Fire cannot steal it")
     # 0x56440 / 0x5660B: Normal index 5, ready 42, welfare 8 → next month 44.
     idx = labor_index_from_skill(2)
     if idx != 5:
@@ -1184,11 +1667,113 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  month pop ytd {month_sim.tax_ytd}")
     else:
         lines.append("ok    next month collects at live dial rates")
+    wrap = SimState(
+        city_only=1,
+        treasury=12000,
+        welfare=8,
+        tax_rate=5,
+        tax_wealth=100,
+        industrial_tax=5,
+        ind_wealth=140,
+    )
+    books_w = apply_month_treasury(wrap)
+    pop_dn = ytd_tax_dn(monthly_pop_tax_raw(100, 5))
+    ind_dn = ytd_tax_dn(monthly_pop_tax_raw(140, 5))
+    want = 12000 + pop_dn + ind_dn - 8
+    if books_w.tribute != 0 or books_w.constructions != 0:
+        lines.append(f"FAIL  wrap tribute/construct {books_w}")
+    elif wrap.treasury != want or books_w.operating != 8:
+        lines.append(f"FAIL  wrap treas {wrap.treasury} want {want}")
+    else:
+        lines.append(
+            f"ok    WRAP +pop {pop_dn} +ind {ind_dn} -op 8 tribute 0 -> {wrap.treasury}"
+        )
+    raised = SimState(
+        city_only=1,
+        treasury=12000,
+        welfare=8,
+        tax_rate=10,
+        tax_wealth=100,
+        industrial_tax=5,
+        ind_wealth=140,
+    )
+    apply_month_treasury(raised)
+    if raised.treasury <= wrap.treasury:
+        lines.append(f"FAIL  raise tax wrap {raised.treasury} vs 5% {wrap.treasury}")
+    else:
+        lines.append(f"ok    raise tax -> WRAP Dn {wrap.treasury}->{raised.treasury}")
     frame = blit_forum((640, 480), state, sim)
     if frame.size != (640, 480):
         lines.append(f"FAIL  forum blit {frame.size}")
     else:
         lines.append("ok    forum 640x480")
+    if forum_layout(640, 480) != (1, 0, 0):
+        lines.append(f"FAIL  forum scale 640 {forum_layout(640, 480)}")
+    elif forum_layout(640 * 2 + _FORUM_SIDEBAR_W, 480 * 2) != (2, 0, 0):
+        lines.append(f"FAIL  forum scale 2x {forum_layout(1442, 960)}")
+    elif forum_layout(640 * 3 + _FORUM_SIDEBAR_W, 480 * 3) != (3, 0, 0):
+        lines.append(f"FAIL  forum scale 3x {forum_layout(2082, 1440)}")
+    else:
+        lines.append("ok    forum scale 1/2/3 from well/640")
+    wide = (FORUM_NATIVE_W * 2 + _FORUM_SIDEBAR_W, FORUM_NATIVE_H * 2)
+    scaled = blit_forum(wide, state, sim)
+    if scaled.size != wide:
+        lines.append(f"FAIL  forum 2x blit {scaled.size}")
+    elif scaled.getpixel((10, 10)) == _FORUM_LETTERBOX:
+        lines.append("FAIL  forum 2x overlay empty")
+    elif scaled.getpixel((FORUM_NATIVE_W * 2 + 8, 10)) != _FORUM_LETTERBOX:
+        lines.append("FAIL  forum 2x stretched into sidebar")
+    else:
+        lines.append("ok    forum 2x nearest well, sidebar 1:1 strip")
+    px, py, _pw, _ph = button_rect(11)
+    exit_msg = click_forum(
+        ForumState(kind=KIND_PLEBS, labor=labor),
+        px * 2 + 4,
+        py * 2 + 4,
+        sim,
+        frame_size=wide,
+    )
+    if exit_msg != "exit":
+        lines.append(f"FAIL  scaled EXIT hit {exit_msg!r}")
+    else:
+        lines.append("ok    2x 4×3 hit-test uses scaled rects")
+    labor_s = LaborState(
+        ready=42, last_ready=42, welfare=8, assigned=list(LABOR_ASSIGNED_INIT)
+    )
+    sim_s = SimState(
+        city_only=1, skill=2, labor_index=5, plebs_ready=42, welfare=8
+    )
+    sim_s.labor_assigned = list(LABOR_ASSIGNED_INIT)
+    state_s = ForumState(kind=KIND_PLEBS, labor=labor_s)
+    _wm, wp = _welfare_rects()
+    click_forum(state_s, wp[0] * 2 + 2, wp[1] * 2 + 2, sim_s, frame_size=wide)
+    if labor_s.welfare != 9:
+        lines.append(f"FAIL  scaled welfare+ {labor_s.welfare}")
+    else:
+        lines.append("ok    2x PLEBS welfare slider")
+    minus0, bar0, plus0 = _slider_rects(0)
+    before0 = labor_s.assigned[0]
+    idle0 = labor_s.idle
+    click_forum(state_s, plus0[0] * 2 + 2, plus0[1] * 2 + 2, sim_s, frame_size=wide)
+    click_forum(state_s, minus0[0] * 2 + 2, minus0[1] * 2 + 2, sim_s, frame_size=wide)
+    click_forum(state_s, bar0[0] * 2 + 2, bar0[1] * 2 + 2, sim_s, frame_size=wide)
+    if (
+        labor_s.assigned[0] != CREW
+        or labor_s.assigned[0] != before0
+        or labor_s.idle != idle0
+        or hit_plebs(plus0[0] + 2, plus0[1] + 2, labor_s) is not None
+        or hit_plebs(minus0[0] + 2, minus0[1] + 2, labor_s) is not None
+    ):
+        lines.append(f"FAIL  scaled construction locked {labor_s.assigned} idle {labor_s.idle}")
+    else:
+        lines.append("ok    construction +/- do nothing, still 20 Need 20")
+    fire_s = labor_s.assigned[1]
+    minus1, _bar1, plus1 = _slider_rects(1)
+    click_forum(state_s, plus1[0] * 2 + 2, plus1[1] * 2 + 2, sim_s, frame_size=wide)
+    if labor_s.assigned[0] != CREW or labor_s.assigned[1] != fire_s + 1:
+        lines.append(f"FAIL  fire+ after locked construction {labor_s.assigned}")
+    else:
+        lines.append("ok    Fire +/- still moves; construction stays 20")
     treas = ForumState(kind=KIND_TREASURER, labor=labor_w)
     tframe = blit_forum((640, 480), treas, sim_t)
     tp, _tm = _tax_rects(0)
@@ -1202,9 +1787,109 @@ def selftest() -> list[str]:
         )
     else:
         lines.append("ok    treasurer dial hit + ESTIMATE refresh")
+    treas2 = ForumState(kind=KIND_TREASURER, labor=labor_w)
+    click_forum(treas2, tp[0] * 2 + 2, tp[1] * 2 + 2, sim_t, frame_size=wide)
+    click_forum(treas2, ip[0] * 2 + 2, ip[1] * 2 + 2, sim_t, frame_size=wide)
+    if sim_t.tax_rate != 9 or sim_t.industrial_tax != 8:
+        lines.append(
+            f"FAIL  scaled treasurer hit {sim_t.tax_rate}/{sim_t.industrial_tax}"
+        )
+    else:
+        lines.append("ok    2x treasurer dial hit")
     paused = blit_pause_square(frame, None, label="Game Paused")
     if paused.tobytes() == frame.tobytes():
         lines.append("FAIL  pause square empty")
     else:
         lines.append("ok    pause square paints")
+    if parse_history(bytearray(HIST_BYTES)):
+        lines.append("FAIL  empty HISTORY parse")
+    else:
+        lines.append("ok    empty HISTORY → no scribe bars")
+    blob = bytearray(HIST_BYTES)
+    struct.pack_into("<5i", blob, 0, 100, 12000, 4, 1, -300)
+    struct.pack_into("<5i", blob, HIST_REC, 140, 11800, 6, 2, -299)
+    recs = parse_history(blob)
+    win = history_window(recs, 10)
+    if recs != [(100, 12000, 4, 1, -300), (140, 11800, 6, 2, -299)]:
+        lines.append(f"FAIL  HISTORY parse {recs}")
+    elif win != recs:
+        lines.append(f"FAIL  HISTORY window {win}")
+    else:
+        lines.append("ok    HISTORY 2 recs → 10-year window")
+    extra = [(i, 0, 0, 0, -290 + i) for i in range(25)]
+    if len(history_window(extra, 10)) != 10 or len(history_window(extra, 30)) != 25:
+        lines.append("FAIL  HISTORY window 10/30")
+    else:
+        lines.append("ok    HISTORY window last 10 / all 25")
+    sx, sy, _sw, _sh = button_rect(4)
+    if _BUTTON_KIND[4] != KIND_SCRIBE or button_at(sx + 2, sy + 2) != 4:
+        lines.append("FAIL  SCRIBE button")
+    else:
+        lines.append("ok    SCRIBE is grid cell 4")
+    sim_h = SimState(
+        city_only=1,
+        year_raw=-299,
+        population=140,
+        treasury=11800,
+        history=blob,
+        rating_prosperity=12,
+        rating_culture=4,
+        rating_avg=4,
+        tax_wealth=4,
+    )
+    scribe = ForumState(kind=KIND_SCRIBE, labor=labor)
+    sframe = blit_forum((640, 480), scribe, sim_h)
+    click_forum(scribe, sx + 2, sy + 2, sim_h)
+    if scribe.kind != KIND_SCRIBE or sframe.size != (640, 480):
+        lines.append(f"FAIL  scribe blit/kind {scribe.kind} {sframe.size}")
+    else:
+        lines.append("ok    SCRIBE blit Your Scribe + HISTORY bars")
+    _sm, sp = _scribe_year_rects()
+    click_forum(scribe, sp[0] + 2, sp[1] + 2, sim_h)
+    if scribe.scribe_years != 20:
+        lines.append(f"FAIL  scribe years+ {scribe.scribe_years}")
+    else:
+        lines.append("ok    SCRIBE arrow 10 → 20 years")
+    click_forum(scribe, sp[0] + 2, sp[1] + 2, sim_h)
+    click_forum(scribe, sp[0] + 2, sp[1] + 2, sim_h)
+    if scribe.scribe_years != 30:
+        lines.append(f"FAIL  scribe years cap {scribe.scribe_years}")
+    else:
+        lines.append("ok    SCRIBE window clamps 30")
+    sim_o = SimState(city_only=1, tax_wealth=4)
+    if oracle_advice_skip(sim_o, 0) != 24 or oracle_advice_skip(sim_o, 1) != 24:
+        lines.append("FAIL  city-only Empire/Peace skip")
+    elif oracle_advice_skip(sim_o, 2) != 18:
+        lines.append(f"FAIL  prosperity housing skip {oracle_advice_skip(sim_o, 2)}")
+    elif oracle_advice_skip(sim_o, 3) != 23:
+        lines.append(f"FAIL  culture skip {oracle_advice_skip(sim_o, 3)}")
+    else:
+        lines.append("ok    Oracle city-only 24 / Prosperity 18 / Culture 23")
+    oracle = ForumState(kind=KIND_ORACLE, labor=labor)
+    click_forum(oracle, _PANEL_X + 20, _PANEL_Y + 50, sim_o)
+    if oracle.oracle_advice != 0:
+        lines.append(f"FAIL  oracle col {oracle.oracle_advice}")
+    else:
+        lines.append("ok    Oracle column hit Empire → city-only stub")
+    ox, oy, _ow, _oh = button_rect(2)
+    stub = click_forum(ForumState(kind=KIND_CHROME), ox + 2, oy + 2, sim_o)
+    if "cannot get promoted" not in stub.lower() and "city-only" not in stub.lower():
+        lines.append(f"FAIL  EMPIRE MAP stub {stub!r}")
+    else:
+        lines.append("ok    Career EMPIRE MAP stays city-only stub")
+    close_sim = SimState(
+        city_only=1,
+        year_raw=-299,
+        population=80,
+        treasury=11000,
+        tax_ytd=monthly_pop_tax_raw(100, 5) * 12,
+        ind_tax_ytd=monthly_pop_tax_raw(140, 5) * 12,
+        history=bytearray(HIST_BYTES),
+    )
+    close_year_books(close_sim)
+    closed = parse_history(close_sim.history)
+    if len(closed) != 1 or closed[0][0] != 80 or closed[0][4] != -299:
+        lines.append(f"FAIL  year wrap HISTORY {closed}")
+    else:
+        lines.append("ok    December wrap appends HISTORY rec")
     return lines
