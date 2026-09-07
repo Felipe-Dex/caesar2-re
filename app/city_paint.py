@@ -566,6 +566,26 @@ def _block_max(tiles: bytearray, x: int, y: int, size: int, lane: int, mask: int
     return best
 
 
+def entertainment_level(amenity12: int) -> int:
+    """FUN_00040d08 / overlay 0x3E983: sum of three 2-bit +12 channels.
+
+    Theater/Odeum bits 0–1, Arena/Coliseum 2–3, Circus/C.Maximus 4–5.
+    Each channel is 0–3 (near/mid/far ring). Query prints this 0–9 total,
+    not the packed byte (51 = 0x33 → 3+0+3 = 6).
+    """
+    return (amenity12 & 3) + ((amenity12 & 0x0C) >> 2) + ((amenity12 & 0x30) >> 4)
+
+
+def entertainment_level_block(
+    tiles: bytearray, x: int, y: int, size: int = 1
+) -> int:
+    """Same channel sum, max-merged over a housing footprint (6dce0)."""
+    ch0 = _block_max(tiles, x, y, size, 12, 0x03)
+    ch1 = (_block_max(tiles, x, y, size, 12, 0x0C) >> 2) & 3
+    ch2 = (_block_max(tiles, x, y, size, 12, 0x30) >> 4) & 3
+    return ch0 + ch1 + ch2
+
+
 def paint_plus13_buildings(tiles: bytearray, y0: int, n: int) -> int:
     """FUN_0003fdd0 — charged 0xBE +13 0x04; markets +13 0x40."""
     painted = 0
@@ -1182,10 +1202,7 @@ def _housing_service_cap(
         return 16, "bad +14&0x10"
     if not _block_and(tiles, x, y, size, 13, 0x08):
         return 18, "no-baths +13&0x08"
-    ch0 = _block_max(tiles, x, y, size, 12, 0x03)
-    ch1 = (_block_max(tiles, x, y, size, 12, 0x0C) >> 2) & 3
-    ch2 = (_block_max(tiles, x, y, size, 12, 0x30) >> 4) & 3
-    ent = ch0 + ch1 + ch2
+    ent = entertainment_level_block(tiles, x, y, size)
     if ent == 0:
         return 20, "no-entertainment +12"
     if _block_and(tiles, x, y, size, 14, 0x01):

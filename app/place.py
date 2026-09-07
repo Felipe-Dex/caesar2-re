@@ -3935,6 +3935,7 @@ def selftest() -> list[str]:
         or city.tiles[city.offset(34, 2)] != ID_THEATER
         or not (hut12 & 0x03)
         or "Entertainment Level 0" in qent
+        or "Entertainment Level 51" in qent
         or "Entertainment Level" not in qent
     ):
         lines.append(

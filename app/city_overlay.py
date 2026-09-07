@@ -26,12 +26,15 @@ from app.city_map import (
 from app.city_paint import (
     BATH_SPLASH_BIT,
     HOUSE_OCCUPANCY,
+    HOUSE_SIZE,
     ID_HOUSING_LO,
     ID_HOSPITAL,
     ID_LIBRARY,
     SECURITY_COV_BITS,
     civic_edge_access,
     civic_stamp_origin,
+    entertainment_level,
+    entertainment_level_block,
     factory_type_name,
     hospital_cover_percent,
     library_cover_percent,
@@ -328,10 +331,7 @@ def _paint_entertainment(tid: int, amenity12: int) -> int:
     # 0x3E983: venues 0xE5–0xF0 → 0x96; sum of three 2-bit channels.
     if 0xE5 <= tid <= 0xF0:
         return 0x96
-    ch0 = amenity12 & 3
-    ch1 = (amenity12 & 0x0C) >> 2
-    ch2 = (amenity12 & 0x30) >> 4
-    total = ch0 + ch1 + ch2
+    total = entertainment_level(amenity12)
     if total == 0:
         return 0
     return (total - 1) * 3 + 0x7E
@@ -571,6 +571,53 @@ def _eng_skip(eng, slot: int, skip: int, fallback: str) -> str:
     return fallback
 
 
+def _housing_query_origin(t, x: int, y: int) -> tuple[int, int, int]:
+    """Housing origin and size from +5 lo-nibble (same as evolve)."""
+    grade = t.terrain_id - ID_HOUSING_LO
+    size = HOUSE_SIZE[grade] if 0 <= grade < len(HOUSE_SIZE) else 1
+    if size <= 1:
+        return x, y, 1
+    piece = t.spawn_packed & 0xF
+    return x - (piece % size), y - (piece // size), size
+
+
+def _block_or13(city: CityMap, x: int, y: int, size: int) -> int:
+    splash = 0
+    for dy in range(size):
+        for dx in range(size):
+            tx, ty = x + dx, y + dy
+            if 0 <= tx < MAP_W and 0 <= ty < MAP_H:
+                splash |= city.tiles[city.offset(tx, ty) + 13]
+    return splash
+
+
+def query_water_line(splash: int, eng=None) -> str:
+    """C2.ENG [60] water line from +13. Fountain 0x01 beats well/river 0x02.
+
+    +13&0x01 fountain / reservoir-small → [60]+2 Water Supply
+    +13&0x02 only (well/river) → [60]+3 Primitive Water Supply
+    neither → [60]+4 NO Water Supply
+    +13&0x04 is charged reservoir ring (pipe). It wets Fountain 0xDD
+    (needs +13&4) but is not house drinking water by itself.
+    """
+    fountain = bool(splash & 0x01)
+    well = bool(splash & 0x02)
+    ring = bool(splash & 0x04)
+    if fountain:
+        water = _eng_skip(eng, 60, 2, "Water Supply")
+        src = ["fountain"]
+        if ring:
+            src.append("reservoir")
+        return f"{water} ({', '.join(src)})"
+    if well:
+        water = _eng_skip(eng, 60, 3, "Primitive Water Supply")
+        return f"{water} (well/river)"
+    if ring:
+        water = _eng_skip(eng, 60, 4, "NO Water Supply")
+        return f"{water} (reservoir pipe)"
+    return _eng_skip(eng, 60, 4, "NO Water Supply")
+
+
 def building_name(tid: int, eng=None) -> str:
     """C2.ENG official names when present; host table otherwise."""
     _fill_names()
@@ -702,23 +749,16 @@ def query_place(city: CityMap, x: int, y: int, eng=None) -> PlaceInfo:
         if ill:
             lines.append(f"illness +11&0x30={ill:#x}")
     splash = t.desirability
-    if splash & 0x04 or splash & 0x02:
-        water = _eng_skip(eng, 60, 2, "Water Supply")
-    elif splash & 0x01:
-        water = _eng_skip(eng, 60, 3, "Primitive Water Supply")
+    amenity12 = t.unknown12
+    ent_size = 1
+    ox, oy = x, y
+    if t.is_housing:
+        ox, oy, ent_size = _housing_query_origin(t, x, y)
+        splash = _block_or13(city, ox, oy, ent_size)
+        amenity12 = entertainment_level_block(city.tiles, ox, oy, ent_size)
     else:
-        water = _eng_skip(eng, 60, 4, "NO Water Supply")
-    bits = []
-    if splash & 1:
-        bits.append("small")
-    if splash & 2:
-        bits.append("well/river")
-    if splash & 4:
-        bits.append("reservoir ring")
-    if bits:
-        lines.append(f"{water} ({', '.join(bits)})")
-    else:
-        lines.append(water)
+        amenity12 = entertainment_level(amenity12)
+    lines.append(query_water_line(splash, eng))
     if tid == 0xBE or (0xCB <= tid <= 0xD6):
         charge = t.coverage & 3
         lines.append(f"pipe +1&0xC0={t.flags & 0xC0:#x}  charge +10&3={charge}")
@@ -771,7 +811,7 @@ def query_place(city: CityMap, x: int, y: int, eng=None) -> PlaceInfo:
     else:
         lines.append(_eng_skip(eng, 60, 15, "NO Rhetor Access"))
     lines.append(
-        f"{_eng_skip(eng, 60, 16, 'Entertainment Level')} {t.unknown12}"
+        f"{_eng_skip(eng, 60, 16, 'Entertainment Level')} {amenity12}"
     )
     if splash & BATH_SPLASH_BIT:
         lines.append(_eng_skip(eng, 60, 17, "Near Baths"))
@@ -1415,10 +1455,52 @@ def selftest() -> list[str]:
     hjoin = " ".join(house.lines)
     if "workers 2" not in hjoin or "Water Supply" not in hjoin:
         lines.append(f"FAIL  query house {house.lines}")
+    elif "Primitive" in hjoin or "well/river" in hjoin:
+        lines.append(f"FAIL  query house fountain labeled primitive {house.lines}")
+    elif "fountain" not in hjoin:
+        lines.append(f"FAIL  query house missing fountain {house.lines}")
     elif "fire risk" not in hjoin:
         lines.append(f"FAIL  query house risk {house.lines}")
     else:
         lines.append("ok    query housing workers/water/risk")
+    # Screenshot bugs: +13 0x01 is fountain (not primitive); +12 51 = 0x33 → 6.
+    city.tiles[hoff + 13] = 0x01
+    city.tiles[hoff + 12] = 51
+    hut_q = query_place(city, 1, 0)
+    hut_join = " ".join(hut_q.lines)
+    if "Primitive" in hut_join or "well/river" in hut_join:
+        lines.append(f"FAIL  query +13&1 primitive {hut_q.lines}")
+    elif "Water Supply (fountain)" not in hut_join:
+        lines.append(f"FAIL  query +13&1 fountain {hut_q.lines}")
+    elif "Entertainment Level 6" not in hut_join:
+        lines.append(f"FAIL  query +12=51 → level {hut_q.lines}")
+    elif "Entertainment Level 51" in hut_join:
+        lines.append(f"FAIL  query printed packed +12 {hut_q.lines}")
+    else:
+        lines.append("ok    query fountain 0x01 + entertainment 51→6")
+    city.tiles[hoff + 13] = 0x02
+    city.tiles[hoff + 12] = 0
+    well_q = " ".join(query_place(city, 1, 0).lines)
+    if "Primitive Water Supply (well/river)" not in well_q:
+        lines.append(f"FAIL  query well-only {well_q}")
+    else:
+        lines.append("ok    query +13&2 only → Primitive well/river")
+    city.tiles[hoff + 13] = 0x07
+    mix_q = " ".join(query_place(city, 1, 0).lines)
+    if "Primitive" in mix_q or "well/river" in mix_q:
+        lines.append(f"FAIL  query fountain+well still primitive {mix_q}")
+    elif "Water Supply (fountain, reservoir)" not in mix_q:
+        lines.append(f"FAIL  query mixed water {mix_q}")
+    else:
+        lines.append("ok    query +13&7 fountain hides well/river")
+    city.tiles[hoff + 13] = 0x04
+    ring_q = " ".join(query_place(city, 1, 0).lines)
+    if "NO Water Supply (reservoir pipe)" not in ring_q:
+        lines.append(f"FAIL  query ring-only {ring_q}")
+    else:
+        lines.append("ok    query +13&4 only → reservoir pipe, no drink")
+    city.tiles[hoff + 13] = 0x05
+    city.tiles[hoff + 12] = 0
     from app.city_paint import (
         paint_baths_emitter,
         paint_education_emitter,
@@ -1452,8 +1534,36 @@ def selftest() -> list[str]:
     njoin = " ".join(ent.lines)
     if "Entertainment Level 0" in njoin or "Entertainment Level" not in njoin:
         lines.append(f"FAIL  query theater {ent.lines}")
+    elif "Entertainment Level 51" in njoin:
+        lines.append(f"FAIL  query theater packed +12 {ent.lines}")
     else:
         lines.append("ok    query house next to Theater → Entertainment > 0")
+    from app.city_paint import ID_RESERVOIR, paint_plus13_buildings, paint_plus13_water
+
+    # Charged 0xBE ring + wet 0xDD r=6 extra=0. Adjacent hut must Query
+    # fountain, not primitive well/river.
+    roff = city.offset(40, 8)
+    city.tiles[roff] = ID_RESERVOIR
+    city.tiles[roff + 10] = 3
+    foff = city.offset(42, 8)
+    city.tiles[foff] = 0xDD
+    city.tiles[foff + 5] = 0
+    h6 = city.offset(43, 8)
+    city.tiles[h6] = 0x86
+    city.tiles[h6 + 1] = 0x01
+    paint_plus13_buildings(city.tiles, 0, MAP_H)
+    paint_plus13_water(city.tiles, 0, MAP_H)
+    fount_q = query_place(city, 43, 8)
+    fq = " ".join(fount_q.lines)
+    hut13 = city.tiles[h6 + 13]
+    if not (hut13 & 0x01):
+        lines.append(f"FAIL  fountain splash missed hut +13={hut13:#x}")
+    elif "Primitive" in fq or "well/river" in fq:
+        lines.append(f"FAIL  query hut by fountain primitive {fount_q.lines}")
+    elif "Water Supply" not in fq or "fountain" not in fq:
+        lines.append(f"FAIL  query hut by fountain {fount_q.lines}")
+    else:
+        lines.append("ok    query hut next to charged fountain → fountain")
     boff = city.offset(16, 4)
     city.tiles[boff] = 0xDF
     city.tiles[boff + 5] = 0
