@@ -39,6 +39,18 @@ from app.city_sim import (
     SimState,
     load_sim_from_sav,
 )
+from app.forum import (
+    CREW,
+    LABOR_CONSTRUCTION,
+    LABOR_ROWS,
+    PLEBS_ESTIMATE_VA,
+    PLEBS_READY_VA,
+    PLEBS_TABLE_VA,
+    PLEBS_WELFARE_VA,
+    TAX_RATE_VA,
+    IND_TAX_VA,
+    labor_idle_of,
+)
 from app.new_game import CHUNK_CITY_ONLY, CHUNK_PID, CHUNK_SKILL, CHUNK_TREASURY
 from app.walkers import (
     SAV_CHUNK as WALKER_CHUNK,
@@ -49,12 +61,12 @@ from app.walkers import (
 )
 
 CITY_CHUNK = 13
-LABOR_READY_CHUNK = 52
-WELFARE_CHUNK = 54
-LABOR_EST_CHUNK = 55
-LABOR_TABLE_CHUNK = 56
-TAX_RATE_CHUNK = 29
-IND_TAX_CHUNK = 30
+LABOR_READY_CHUNK = 52  # [0x102A68] PLEBS_READY_VA
+WELFARE_CHUNK = 54  # [0x102A98] PLEBS_WELFARE_VA
+LABOR_EST_CHUNK = 55  # [0x102AC4] PLEBS_ESTIMATE_VA
+LABOR_TABLE_CHUNK = 56  # [0xD2E6C] PLEBS_TABLE_VA
+TAX_RATE_CHUNK = 29  # [0x102A7C] TAX_RATE_VA
+IND_TAX_CHUNK = 30  # [0x102AA8] IND_TAX_VA
 WRAP4_CHUNK = 22
 WRAP3_CHUNK = 405
 LABOR_INDEX_CHUNK = 416
@@ -109,6 +121,16 @@ _EMBEDDED_SIZES: tuple[int, ...] = (
 
 assert len(_EMBEDDED_SIZES) == N_SAV_CHUNKS
 assert sum(_EMBEDDED_SIZES) == SAV_TABLE_BYTES
+
+# Live Forum / Treasurer dwords F5 must emit (PS.EXE SavChunk ptrs).
+PLEBS_CHUNK_VA: dict[int, int] = {
+    LABOR_READY_CHUNK: PLEBS_READY_VA,
+    WELFARE_CHUNK: PLEBS_WELFARE_VA,
+    LABOR_EST_CHUNK: PLEBS_ESTIMATE_VA,
+    LABOR_TABLE_CHUNK: PLEBS_TABLE_VA,
+    TAX_RATE_CHUNK: TAX_RATE_VA,
+    IND_TAX_CHUNK: IND_TAX_VA,
+}
 
 # Chunks the host can emit from live City Only state (not full BSS).
 HOST_OWNED_CHUNKS: frozenset[int] = frozenset(
@@ -202,12 +224,20 @@ def _history(sim: SimState | None) -> bytes:
 
 
 def _labor_table(sim: SimState) -> bytes:
+    """Chunk 56 @ [0xD2E6C]: 7× {assigned,need} + idle/0. Construction is 20."""
     raw = bytearray(64)
-    assigned = list(getattr(sim, "labor_assigned", None) or [0] * 7)
-    need = list(getattr(sim, "labor_need", None) or [0] * 7)
-    for i in range(7):
-        struct.pack_into("<i", raw, i * 8, int(assigned[i]) if i < len(assigned) else 0)
-        struct.pack_into("<i", raw, i * 8 + 4, int(need[i]) if i < len(need) else 0)
+    assigned = list(getattr(sim, "labor_assigned", None) or [0] * LABOR_ROWS)
+    need = list(getattr(sim, "labor_need", None) or [0] * LABOR_ROWS)
+    while len(assigned) < LABOR_ROWS:
+        assigned.append(0)
+    while len(need) < LABOR_ROWS:
+        need.append(0)
+    assigned[LABOR_CONSTRUCTION] = CREW
+    need[LABOR_CONSTRUCTION] = CREW
+    for i in range(LABOR_ROWS):
+        struct.pack_into("<i", raw, i * 8, int(assigned[i]))
+        struct.pack_into("<i", raw, i * 8 + 4, int(need[i]))
+    struct.pack_into("<i", raw, LABOR_ROWS * 8, labor_idle_of(sim))
     return bytes(raw)
 
 
@@ -468,6 +498,16 @@ def selftest() -> list[str]:
     fresh.sim.tax_rate = 7
     fresh.sim.industrial_tax = 4
     fresh.sim.treasury = 11900
+    fresh.sim.labor_assigned = [20, 13, 4, 4, 0, 0, 0]
+    fresh.sim.welfare = 9
+    if PLEBS_CHUNK_VA[LABOR_TABLE_CHUNK] != PLEBS_TABLE_VA:
+        lines.append("FAIL  PLEBS BSS table")
+        return lines
+    lines.append(
+        f"ok    PLEBS BSS 52/54/55/56 "
+        f"{PLEBS_READY_VA:#x}/{PLEBS_WELFARE_VA:#x}/"
+        f"{PLEBS_ESTIMATE_VA:#x}/{PLEBS_TABLE_VA:#x}"
+    )
     with tempfile.TemporaryDirectory() as tmp:
         dest = Path(tmp) / "CITYONLY.SAV"
         write_sav(dest, fresh.city, fresh.walkers, fresh.sim, sizes=sizes)
@@ -499,13 +539,38 @@ def selftest() -> list[str]:
             lines.append(f"FAIL  tax {sim.tax_rate}/{sim.industrial_tax}")
         else:
             lines.append("ok    chunks 29/30 tax")
-        if sim.plebs_ready != fresh.sim.plebs_ready or sim.welfare != fresh.sim.welfare:
+        if sim.plebs_ready != fresh.sim.plebs_ready or sim.welfare != 9:
             lines.append(
                 f"FAIL  labor 52/54 {sim.plebs_ready}/{sim.welfare} "
-                f"want {fresh.sim.plebs_ready}/{fresh.sim.welfare}"
+                f"want {fresh.sim.plebs_ready}/9"
+            )
+        elif list(sim.labor_assigned) != [20, 13, 4, 4, 0, 0, 0]:
+            lines.append(f"FAIL  chunk 56 sliders {sim.labor_assigned}")
+        elif sim.labor_assigned[0] != 20:
+            lines.append(f"FAIL  construction {sim.labor_assigned[0]}")
+        else:
+            lines.append("ok    chunks 52/54/56 PLEBS ready/welfare/Fire 13")
+        table = chunks[LABOR_TABLE_CHUNK]
+        fire_asg = struct.unpack_from("<i", table, 8)[0]
+        crew_asg = struct.unpack_from("<i", table, 0)[0]
+        if crew_asg != 20 or fire_asg != 13:
+            lines.append(f"FAIL  chunk 56 bytes construction={crew_asg} fire={fire_asg}")
+        else:
+            lines.append("ok    chunk 56 [0xD2E6C] construction 20 Fire 13")
+        from app.forum import apply_saved_plebs, labor_from_sim
+
+        panel = apply_saved_plebs(sim, tiles)
+        if (
+            list(panel.assigned[:4]) != [20, 13, 4, 4]
+            or panel.welfare != 9
+            or panel.ready != fresh.sim.plebs_ready
+            or labor_from_sim(sim).assigned[1] != 13
+        ):
+            lines.append(
+                f"FAIL  PLEBS after load {panel.assigned} welfare={panel.welfare}"
             )
         else:
-            lines.append("ok    chunks 52/54 labor")
+            lines.append("ok    F5 Fire+ / F4 reload PLEBS matches (no labor_init)")
         if chunks[CHUNK_CITY_ONLY][0] != 1 or sim.city_only != 1:
             lines.append(f"FAIL  chunk 406={chunks[CHUNK_CITY_ONLY][0]} sim={sim.city_only}")
         else:

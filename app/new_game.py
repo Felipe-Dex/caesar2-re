@@ -452,8 +452,8 @@ def start_city_assignment(
     )
     init_city_only_labor(sim)
     notes.append(
-        f"labor_init 0x563E2: ready={sim.plebs_ready} welfare={sim.welfare} "
-        f"assigned={list(sim.labor_assigned)}"
+        f"labor_init 0x563E2 (New Game only): ready={sim.plebs_ready} "
+        f"welfare={sim.welfare} assigned={list(sim.labor_assigned)}"
     )
     return NewCity(
         city=city,

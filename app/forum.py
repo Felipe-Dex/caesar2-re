@@ -5,11 +5,11 @@ building (0xAF / 0xB2–0xB4 / 0xB7–0xB9) or INT_CITY view-tab sprite 11.
 Career EMPIRE / ROME / PERSONAL stay stubs. Oracle is chunks 286–289
 (+ avg 46). Scribe is HISTORY graphs only (no letters).
 
-Labor table = SavChunk 56 (8× assigned/need). Need is recomputed from
-the city map; assigned is player-controlled (sliders) except
-construction, which is locked to need 20 (EXE labor_init; no +/-).
-Ready pool is chunk 52 [0x102A68], set by labor_init 0x563E2
-(not population//20). Idle still subtracts those 20.
+Labor table = SavChunk 56 (8× assigned/need) @ [0xD2E6C]. Need is
+recomputed from the city map; assigned is player-controlled (sliders)
+except construction, which is locked to need 20 (EXE labor_init; no +/-).
+Ready pool is chunk 52 [0x102A68], set by labor_init 0x563E2 on New Game
+only (not population//20, not sav_read). Idle still subtracts those 20.
 assigned < need (0x28219) shuts that row: construction → forums,
 fire → prefect, water → fountain/bath paint; idle+factory_labor==0
 → factory leftover / no type-6 emit (tile +6 wait gate).
@@ -75,6 +75,15 @@ _CITY_ONLY_WELFARE = (7, 7, 8, 9, 9)
 READY_TABLE = 40
 READY_AFTER_INIT_TICK = 42
 LABOR_ASSIGNED_INIT = (20, 12, 4, 4, 0, 0, 0)
+# PS.EXE SavChunk[500] @ 0x9ABC0, relocated ptrs. F5 writes these; F4
+# maps them back. labor_init 0x563E2 seeds them on New Game only.
+PLEBS_READY_VA = 0x102A68  # chunk 52
+PLEBS_WELFARE_VA = 0x102A98  # chunk 54
+PLEBS_ESTIMATE_VA = 0x102AC4  # chunk 55
+PLEBS_TABLE_VA = 0xD2E6C  # chunk 56, 8× {assigned,need} i32; idle @ +0x38
+TAX_RATE_VA = 0x102A7C  # chunk 29
+IND_TAX_VA = 0x102AA8  # chunk 30
+LABOR_INDEX_VA = 0x1025C8  # chunk 416
 # 0x56440 score = ((0x965F5 - index/3) * welfare * 100) / ready. 0x965F5 = 7.
 WAGE_K = 7
 WELFARE_MAX = 0x61A8  # slider cap 0x3410D
@@ -572,7 +581,11 @@ def treasurer_estimate(sim: SimState, tiles: bytearray | None = None) -> Treasur
 
 
 def init_city_only_labor(sim: SimState) -> None:
-    """0x563E2 + City Only index 0x346F6 + one 0x3FCA0 / 0x56440 tick."""
+    """0x563E2 + City Only index 0x346F6 + one 0x3FCA0 / 0x56440 tick.
+
+    New Game / start_city_assignment only. sav_read must not call this —
+    it overwrites chunk 52/54/56 sliders with LABOR_ASSIGNED_INIT.
+    """
     skill = max(0, min(4, int(getattr(sim, "skill", 0))))
     sim.labor_index = labor_index_from_skill(skill)
     sim.welfare = _CITY_ONLY_WELFARE[skill]
@@ -584,6 +597,27 @@ def init_city_only_labor(sim: SimState) -> None:
     sim.plebs_estimate = labor_tick_ready(
         READY_AFTER_INIT_TICK, sim.welfare, sim.labor_index
     )
+
+
+def apply_saved_plebs(sim: SimState, tiles: bytearray | None = None) -> LaborState:
+    """SAV → PLEBS sliders. Does not run labor_init 0x563E2.
+
+    Construction stays 20 Need 20. Other assigned/welfare/ready keep the
+    file bytes. Need (except construction) refreshes from the live map.
+    """
+    assigned = list(getattr(sim, "labor_assigned", None) or [0] * LABOR_ROWS)
+    need = list(getattr(sim, "labor_need", None) or [0] * LABOR_ROWS)
+    while len(assigned) < LABOR_ROWS:
+        assigned.append(0)
+    while len(need) < LABOR_ROWS:
+        need.append(0)
+    assigned[LABOR_CONSTRUCTION] = CREW
+    if tiles is not None:
+        need = labor_need_from_city(tiles, city_only=bool(getattr(sim, "city_only", 0)))
+    need[LABOR_CONSTRUCTION] = CREW
+    sim.labor_assigned = assigned[:LABOR_ROWS]
+    sim.labor_need = need[:LABOR_ROWS]
+    return labor_from_sim(sim)
 
 
 def sync_labor(labor: LaborState, tiles: bytearray, sim: SimState) -> LaborState:
@@ -1483,6 +1517,38 @@ def selftest() -> list[str]:
         )
     else:
         lines.append("ok    City Only Normal ready 42 welfare 8 sliders 20/12/4/4")
+    sim_sav = SimState(
+        city_only=1,
+        skill=2,
+        labor_index=5,
+        plebs_ready=42,
+        welfare=9,
+        tax_rate=9,
+        industrial_tax=6,
+        labor_assigned=[20, 13, 4, 4, 0, 0, 0],
+        labor_need=[CREW, 0, 0, 0, 0, 0, 0],
+    )
+    restored = apply_saved_plebs(sim_sav, tiles)
+    if (
+        restored.assigned[LABOR_FIRE] != 13
+        or restored.assigned[LABOR_CONSTRUCTION] != CREW
+        or restored.need[LABOR_CONSTRUCTION] != CREW
+        or restored.welfare != 9
+        or restored.ready != 42
+        or sim_sav.tax_rate != 9
+    ):
+        lines.append(
+            f"FAIL  SAV PLEBS {restored.assigned} ready={restored.ready} "
+            f"welfare={restored.welfare}"
+        )
+    else:
+        lines.append("ok    SAV PLEBS Fire 13 welfare 9, construction 20")
+    apply_plebs_hit(restored, "row0+", sim_sav)
+    apply_plebs_hit(restored, "row0-", sim_sav)
+    if restored.assigned[LABOR_CONSTRUCTION] != CREW or restored.assigned[LABOR_FIRE] != 13:
+        lines.append(f"FAIL  construction lock after SAV {restored.assigned}")
+    else:
+        lines.append("ok    construction +/- ignored after load, Fire stays 13")
     if labor_percent(12, 12) != 100 or labor_percent(6, 12) != 50:
         lines.append(f"FAIL  labor percent {labor_percent(12, 12)} {labor_percent(6, 12)}")
     else:

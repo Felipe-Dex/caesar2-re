@@ -219,8 +219,10 @@ class SimState:
     pop_peak: int = 0  # FAQ latch: unlocks stay after pop drops
     flood_dir: int = 0  # [0x102678] 0…3
     fire_ignited: int = 0  # one 69A37 per 0x9E–0xA1 pass
-    # Forum / PLEBS — chunks 52 / 54 / 55 / 56. Oracle 286–289 + avg 46.
-    # New City Only: forum.init_city_only_labor (0x563E2 / 0x346F6 / 0x3FCA0).
+    # Forum / PLEBS — chunks 52 / 54 / 55 / 56 @ 0x102A68 / 0x102A98 /
+    # 0x102AC4 / 0xD2E6C. Tax 29/30 @ 0x102A7C / 0x102AA8. Oracle 286–289
+    # + avg 46. New City Only seeds via init_city_only_labor (0x563E2);
+    # sav_read keeps the file bytes and must not re-run that init.
     plebs_ready: int = 0
     plebs_estimate: int = 0
     plebs_last: int = 0
@@ -324,6 +326,8 @@ def load_sim_from_sav(
     if len(chunks) > 28 and len(chunks[28]) >= 4:
         treasury = _chunk_i32(chunks, 28, 0)
     assigned, need = _load_labor_table(chunks)
+    assigned[0] = 20
+    need[0] = 20
     skill = _chunk_u8(chunks, 16, 0)
     city_only = _chunk_u8(chunks, 406, 0)
     goods = bytearray(768)
@@ -332,7 +336,7 @@ def load_sim_from_sav(
     labor_index = _chunk_i32(chunks, 416, 0)
     if labor_index <= 0:
         labor_index = max(0, min(4, skill)) * 2 + 1
-    return SimState(
+    state = SimState(
         phase=phase,
         row=_chunk_i32(chunks, ROW_CHUNK, 0),
         year_raw=_chunk_i32(chunks, YEAR_CHUNK, -300),
@@ -373,10 +377,14 @@ def load_sim_from_sav(
         rating_culture=_chunk_i32(chunks, 289, 0),
         rating_avg=_chunk_i32(chunks, 46, 0),
     )
+    from app.forum import apply_saved_plebs
+
+    apply_saved_plebs(state)
+    return state
 
 
 def _load_labor_table(chunks: Sequence[memoryview]) -> tuple[list[int], list[int]]:
-    """Chunk 56: 8 pairs assigned/need (last pair = idle / pad)."""
+    """Chunk 56 [0xD2E6C]: 8 pairs assigned/need (last pair = idle / pad)."""
     assigned = [0] * 7
     need = [0] * 7
     if len(chunks) <= 56 or len(chunks[56]) < 56:

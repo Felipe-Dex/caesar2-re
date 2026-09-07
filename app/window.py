@@ -1559,9 +1559,12 @@ def show(ctx: BootContext, *, game: Path) -> None:
         _open_report(census_report(ctx.city.tiles, eng=ctx.eng))
 
     def _file_save() -> None:
+        from app.forum import sync_labor
         from app.sav import dest_path, write_sav
         from app.sim_log import write
 
+        if forum_state is not None:
+            sync_labor(forum_state.labor, ctx.city.tiles, ctx.sim)
         dest = dest_path(game, ctx.city, ctx.sim)
         try:
             write_sav(dest, ctx.city, ctx.walkers, ctx.sim, game=game)
@@ -1595,6 +1598,9 @@ def show(ctx: BootContext, *, game: Path) -> None:
         except (OSError, ValueError):
             blit(_eng_skip(ctx.eng, 38, 4, "FILE ERROR -- Load Canceled"))
             return
+        from app.forum import apply_saved_plebs
+
+        apply_saved_plebs(sim, city.tiles)
         ctx.city = city
         ctx.walkers = walkers
         ctx.sim = sim
