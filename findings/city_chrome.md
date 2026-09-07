@@ -60,7 +60,7 @@ Tabela **0x98B34** (18 B, `u16 id` + `u32 handler`) é o **overlay de relatório
 - Roads → terreno `0x52–0x5C` + `+1 |= 0x20`. Autotile cardinal (NS `0x52`, EW `0x53`, cantos/T/cruz) e retile dos 4 vizinhos (inclui ponte como vizinho). LUT 8-vizinhos `0x94AEF` **não** portada (diagonais don’t-care no EXE).
 - **Ponte** no rio recto (`+1 & 0x10`, sem bank `0x08`, id `0x1E–0x2D`): `+0` = `0x4E–0x51`, `+9` = id da água, `+1` = `0x30` (`FUN_000669c6`). **Recusa curva** (`+1 & 0x08`, ids `0x36`/`0x3A`/`0x46`/`0x4A` e remaps). **Recusa vizinho cardinal já ponte** (`0x4E–0x51` / rio+pad) — flood `0x665DF` só anda `±0x14` / `±0x640` e não cruza rio→rio. Diagonal é permitida. Numa linha de estrada essa célula é saltada (como a curva).
 - **Ocupação de estrada** (`0x66B8D`): não escreve `+0` se `id ≥ 0x7C` (quartel / reservatório / aqueduto / casa). A célula é **saltada**; o resto da linha confirma. Gardens `0x78–0x7B` ficam abaixo do limiar do EXE. Detalhe: `findings/city_place_occupancy.md`.
-- Clear em prédio (`id ≥ 0x78`, casas `0x82–0xA1`) → rubble **`0x05`**. Clear em rubble → flatten **`0x1C`**. Relva/estrada → `0x1C` (D.SAV). Ponte → restaura `+9` (`0x6985B`). Multi-tile (`DAT_00094FE5` + `+5`, `FUN_00069483`): Clear num tile do quartel 3×3 (ou villa 2×2 / palace 3×3) derruba o **pé inteiro**.
+- Clear: `id ≥ 0x82` (casas `0x82–0xA1`, civic) → rubble **`0x05`** (`0x68D2F` / `696E8`). Garden `0x78–0x7B` e plaza/estátua `0x7C–0x7E` flatten **`0x1C`** (`697FE`, sem rubble). Clear em rubble → flatten **`0x1C`**. Relva/estrada → `0x1C` (D.SAV). Ponte → restaura `+9` (`0x6985B`). Multi-tile (`DAT_00094FE5` + `+5`, `FUN_00069483`): Clear num tile do quartel 3×3 (ou villa 2×2 / palace 3×3) derruba o **pé inteiro**.
 - Recusa rio aberto (`+1 & 0x10` sem pad) em Tent / Clear / civic / curva. Civic também recusa estrada e prédio (`id ≥ 0x78`).
 - Débito Tent **6** (A/C). Reservoir **51** (A/B). Well **20** / Gardens **3** / Praefecture **100** (C2MODEL `[102:114]`). Arrasto 1×1 é **atómico**.
 - **Reservoir** `0xBE` 3×3 origem NO: `+1=0x80` `+3=0x20` `+4=+9=0x6E` `+5=0…8` (`sav_ab.md` no origin; A/B cirúrgico foi 1×1 no canto — este host reserva o pé 3×3 como os outros multi-tile).
@@ -111,7 +111,7 @@ Geography…Cancel. Pinta o 80×80 (não o iso). Detalhe: `city_minimap_overlays
 | Tent | `0x82` | **6** (arrasto: 6×N **atómico**) | `sav_c.md` (não está no C2MODEL) |
 | Road | `0x52–0x5C` | **0** (desconhecido) | cidade não pinada; não usar 20 provincial |
 | Bridge | `0x4E–0x51` | **0** | rio recto; `+9` guarda a água |
-| Clear | `0x05` depois `0x1C` | **0** | prédio→rubble; rubble→flatten |
+| Clear | `0x05` depois `0x1C` | **0** | `id≥0x82`→rubble; garden/plaza `0x78–0x7E` flatten; rubble→flatten |
 | Reservoir | `0xBE` 3×3 | **51** (1 bacia) | `sav_ab.md` (C2MODEL `[101]=50` é FAQ) |
 | Well | `0xD7` | **20** (arrasto: 20×N **atómico**) | C2MODEL `[102:114]` Well |
 | Gardens | `0x78` | **3** (arrasto: 3×N **atómico**) | C2MODEL `[102]` / `[196]` |

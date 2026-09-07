@@ -7,11 +7,13 @@ and remaps) is refused. A cardinal neighbour that is already a bridge
 (`0x4E–0x51`, river+pad) is refused — 665DF walks only ±0x14 / ±0x640
 and will not flood river→river. Diagonals are allowed. Road will not
 write when ``+0 >= 0x7C`` (``FUN_000669c6`` ``0x66B8D``) — skip that
-cell, rest of the line still stamps. Clear: building ≥0x78 → rubble
-0x05; rubble → 0x1C (D.SAV / user). Multi-tile ``id >= 0x82`` uses
-``DAT_00094FE5`` + ``+5`` lo-nibble to wipe the whole N×N
-(``FUN_00069483``). Open river refused; bridge clear restores +9
-(0x6985B).
+cell, rest of the line still stamps. Clear: ``+0 >= 0x82`` (``0x68D2F``)
+→ rubble 0x05 (``FUN_000696e8``); garden ``0x78–0x7B`` and plaza/statue
+``0x7C–0x7E`` share the ``< 0x82`` flatten (``FUN_000697fe`` → grass
+0x1A–0x1D; host 0x1C). Rubble → 0x1C (D.SAV / user). Multi-tile
+``id >= 0x82`` uses ``DAT_00094FE5`` + ``+5`` lo-nibble to wipe the
+whole N×N (``FUN_00069483``). Open river refused; bridge clear
+restores +9 (0x6985B).
 
 Civic: Reservoir ``0xBE`` **1×1** (A/B; ``+1=0x80``), fills if cardinal
 to river (``+1&0x18``) or a charged pipe (ghidra_water.md). Well ``0xD7``,
@@ -682,6 +684,17 @@ def footprint_type(tid: int) -> int:
     if tid < 0x82 or tid > 0xFF:
         return 0
     return _DAT_94FE5_FROM_82[tid - 0x82]
+
+
+def clears_to_rubble(tid: int) -> bool:
+    """City Clear collapse (``0x68D2F`` ``cmp +0, 0x82`` / ``jl`` flatten).
+
+    ``id >= 0x82`` → ``FUN_000696e8`` (host rubble ``0x05``). Gardens
+    ``0x78–0x7B`` and plaza/join/statue ``0x7C–0x7E`` are below that
+    line and flatten via ``FUN_000697fe`` (EXE grass ``0x1A–0x1D``;
+    host ``0x1C``). Housing / fire collapse still uses rubble.
+    """
+    return tid >= 0x82
 
 
 def building_footprint_size(tid: int) -> int:
@@ -1571,7 +1584,7 @@ def try_place(
             return PlaceResult(False, f"rio em ({x},{y}) — +1 & 0x10")
         tid = city.tiles[city.offset(x, y)]
         group = building_group_cells(city, x, y)
-        if tid >= ID_TERRAIN_MAX and len(group) > 1:
+        if clears_to_rubble(tid) and len(group) > 1:
             dirty = []
             ring: list[tuple[int, int]] = []
             pipe_seeds: list[tuple[int, int]] = []
@@ -1610,7 +1623,7 @@ def try_place(
             road_tid = ID_ROAD_NS if tid == ID_AQUEDUCT_ROAD_EW else ID_ROAD_EW
             _write_terrain(city, x, y, road_tid, FLAG_PAD)
             msg = f"aqueduct+road → estrada {road_tid:#x} em ({x},{y})"
-        elif was_aqueduct or tid >= ID_TERRAIN_MAX:
+        elif was_aqueduct or clears_to_rubble(tid):
             _write_terrain(city, x, y, ID_RUBBLE, 0, wipe=True)
             msg = f"rubble 0x05 em ({x},{y})"
         else:
@@ -3393,6 +3406,55 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  garden preview ghost {ghosts}")
     else:
         lines.append("ok    Garden preview ghost varia no rect")
+
+    # 0x68D2F: id < 0x82 → 697FE flatten (not 696E8 rubble). Garden and
+    # plaza/join/statue share that path. Host flatten is 0x1C.
+    if (
+        clears_to_rubble(ID_GARDEN)
+        or clears_to_rubble(ID_GARDEN_HI)
+        or clears_to_rubble(ID_PLAZA)
+        or clears_to_rubble(ID_PLAZA_JOIN)
+        or clears_to_rubble(ID_PLAZA_STATUE)
+        or not clears_to_rubble(ID_TENT)
+    ):
+        lines.append("FAIL  clears_to_rubble 0x78–0x7E vs 0x82")
+    else:
+        lines.append("ok    clears_to_rubble: garden/plaza < 0x82, tent ≥ 0x82")
+    r = try_place(city, 50, 50, TOOL_CLEAR, None)
+    if not r.ok or city.tiles[city.offset(50, 50)] != ID_CLEAR:
+        lines.append(
+            f"FAIL  clear garden {r.message} {city.tiles[city.offset(50, 50)]:#x}"
+        )
+    else:
+        lines.append("ok    Clear garden 0x78–0x7B → 0x1C (sem rubble)")
+    r = try_place(city, 51, 50, TOOL_CLEAR, None)
+    if city.tiles[city.offset(51, 50)] != ID_CLEAR:
+        lines.append(f"FAIL  clear garden2 {city.tiles[city.offset(51, 50)]:#x}")
+    city.tiles[city.offset(53, 50)] = ID_PLAZA
+    city.tiles[city.offset(53, 50) + 1] = FLAG_PAD
+    city.tiles[city.offset(53, 50) + 3] = 0x04
+    r = try_place(city, 53, 50, TOOL_CLEAR, None)
+    if not r.ok or city.tiles[city.offset(53, 50)] != ID_CLEAR:
+        lines.append(
+            f"FAIL  clear plaza {r.message} {city.tiles[city.offset(53, 50)]:#x}"
+        )
+    else:
+        lines.append("ok    Clear plaza 0x7C → 0x1C (mesmo path que garden)")
+    city.tiles[city.offset(54, 50)] = ID_PLAZA_JOIN
+    r = try_place(city, 54, 50, TOOL_CLEAR, None)
+    city.tiles[city.offset(55, 50)] = ID_PLAZA_STATUE
+    r2 = try_place(city, 55, 50, TOOL_CLEAR, None)
+    if (
+        city.tiles[city.offset(54, 50)] != ID_CLEAR
+        or city.tiles[city.offset(55, 50)] != ID_CLEAR
+    ):
+        lines.append(
+            f"FAIL  clear plaza join/statue "
+            f"{city.tiles[city.offset(54, 50)]:#x}/"
+            f"{city.tiles[city.offset(55, 50)]:#x}"
+        )
+    else:
+        lines.append("ok    Clear plaza join 0x7D / statue 0x7E → 0x1C")
 
     def _grass_block(ox: int, oy: int, w: int = 1, h: int = 1) -> None:
         for dy in range(h):

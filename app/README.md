@@ -102,7 +102,7 @@ No intro video. `INTRO.SMK` is only verified on disk (`smk_play` @ `0x5AB3D` is 
 | city map SavChunk 13 | `0xE2FBC` | `city_map.py`: 80×80×20 from `.SAV` **ou** generate; tecla **3** |
 | walkers SavChunk 8 | `0x1107A4` | `walkers.py`: 201×58; overlay after `render_iso` (tecla **3**) |
 
-`--new --city-only` starts a city (grass + river, year −300, treasury from C2MODEL). Paleta `INT_CITY` + placement v1: Tent `0x82` (custo 6), estrada `0x52–0x5C`, ponte `0x4E–0x51` no rio recto (recusa curva), clear em dois passos (prédio→`0x05`, rubble→`0x1C`). Flyouts Water/Forums/… ainda stub. Houses / forums / industry / people blit from the original PL8s when a `.SAV` is loaded (tecla **3**).
+`--new --city-only` starts a city (grass + river, year −300, treasury from C2MODEL). Paleta `INT_CITY` + placement v1: Tent `0x82` (custo 6), estrada `0x52–0x5C`, ponte `0x4E–0x51` no rio recto (recusa curva), clear em dois passos (`id≥0x82`→`0x05`, rubble→`0x1C`; garden/plaza `0x78–0x7E` flatten `0x1C`). Flyouts Water/Forums/… ainda stub. Houses / forums / industry / people blit from the original PL8s when a `.SAV` is loaded (tecla **3**).
 
 ---
 
