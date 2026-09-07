@@ -17,7 +17,6 @@ fire → prefect, water → fountain/bath paint; idle+factory_labor==0
 
 from __future__ import annotations
 
-import math
 import struct
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -89,14 +88,23 @@ WAGE_K = 7
 WELFARE_MAX = 0x61A8  # slider cap 0x3410D
 TAX_RATE_MAX = 25
 TAX_SCALE = 600  # [0x1029D8] init; monthly raw = wealth * 600 * rate / 100
-# 0x2dc74 table 0x9936c, origin eax=0x178 edx=0x12. Left = +, right = −.
-TAX_HIT_X = 0x178
-TAX_HIT_Y = 0x12
-TAX_HIT_W = 0x18
-TAX_HIT_H = 0x18
-TAX_RATE_X = 0x1B0
-_FORUMBIT_LEFT = 0x23
-_FORUMBIT_RIGHT = 0x25
+# EXE 0x2dc74 / 0x9936c: left gadget = +, right = − (chunks 29 / 30).
+# Screen origin (0x178, 0x12) sits above this host panel — Population Tax
+# was clipped. Hits live in the panel top-right, same pair as the screenshot.
+TAX_LABEL_X = 284
+TAX_HIT_X = 394
+TAX_HIT_Y = 48
+TAX_HIT_W = 14
+TAX_HIT_H = 14
+TAX_ROW_H = 22
+TAX_RATE_X = 428
+TAX_AV_X = 462
+_TREAS_FILL = (10, 22, 48, 236)
+_TREAS_EDGE = (158, 184, 210, 255)
+_TREAS_INK = (188, 202, 214, 255)
+_TREAS_HEAD = (214, 222, 230, 255)
+_TREAS_RULE = (120, 150, 180, 255)
+_SERIF_CACHE: dict[int, ImageFont.ImageFont] = {}
 
 # HISTORY.DAT / .SAV trailer — 200 × 20 B (history_dat.md). Scribe scales
 # are the UI caps from C2.ENG [32]+1…+4, not extra stored fields.
@@ -795,6 +803,26 @@ def _font() -> ImageFont.ImageFont:
     return ImageFont.load_default()
 
 
+def _serif_font(size: int) -> ImageFont.ImageFont:
+    """C2 Treasurer used a small serif, not the host bitmap / Julius UI."""
+    got = _SERIF_CACHE.get(size)
+    if got is not None:
+        return got
+    windir = Path(r"C:\Windows\Fonts")
+    names = ("times.ttf", "timesi.ttf", "georgia.ttf", "cambria.ttc")
+    if size >= 18:
+        names = ("timesbd.ttf", "times.ttf", "georgiab.ttf", "georgia.ttf")
+    for name in names:
+        path = windir / name
+        if path.is_file():
+            font = ImageFont.truetype(str(path), size)
+            _SERIF_CACHE[size] = font
+            return font
+    font = ImageFont.load_default()
+    _SERIF_CACHE[size] = font
+    return font
+
+
 def _slider_rects(row: int) -> tuple[tuple[int, int, int, int], tuple[int, int, int, int], tuple[int, int, int, int]]:
     y = _PANEL_Y + 86 + row * _ROW_H
     minus = (_SLIDER_X, y, 16, 16)
@@ -810,7 +838,7 @@ def _welfare_rects() -> tuple[tuple[int, int, int, int], tuple[int, int, int, in
 
 def _tax_rects(row: int) -> tuple[tuple[int, int, int, int], tuple[int, int, int, int]]:
     """EXE 0x9936c: left sprite = +, right sprite = −. row 0 pop, 1 industry."""
-    y = TAX_HIT_Y + row * TAX_HIT_H
+    y = TAX_HIT_Y + row * TAX_ROW_H
     plus = (TAX_HIT_X, y, TAX_HIT_W, TAX_HIT_H)
     minus = (TAX_HIT_X + TAX_HIT_W, y, TAX_HIT_W, TAX_HIT_H)
     return plus, minus
@@ -1044,20 +1072,26 @@ def _blit_forum_native(state: ForumState, sim: SimState, *, eng=None) -> Image.I
         )
     )
     if state.kind != KIND_CHROME:
-        draw.rectangle(
-            (_PANEL_X, _PANEL_Y, _PANEL_X + _PANEL_W - 1, _PANEL_Y + _PANEL_H - 1),
-            fill=(8, 20, 18, 230),
-            outline=(200, 180, 90, 255),
-        )
-        draw.text((_PANEL_X + 10, _PANEL_Y + 8), title[:48], fill=(255, 228, 160, 255), font=font)
-        if state.kind == KIND_PLEBS:
-            _draw_plebs(draw, font, state.labor, eng)
-        elif state.kind == KIND_ORACLE:
-            _draw_oracle(draw, font, sim, state.oracle_advice, eng)
-        elif state.kind == KIND_TREASURER:
-            _draw_treasurer(draw, font, sim, eng, image=out, bits=state.bits)
-        elif state.kind == KIND_SCRIBE:
-            _draw_scribe(draw, font, sim, state.scribe_years, eng)
+        if state.kind == KIND_TREASURER:
+            draw.rectangle(
+                (_PANEL_X, _PANEL_Y, _PANEL_X + _PANEL_W - 1, _PANEL_Y + _PANEL_H - 1),
+                fill=_TREAS_FILL,
+                outline=_TREAS_EDGE,
+            )
+            _draw_treasurer(draw, sim, eng)
+        else:
+            draw.rectangle(
+                (_PANEL_X, _PANEL_Y, _PANEL_X + _PANEL_W - 1, _PANEL_Y + _PANEL_H - 1),
+                fill=(8, 20, 18, 230),
+                outline=(200, 180, 90, 255),
+            )
+            draw.text((_PANEL_X + 10, _PANEL_Y + 8), title[:48], fill=(255, 228, 160, 255), font=font)
+            if state.kind == KIND_PLEBS:
+                _draw_plebs(draw, font, state.labor, eng)
+            elif state.kind == KIND_ORACLE:
+                _draw_oracle(draw, font, sim, state.oracle_advice, eng)
+            elif state.kind == KIND_SCRIBE:
+                _draw_scribe(draw, font, sim, state.scribe_years, eng)
     for i, skip in enumerate(_BUTTON_SKIP):
         x, y, bw, bh = button_rect(i)
         kind = _BUTTON_KIND[i]
@@ -1309,140 +1343,145 @@ def _draw_scribe(draw, font, sim: SimState, years: int, eng) -> None:
             )
 
 
-def _paste_bit(image, bits, index: int, x: int, y: int) -> bool:
-    if image is None or not bits or index >= len(bits):
-        return False
-    spr = bits[index]
-    if spr is None:
-        return False
-    frame = spr.convert("RGBA")
-    image.paste(frame, (x, y), frame)
-    return True
+def _prior_year_raw(year_raw: int) -> int:
+    """Year on the ACCOUNTS header — the year that just closed. No year 0."""
+    y = int(year_raw)
+    if y == 1:
+        return -1
+    if y == 0:
+        return -1
+    return y - 1
 
 
-def _draw_tax_dial(
-    draw,
-    font,
-    row: int,
-    label: str,
-    value: int,
-    *,
-    image=None,
-    bits=None,
-) -> None:
-    """Circular needle + 0x9936c arrow pair. Rate text at x=0x1B0."""
-    plus, minus = _tax_rects(row)
-    y = plus[1]
-    cx = plus[0] + TAX_HIT_W
-    cy = y + TAX_HIT_H // 2
-    r = 13
-    draw.ellipse((cx - r, cy - r, cx + r, cy + r), outline=(200, 180, 90), fill=(40, 32, 20, 240))
-    draw.ellipse((cx - 3, cy - 3, cx + 3, cy + 3), fill=(220, 190, 80))
-    frac = max(0, min(TAX_RATE_MAX, int(value))) / TAX_RATE_MAX
-    ang = math.radians(210.0 - frac * 240.0)
-    nx = cx + int(math.cos(ang) * (r - 3))
-    ny = cy - int(math.sin(ang) * (r - 3))
-    draw.line((cx, cy, nx, ny), fill=(255, 228, 160), width=2)
-    if not _paste_bit(image, bits, _FORUMBIT_LEFT, plus[0], plus[1]):
-        draw.rectangle(
-            (plus[0], plus[1], plus[0] + plus[2] - 1, plus[1] + plus[3] - 1),
-            outline=(200, 180, 90),
-        )
-        draw.polygon(
-            ((plus[0] + 16, cy), (plus[0] + 6, cy - 6), (plus[0] + 6, cy + 6)),
-            fill=(255, 228, 160),
-        )
-    if not _paste_bit(image, bits, _FORUMBIT_RIGHT, minus[0], minus[1]):
-        draw.rectangle(
-            (minus[0], minus[1], minus[0] + minus[2] - 1, minus[1] + minus[3] - 1),
-            outline=(200, 180, 90),
-        )
-        draw.polygon(
-            ((minus[0] + 6, cy), (minus[0] + 16, cy - 6), (minus[0] + 16, cy + 6)),
-            fill=(255, 228, 160),
-        )
-    draw.text((TAX_HIT_X - 108, y + 4), label[:22], fill=(200, 210, 190), font=font)
-    draw.text((TAX_RATE_X, y + 4), f"{value} %", fill=(255, 228, 160), font=font)
+def _surplus_phrase(amount: int, eng) -> str:
+    word = _eng(eng, 28, 21, "surplus") if int(amount) >= 0 else _eng(eng, 28, 20, "loss")
+    return f"{abs(int(amount))} Dn {word}"
 
 
-def _draw_treasurer(draw, font, sim: SimState, eng, *, image=None, bits=None) -> None:
+def treasurer_column_head(year_raw: int, accounts: bool, amount: int, eng) -> str:
+    """`124 BC ACCOUNTS  54 Dn loss` / `123 BC ESTIMATE  813 Dn surplus`."""
+    title = _eng(eng, 28, 18, "ACCOUNTS") if accounts else _eng(eng, 28, 19, "ESTIMATE")
+    return f"{_year_label(year_raw)} {title}  {_surplus_phrase(amount, eng)}"
+
+
+def treasurer_ledger_line(credit: bool, amount: int, skip: int, fallback: str, eng) -> str:
+    """`(+) 1856 Dn   Population Tax` — C2.ENG [28]+22…28."""
+    sign = _eng(eng, 28, 22, "(+)") if credit else _eng(eng, 28, 23, "(-)")
+    return f"{sign} {int(amount)} Dn   {_eng(eng, 28, skip, fallback)}"
+
+
+def treasurer_captions(sim: SimState, eng=None) -> dict[str, str]:
+    """Pinned C2 Treasurer wording (screenshot + [28]+12…28)."""
     est = treasurer_estimate(sim)
-    draw.text(
-        (_PANEL_X + 10, _PANEL_Y + 40),
-        f"{_eng(eng, 28, 12, 'Treasury')}  {int(sim.treasury)} Dn",
-        fill=(220, 230, 210),
-        font=font,
-    )
-    pop = int(sim.population)
-    draw.text(
-        (_PANEL_X + 10, _PANEL_Y + 58),
-        f"{_eng(eng, 28, 13, 'Citizens ')} {pop}",
-        fill=(220, 230, 210),
-        font=font,
-    )
+    pop = int(getattr(sim, "population", 0))
     emp = int(getattr(sim, "employed_pct", 0))
-    draw.text(
-        (_PANEL_X + 10, _PANEL_Y + 76),
-        f"{_eng(eng, 28, 14, 'employed')} {emp} %",
-        fill=(220, 230, 210),
-        font=font,
-    )
-    _draw_tax_dial(
-        draw, font, 0, _eng(eng, 28, 15, "Population Tax"), int(sim.tax_rate),
-        image=image, bits=bits,
-    )
-    _draw_tax_dial(
-        draw, font, 1, _eng(eng, 28, 16, "Industrial Tax"),
-        int(getattr(sim, "industrial_tax", 5)),
-        image=image, bits=bits,
-    )
-    if pop > 0 and est.pop_tax:
-        av = est.pop_tax / pop
-        draw.text(
-            (TAX_RATE_X + 40, TAX_HIT_Y + 4),
-            f"{_eng(eng, 28, 17, '(av. bill')} {av:.2f} Dn)",
-            fill=(180, 190, 170),
-            font=font,
-        )
-    factories = int(getattr(sim, "factory_count", 0))
-    if factories > 0 and est.ind_tax:
-        iav = est.ind_tax / factories
-        draw.text(
-            (TAX_RATE_X + 40, TAX_HIT_Y + TAX_HIT_H + 4),
-            f"{_eng(eng, 28, 17, '(av. bill')} {iav:.2f} Dn)",
-            fill=(180, 190, 170),
-            font=font,
-        )
-    last = (
-        int(getattr(sim, "surplus_last", 0)),
+    tribute_last = 0 if getattr(sim, "city_only", 0) else int(getattr(sim, "tribute", 0))
+    year = int(getattr(sim, "year_raw", 0))
+    last_amt = (
         int(getattr(sim, "pop_tax_last", 0)),
         int(getattr(sim, "ind_tax_last", 0)),
         int(getattr(sim, "construct_last", 0)),
         int(getattr(sim, "operating_last", 0)),
-        0 if getattr(sim, "city_only", 0) else int(getattr(sim, "tribute", 0)),
+        tribute_last,
     )
-    live = (est.surplus, est.pop_tax, est.ind_tax, est.constructions, est.operating, est.tribute)
-    labels = (
-        "",
-        f"{_eng(eng, 28, 22, '(+)')} {_eng(eng, 28, 24, 'Population Tax')}",
-        f"{_eng(eng, 28, 22, '(+)')} {_eng(eng, 28, 25, 'Industry Tax')}",
-        f"{_eng(eng, 28, 23, '(-)')} {_eng(eng, 28, 26, 'Constructions')}",
-        f"{_eng(eng, 28, 23, '(-)')} {_eng(eng, 28, 27, 'Operating Costs')}",
-        f"{_eng(eng, 28, 23, '(-)')} {_eng(eng, 28, 28, 'Annual Tribute')}",
+    live_amt = (est.pop_tax, est.ind_tax, est.constructions, est.operating, est.tribute)
+    rows = (
+        (True, 24, "Population Tax"),
+        (True, 25, "Industry Tax"),
+        (False, 26, "Constructions"),
+        (False, 27, "Operating Costs"),
+        (False, 28, "Annual Tribute"),
     )
-    y0 = _PANEL_Y + 134
-    draw.text((_PANEL_X + 220, y0), _eng(eng, 28, 18, "ACCOUNTS "), fill=(255, 228, 160), font=font)
-    draw.text((_PANEL_X + 360, y0), _eng(eng, 28, 19, "ESTIMATE "), fill=(255, 228, 160), font=font)
-    for i, (lab, a, b) in enumerate(zip(labels, last, live)):
-        y = y0 + 16 + i * 16
-        if i == 0:
-            word = _eng(eng, 28, 21, "surplus") if b >= 0 else _eng(eng, 28, 20, "loss")
-            draw.text((_PANEL_X + 10, y), word, fill=(220, 230, 210), font=font)
-        else:
-            draw.text((_PANEL_X + 10, y), lab[:28], fill=(200, 210, 190), font=font)
-        draw.text((_PANEL_X + 220, y), str(a), fill=(220, 230, 210), font=font)
-        col = (255, 120, 90) if i == 0 and b < 0 else (220, 230, 210)
-        draw.text((_PANEL_X + 360, y), str(b), fill=col, font=font)
+    av_pre = _eng(eng, 28, 17, "(av. bill")
+    pop_av = ""
+    if pop > 0 and est.pop_tax:
+        pop_av = f"{av_pre} {est.pop_tax / pop:.2f}Dn )"
+    ind_av = ""
+    factories = int(getattr(sim, "factory_count", 0))
+    if factories > 0 and est.ind_tax:
+        ind_av = f"{av_pre} {est.ind_tax / factories:.2f}Dn )"
+    return {
+        "treasury": f"{_eng(eng, 28, 12, 'Treasury')} {int(sim.treasury)} Dn",
+        "citizens": (
+            f"{pop} {_eng(eng, 28, 13, 'Citizens')}  "
+            f"{emp}% {_eng(eng, 28, 14, 'employed')}"
+        ),
+        "pop_tax": _eng(eng, 28, 15, "Population Tax"),
+        "ind_tax": _eng(eng, 28, 16, "Industrial Tax"),
+        "pop_rate": f"{int(sim.tax_rate)}%",
+        "ind_rate": f"{int(getattr(sim, 'industrial_tax', 5))}%",
+        "pop_av": pop_av,
+        "ind_av": ind_av,
+        "accounts": treasurer_column_head(
+            _prior_year_raw(year), True, int(getattr(sim, "surplus_last", 0)), eng
+        ),
+        "estimate": treasurer_column_head(year, False, est.surplus, eng),
+        "accounts_rows": tuple(
+            treasurer_ledger_line(credit, n, skip, fb, eng)
+            for (credit, skip, fb), n in zip(rows, last_amt)
+        ),
+        "estimate_rows": tuple(
+            treasurer_ledger_line(credit, n, skip, fb, eng)
+            for (credit, skip, fb), n in zip(rows, live_amt)
+        ),
+    }
+
+
+def _arrow_box(draw, rect: tuple[int, int, int, int], *, up: bool) -> None:
+    x, y, w, h = rect
+    draw.rectangle((x, y, x + w - 1, y + h - 1), outline=_TREAS_EDGE, fill=(18, 32, 58, 240))
+    cx, cy = x + w // 2, y + h // 2
+    if up:
+        draw.polygon(((cx, y + 2), (x + 2, y + h - 3), (x + w - 3, y + h - 3)), fill=_TREAS_HEAD)
+    else:
+        draw.polygon(((cx, y + h - 3), (x + 2, y + 2), (x + w - 3, y + 2)), fill=_TREAS_HEAD)
+
+
+def _draw_tax_row(draw, font, row: int, label: str, value: int, av: str) -> None:
+    """Label + up/down pair + `6%` + `(av. bill 0.89Dn )` — not a Julius dial."""
+    plus, minus = _tax_rects(row)
+    y = plus[1]
+    draw.text((TAX_LABEL_X, y + 1), label, fill=_TREAS_INK, font=font)
+    _arrow_box(draw, plus, up=True)
+    _arrow_box(draw, minus, up=False)
+    draw.text((TAX_RATE_X, y + 1), f"{int(value)}%", fill=_TREAS_HEAD, font=font)
+    if av:
+        draw.text((TAX_AV_X, y + 1), av, fill=_TREAS_INK, font=font)
+
+
+def _draw_ledger_column(draw, font, x: int, y0: int, head: str, rows: tuple[str, ...]) -> None:
+    draw.text((x, y0), head, fill=_TREAS_HEAD, font=font)
+    for i, line in enumerate(rows):
+        draw.text((x, y0 + 18 + i * 16), line, fill=_TREAS_INK, font=font)
+
+
+def _draw_treasurer(draw, sim: SimState, eng) -> None:
+    """Original C2 Treasurer: stats left, tax rows right, ACCOUNTS | ESTIMATE."""
+    caps = treasurer_captions(sim, eng)
+    title = _serif_font(18)
+    body = _serif_font(13)
+    draw.text((_PANEL_X + 12, _PANEL_Y + 10), caps["treasury"], fill=_TREAS_HEAD, font=title)
+    draw.text((_PANEL_X + 12, _PANEL_Y + 34), caps["citizens"], fill=_TREAS_INK, font=body)
+    _draw_tax_row(draw, body, 0, caps["pop_tax"], int(sim.tax_rate), caps["pop_av"])
+    _draw_tax_row(
+        draw, body, 1,
+        caps["ind_tax"],
+        int(getattr(sim, "industrial_tax", 5)),
+        caps["ind_av"],
+    )
+    mid = _PANEL_X + _PANEL_W // 2
+    rule_y = _PANEL_Y + 78
+    draw.line(
+        (_PANEL_X + 8, rule_y, _PANEL_X + _PANEL_W - 9, rule_y),
+        fill=_TREAS_RULE,
+    )
+    draw.line(
+        (mid, rule_y + 4, mid, _PANEL_Y + _PANEL_H - 12),
+        fill=_TREAS_RULE,
+    )
+    y0 = rule_y + 8
+    _draw_ledger_column(draw, body, _PANEL_X + 12, y0, caps["accounts"], caps["accounts_rows"])
+    _draw_ledger_column(draw, body, mid + 10, y0, caps["estimate"], caps["estimate_rows"])
 
 
 def blit_pause_square(
@@ -1865,6 +1904,41 @@ def selftest() -> list[str]:
         )
     else:
         lines.append("ok    treasurer dial hit + ESTIMATE refresh")
+    p0, m0 = _tax_rects(0)
+    p1, _m1 = _tax_rects(1)
+    if p0[1] < _PANEL_Y or p1[1] <= p0[1] + p0[3] or m0[0] <= p0[0]:
+        lines.append(f"FAIL  tax rows overlap {p0} {p1}")
+    else:
+        lines.append("ok    Population + Industrial tax rows unclipped")
+    lay = SimState(
+        city_only=1,
+        year_raw=-123,
+        treasury=1386,
+        population=2510,
+        employed_pct=75,
+        tax_rate=6,
+        industrial_tax=6,
+        surplus_last=-54,
+        pop_tax_last=1856,
+        ind_tax_last=382,
+        construct_last=1518,
+        operating_last=720,
+        tribute=0,
+    )
+    caps = treasurer_captions(lay)
+    if (
+        caps["treasury"] != "Treasury 1386 Dn"
+        or "2510 Citizens" not in caps["citizens"]
+        or "75% employed" not in caps["citizens"]
+        or caps["accounts"] != "124 BC ACCOUNTS  54 Dn loss"
+        or "123 BC ESTIMATE" not in caps["estimate"]
+        or caps["accounts_rows"][0] != "(+) 1856 Dn   Population Tax"
+        or caps["accounts_rows"][2] != "(-) 1518 Dn   Constructions"
+        or caps["pop_rate"] != "6%"
+    ):
+        lines.append(f"FAIL  treasurer captions {caps}")
+    else:
+        lines.append("ok    Treasurer matches C2 ledger (year + Dn + two columns)")
     treas2 = ForumState(kind=KIND_TREASURER, labor=labor_w)
     click_forum(treas2, tp[0] * 2 + 2, tp[1] * 2 + 2, sim_t, frame_size=wide)
     click_forum(treas2, ip[0] * 2 + 2, ip[1] * 2 + 2, sim_t, frame_size=wide)
