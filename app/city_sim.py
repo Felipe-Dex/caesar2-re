@@ -254,6 +254,15 @@ class SimState:
     rating_prosperity: int = 0
     rating_culture: int = 0
     rating_avg: int = 0
+    # 0x54e3c City Only tick — covers / cap flags / surplus. Empire/Peace stay 0.
+    cover_entertainment: int = 0  # [0x102580]
+    cover_temple: int = 0  # [0x10256C]
+    cover_services: int = 0  # [0x10254C]
+    rating_prosperity_cap: int = 0  # [0x10257C]
+    rating_culture_cap: int = 0  # [0x102550]
+    rating_surplus: int = 0  # [0x1025D8]
+    housing_income: int = 0  # [0x1025AC]
+    broke_left: int = 0  # [0x102A6C] 0x54dc5 countdown
 
     @property
     def date(self) -> GameDate:
@@ -1204,6 +1213,7 @@ def city_sim_phase(
             state.ind_wealth = industry_tax_wealth(tiles)
         treas_before = int(state.treasury)
         year_before = int(state.year_raw)
+        month_was = int(state.month)
         wrapped = _phase_wrap(state)
         year_wrapped = wrapped and int(state.year_raw) != year_before
         if not log_this:
@@ -1231,9 +1241,10 @@ def city_sim_phase(
             f"treas={state.treasury} d={state.treasury - treas_before}"
         )
         if can:
-            from app.forum import refresh_labor_need
+            from app.forum import refresh_labor_need, tick_city_ratings
 
             refresh_labor_need(state, tiles)
+            tick_city_ratings(state, tiles, month_was=month_was)
             for line in diagnose_hut_insula(
                 tiles, population=state.population, limit=4
             ):
@@ -2351,6 +2362,12 @@ def selftest() -> list[str]:
     lines.append(
         f"WRAP empty City Only -op 8: {'ok' if ok else 'FAIL'} "
         f"treas={wrap.treasury} {wrap.date_label}"
+    )
+    ok = wrap.rating_empire == 0 and wrap.rating_peace == 0
+    lines.append(
+        f"WRAP City Only ratings skip Empire/Peace: {'ok' if ok else 'FAIL'} "
+        f"E={wrap.rating_empire} P={wrap.rating_peace} "
+        f"pros={wrap.rating_prosperity} cult={wrap.rating_culture}"
     )
     tiles = _blank_tiles()
     toff = _off(10, 10)

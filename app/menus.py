@@ -172,6 +172,46 @@ def _year_delta(cur: int, prev: int, eng) -> str:
     return f"{word} {int(cur) - int(prev)})"
 
 
+def lose_game_report(*, eng=None) -> MenuReport:
+    """C2.ENG [45] GAME OVER — 0x59aa7 panel. City Only bankruptcy end."""
+    title = _eng(eng, 45, 0, "GAME OVER")
+    body = _eng(
+        eng,
+        45,
+        1,
+        "Your poor decisions have cost you your future.  Stripped of all "
+        "rank, position and honors, the Empire has another destiny planned for you...",
+    )
+    return MenuReport(title, tuple(_wrap_adv(body, 44)))
+
+
+def win_game_report(sim, *, eng=None) -> MenuReport:
+    """City Only win — PERSONAL [76]+17/+20, not Career [115]+ / promote.smk.
+
+    EXE 0x5e077 uses +20 when remaining promotions < 2; City Only PERSONAL
+    skips that chrome, but HELP measures only Prosperity + Culture against
+    C2MODEL Citizen Need. Report, not a fake popup.
+    """
+    from app.forum import rating_need
+
+    need, avg_need = rating_need(sim)
+    p = int(getattr(sim, "rating_prosperity", 0))
+    c = int(getattr(sim, "rating_culture", 0))
+    you = _eng(eng, 76, 17, "You need")
+    win = _eng(eng, 76, 20, "win the game.")
+    title = _eng(eng, 69, 0, "Promotion!!!")
+    lines = [
+        f"{you} {win}",
+        f"{_eng(eng, 31, 3, 'Prosperity')} {p} %  "
+        f"{_eng(eng, 31, 6, '(Need')} {need} %)",
+        f"{_eng(eng, 31, 4, 'Culture')} {c} %  "
+        f"{_eng(eng, 31, 6, '(Need')} {need} %)",
+        f"{_eng(eng, 31, 5, 'Average rating: ')}{(p + c) // 2} %  "
+        f"{_eng(eng, 31, 6, '(Need')} {avg_need} %)",
+    ]
+    return MenuReport(title, tuple(lines))
+
+
 def annual_summary_report(sim, *, eng=None) -> MenuReport:
     """C2.ENG [72] Annual Summary — FUN_00061389 after 0x3fd3e.
 
@@ -509,6 +549,16 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  annual UP/DOWN {down.lines!r}")
     else:
         lines.append("ok    Annual Summary (UP pop) (DOWN treasury)")
+    won = win_game_report(
+        SimState(city_only=1, skill=2, rating_prosperity=30, rating_culture=34)
+    )
+    lose = lose_game_report()
+    if "win the game" not in " ".join(won.lines).lower():
+        lines.append(f"FAIL  win report {won.lines!r}")
+    elif lose.title != "GAME OVER":
+        lines.append(f"FAIL  lose title {lose.title!r}")
+    else:
+        lines.append("ok    City Only win/lose reports use [76]+20 / [45]")
     opt = decorate_item(
         SLOT_OPTIONS, OPT_YEAR, "End of Year ", options=HostOptions(annual_summary=False)
     )

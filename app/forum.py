@@ -25,6 +25,19 @@ from PIL import Image, ImageDraw, ImageFont
 
 from app.city_map import MAP_H, MAP_W, TILE_STRIDE
 from app.city_paint import (
+    ID_ARENA,
+    ID_COLISEUM,
+    ID_GARDEN_HI,
+    ID_GARDEN_LO,
+    ID_GRAMMATICUS,
+    ID_HOSPITAL,
+    ID_LIBRARY,
+    ID_ODEUM,
+    ID_PLAZA_HI,
+    ID_PLAZA_LO,
+    ID_RHETOR,
+    ID_THEATER,
+    civic_working,
     count_taxed_factories,
     housing_tax_wealth,
     industry_tax_wealth,
@@ -91,6 +104,21 @@ WAGE_K = 7
 WELFARE_MAX = 0x61A8  # slider cap 0x3410D
 TAX_RATE_MAX = 25
 TAX_SCALE = 600  # [0x1029D8] init; monthly raw = wealth * 600 * rate / 100
+# C2MODEL [790+skill*20] / [890+skill*20] rank-0 (Citizen) Need.
+# City Only has no rank; HELP measures only Prosperity + Culture.
+NEED_IND_RANK0 = (15, 15, 20, 20, 25)
+NEED_AVG_RANK0 = (25, 25, 30, 30, 35)
+# 0x55431 scale: Peace/Empire 1, Culture 3, Prosperity 4.
+CULTURE_CAP_SCALE = 3
+PROSPERITY_CAP_SCALE = 4
+HOUSING_INCOME_CAP = 0x3C
+SURPLUS_LO, SURPLUS_HI = -5000, 5000
+POP_PROS_TERM_CAP = 2000
+BROKE_COUNTDOWN = 0x18  # 0x54dc5
+# Worship 0xA2–0xAC origins. HELP: no road access required.
+ID_SHRINE, ID_TEMPLE, ID_BASILICA = 0xA2, 0xA6, 0xAA
+# Long entertainment: one origin per pair (not both tid / tid2 halves).
+ID_CIRCUS_ORIGIN, ID_CMAX_ORIGIN = 0xEB, 0xED
 # EXE 0x2dc74 / 0x9936c: left gadget = +, right = − (chunks 29 / 30).
 # Screen origin (0x178, 0x12) sits above this host panel — Population Tax
 # was clipped. Hits live in the panel top-right, same pair as the screenshot.
@@ -454,25 +482,211 @@ def append_history_year(sim: SimState) -> None:
     struct.pack_into("<5i", blob, _history_next_slot(blob) * HIST_REC, *rec)
 
 
+def rating_need(sim: SimState) -> tuple[int, int]:
+    """C2MODEL Citizen Need for this skill. City Only has no rank slot."""
+    skill = max(0, min(4, int(getattr(sim, "skill", 0))))
+    return NEED_IND_RANK0[skill], NEED_AVG_RANK0[skill]
+
+
+def rating_cap(raw: int, population: int, scale: int) -> int:
+    """0x55431 — min(raw, 100, first n where n*10*scale >= pop)."""
+    esi = max(0, min(100, int(raw)))
+    pop = max(0, int(population))
+    for n in range(100):
+        if n * 10 * scale >= pop:
+            return min(esi, n)
+    return esi
+
+
+def _count_origins(
+    tiles: bytearray,
+    lo: int,
+    hi: int,
+    *,
+    working: bool,
+    size: int | None = None,
+) -> int:
+    n = 0
+    need = MAP_W * MAP_H * TILE_STRIDE
+    if len(tiles) < need:
+        return 0
+    for y in range(MAP_H):
+        for x in range(MAP_W):
+            off = y * MAP_W * TILE_STRIDE + x * TILE_STRIDE
+            tid = tiles[off]
+            if tid < lo or tid > hi:
+                continue
+            if tiles[off + 5] & 0xF:
+                continue
+            if working:
+                if size is None:
+                    if not civic_working(tiles, x, y):
+                        continue
+                elif not civic_working(tiles, x, y, size):
+                    continue
+            n += 1
+    return n
+
+
+def _clamp100(n: int) -> int:
+    if n < 0:
+        return 0
+    return 100 if n > 100 else n
+
+
+def _culture_covers(tiles: bytearray, population: int) -> tuple[int, int, int]:
+    """0x55012 — entertainment / temple / services percents, each 0…100."""
+    theater = _count_origins(tiles, ID_THEATER, ID_THEATER, working=True)
+    odeum = _count_origins(tiles, ID_ODEUM, ID_ODEUM, working=True)
+    arena = _count_origins(tiles, ID_ARENA, ID_ARENA, working=True)
+    coliseum = _count_origins(tiles, ID_COLISEUM, ID_COLISEUM, working=True)
+    circus = _count_origins(tiles, ID_CIRCUS_ORIGIN, ID_CIRCUS_ORIGIN, working=True)
+    cmax = _count_origins(tiles, ID_CMAX_ORIGIN, ID_CMAX_ORIGIN, working=True)
+    ent = (
+        theater * 5
+        + odeum * 8
+        + arena * 12
+        + coliseum * 16
+        + circus * 20
+        + cmax * 25
+    ) * 100
+
+    basilica = _count_origins(tiles, ID_BASILICA, 0xAC, working=False, size=3)
+    temple = _count_origins(tiles, ID_TEMPLE, 0xA8, working=False, size=2)
+    shrine = _count_origins(tiles, ID_SHRINE, 0xA5, working=False)
+    cult = (basilica * 12 + temple * 7 + shrine * 2) * 100
+
+    gram = _count_origins(tiles, ID_GRAMMATICUS, ID_GRAMMATICUS, working=True)
+    rhetor = _count_origins(tiles, ID_RHETOR, ID_RHETOR, working=True)
+    garden = _count_origins(tiles, ID_GARDEN_LO, ID_GARDEN_HI, working=False)
+    plaza = _count_origins(tiles, ID_PLAZA_LO, ID_PLAZA_HI, working=False)
+    hosp = _count_origins(tiles, ID_HOSPITAL, ID_HOSPITAL, working=True)
+    lib = _count_origins(tiles, ID_LIBRARY, ID_LIBRARY, working=True)
+    svc = (
+        (gram + rhetor) // 2
+        + garden * 4
+        + plaza * 7
+        + hosp * 10
+        + lib * 20
+    ) * 100
+
+    denom = (int(population) >> 4) + 2
+    if denom <= 0:
+        denom = 2
+    return (
+        _clamp100(ent // denom),
+        _clamp100(cult // denom),
+        _clamp100(svc // denom),
+    )
+
+
+def _housing_income(sim: SimState, population: int) -> int:
+    """0x56ed2 → [0x1025ac]. (wealth×600×rate/100/pop)/4, cap 60."""
+    if population <= 0:
+        return 0
+    wealth = max(0, int(getattr(sim, "tax_wealth", 0)))
+    rate = max(0, int(getattr(sim, "tax_rate", 5)))
+    raw = wealth * TAX_SCALE * rate // 100 // population
+    return min(HOUSING_INCOME_CAP, max(0, raw // 4))
+
+
+def tick_city_ratings(
+    sim: SimState, tiles: bytearray, *, month_was: int | None = None
+) -> None:
+    """0x54e3c — Culture 0x55012 + Prosperity 0x5524e. City Only skips E/P.
+
+    Empire / Peace stay stubs. Average is (P+C)/2 — HELP measures those two.
+    ``month_was`` is the completing month (calendar_advance already ++).
+    December (11) adds year surplus [0x102A64] into [0x1025D8].
+    """
+    if tiles is not None:
+        sim.tax_wealth = housing_tax_wealth(tiles)
+        pop = recount_population(tiles)
+        sim.population = pop
+    else:
+        pop = max(0, int(getattr(sim, "population", 0)))
+    month = int(month_was) if month_was is not None else int(getattr(sim, "month", 0))
+    if month == 11:
+        sim.rating_surplus = int(getattr(sim, "rating_surplus", 0)) + int(
+            getattr(sim, "surplus_last", 0)
+        )
+    surplus = int(getattr(sim, "rating_surplus", 0))
+    if surplus < SURPLUS_LO:
+        surplus = SURPLUS_LO
+    if surplus > SURPLUS_HI:
+        surplus = SURPLUS_HI
+    sim.rating_surplus = surplus
+
+    income = _housing_income(sim, pop)
+    sim.housing_income = income
+    pop_term = min(POP_PROS_TERM_CAP, pop) // 60
+    raw_p = income + pop_term + surplus // 200
+    capped_p = rating_cap(raw_p, pop, PROSPERITY_CAP_SCALE)
+    sim.rating_prosperity = capped_p
+    sim.rating_prosperity_cap = 1 if raw_p > capped_p and pop >= 10 else 0
+
+    ent, temple, svc = _culture_covers(tiles or bytearray(), pop)
+    sim.cover_entertainment = ent
+    sim.cover_temple = temple
+    sim.cover_services = svc
+    raw_c = (ent + temple + svc) // 3
+    capped_c = rating_cap(raw_c, pop, CULTURE_CAP_SCALE)
+    sim.rating_culture = capped_c
+    sim.rating_culture_cap = 1 if raw_c > capped_c and pop >= 10 else 0
+
+    if getattr(sim, "city_only", 0):
+        sim.rating_empire = 0
+        sim.rating_peace = 0
+        sim.rating_avg = (capped_p + capped_c) // 2
+    else:
+        sim.rating_avg = (capped_p + capped_c) // 2
+
+
+def city_only_won(sim: SimState) -> bool:
+    """City Only: P and C each >= Citizen Need, (P+C)/2 >= avg Need."""
+    if not getattr(sim, "city_only", 0):
+        return False
+    need, avg_need = rating_need(sim)
+    p = int(getattr(sim, "rating_prosperity", 0))
+    c = int(getattr(sim, "rating_culture", 0))
+    return p >= need and c >= need and (p + c) // 2 >= avg_need
+
+
 def oracle_advice_skip(sim: SimState, col: int) -> int:
     """0x57450 + city-only force id 17 → [31]+24. col 0…3.
 
-    Empire / Peace (ids < 9) stay the city-only stub. Prosperity uses
-    surplus / housing wealth we already store. Culture has no coverage
-    mins in SimState — else branch is services ([31]+23).
+    Empire / Peace stay the city-only stub. Prosperity uses surplus /
+    housing_income. Culture uses cover mins [0x102580/56C/54C].
     """
     if col < 0 or col > 3:
         return 7
     if getattr(sim, "city_only", 0) and col < 2:
         return 24
     if col == 2:
-        books = treasurer_estimate(sim)
-        if books.surplus < 0:
+        if int(getattr(sim, "rating_prosperity_cap", 0)):
+            return 16
+        surplus = int(getattr(sim, "rating_surplus", 0))
+        if surplus == 0:
+            books = treasurer_estimate(sim)
+            surplus = books.surplus
+        if surplus < 0:
             return 17
-        if int(getattr(sim, "tax_wealth", 0)) < 10:
+        income = int(getattr(sim, "housing_income", 0))
+        if income <= 0:
+            income = int(getattr(sim, "tax_wealth", 0))
+        if income < 10:
             return 18
         return 19
     if col == 3:
+        if int(getattr(sim, "rating_culture_cap", 0)):
+            return 20
+        ent = int(getattr(sim, "cover_entertainment", 0))
+        temple = int(getattr(sim, "cover_temple", 0))
+        svc = int(getattr(sim, "cover_services", 0))
+        if ent <= temple and ent <= svc:
+            return 21
+        if temple <= ent and temple <= svc:
+            return 22
         return 23
     return 24
 
@@ -1249,13 +1463,22 @@ def _draw_oracle(draw, font, sim: SimState, advice: int | None, eng) -> None:
         int(getattr(sim, "rating_culture", 0)),
     )
     avg = int(getattr(sim, "rating_avg", 0))
+    need_ind, _need_avg = rating_need(sim)
     w = _PANEL_W // 4
     for i, (name, val) in enumerate(zip(names, vals)):
         x = _PANEL_X + i * w
         draw.rectangle((x + 8, _PANEL_Y + 40, x + w - 8, _PANEL_Y + 110), outline=(200, 180, 90))
         draw.text((x + 16, _PANEL_Y + 48), name, fill=(255, 228, 160), font=font)
         draw.text((x + 16, _PANEL_Y + 68), f"{val} %", fill=(220, 230, 210), font=font)
-        if not getattr(sim, "city_only", 0):
+        if getattr(sim, "city_only", 0):
+            if i >= 2:
+                draw.text(
+                    (x + 16, _PANEL_Y + 84),
+                    f"{_eng(eng, 31, 6, '(Need')} {need_ind} %)",
+                    fill=(180, 180, 160),
+                    font=font,
+                )
+        else:
             draw.text(
                 (x + 16, _PANEL_Y + 84),
                 f"{_eng(eng, 31, 6, '(Need')} 0 %)",
@@ -2043,10 +2266,42 @@ def selftest() -> list[str]:
         lines.append("FAIL  city-only Empire/Peace skip")
     elif oracle_advice_skip(sim_o, 2) != 18:
         lines.append(f"FAIL  prosperity housing skip {oracle_advice_skip(sim_o, 2)}")
-    elif oracle_advice_skip(sim_o, 3) != 23:
+    elif oracle_advice_skip(sim_o, 3) != 21:
         lines.append(f"FAIL  culture skip {oracle_advice_skip(sim_o, 3)}")
     else:
-        lines.append("ok    Oracle city-only 24 / Prosperity 18 / Culture 23")
+        lines.append("ok    Oracle city-only 24 / Prosperity 18 / Culture 21")
+    sim_svc = SimState(city_only=1, cover_entertainment=40, cover_temple=30, cover_services=10)
+    if oracle_advice_skip(sim_svc, 3) != 23:
+        lines.append(f"FAIL  culture services min {oracle_advice_skip(sim_svc, 3)}")
+    else:
+        lines.append("ok    Culture [31]+23 when services cover is the min")
+    tick = SimState(city_only=1, skill=2, tax_rate=5, tax_wealth=0, population=0)
+    tick_city_ratings(tick, bytearray(MAP_W * MAP_H * TILE_STRIDE))
+    if tick.rating_prosperity != 0 or tick.rating_culture != 0 or tick.rating_empire != 0:
+        lines.append(
+            f"FAIL  empty tick P={tick.rating_prosperity} C={tick.rating_culture}"
+        )
+    elif not city_only_won(SimState(
+        city_only=1, skill=2, rating_prosperity=30, rating_culture=30
+    )):
+        lines.append("FAIL  Normal P=C=30 should win (Need 20 / avg 30)")
+    elif city_only_won(SimState(
+        city_only=1, skill=2, rating_prosperity=20, rating_culture=20
+    )):
+        lines.append("FAIL  Normal P=C=20 avg 20 < Need 30")
+    else:
+        lines.append("ok    City Only win is P+C Need, not pop 50")
+    cult_map = bytearray(MAP_W * MAP_H * TILE_STRIDE)
+    cult_map[0] = 0x82
+    cult_map[TILE_STRIDE] = ID_SHRINE
+    shrine = SimState(city_only=1, skill=2, tax_rate=5)
+    tick_city_ratings(shrine, cult_map)
+    if shrine.cover_temple <= 0 or shrine.rating_culture < 1:
+        lines.append(
+            f"FAIL  shrine culture cover={shrine.cover_temple} C={shrine.rating_culture}"
+        )
+    else:
+        lines.append("ok    Culture ticks from shrine cover (not seed)")
     oracle = ForumState(kind=KIND_ORACLE, labor=labor)
     click_forum(oracle, _PANEL_X + 20, _PANEL_Y + 50, sim_o)
     if oracle.oracle_advice != 0:

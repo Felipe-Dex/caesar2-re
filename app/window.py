@@ -70,6 +70,8 @@ from app.menus import (
     about_report,
     advisor_contains,
     annual_summary_report,
+    lose_game_report,
+    win_game_report,
     blit_advisor_dialog,
     blit_menu_report,
     census_report,
@@ -1514,6 +1516,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
         ph, w = n.phase, n.walkers
         _refresh_after_sim(houses_changed=ph.houses_changed > 0)
         _maybe_annual_summary(ph)
+        _maybe_win_lose()
         _play_labor_sfx()
         _pump_advisor()
         from app.sim_log import last_line
@@ -1540,6 +1543,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
         date = format_hud_date(ctx.sim.date)
         _refresh_after_sim(houses_changed=ph.houses_changed > 0)
         _maybe_annual_summary(ph)
+        _maybe_win_lose()
         _play_labor_sfx()
         _pump_advisor()
         from app.sim_log import last_line
@@ -1657,6 +1661,18 @@ def show(ctx: BootContext, *, game: Path) -> None:
         if not options.annual_summary:
             return
         _open_report(annual_summary_report(ctx.sim, eng=ctx.eng))
+
+    def _maybe_win_lose() -> None:
+        """0x59b06 / 0x59aa7 reports. Not Career [115]+ Emperor letters."""
+        from app.messages import take_outcome
+
+        if not getattr(ctx.sim, "city_only", 0):
+            return
+        key = take_outcome(ctx.sim)
+        if key == "win":
+            _open_report(win_game_report(ctx.sim, eng=ctx.eng))
+        elif key == "lose":
+            _open_report(lose_game_report(eng=ctx.eng))
 
     def _open_census() -> None:
         """C / Options+5 — Census Panel [74]. Second C closes it."""
@@ -1916,6 +1932,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
             if ph.houses_changed > 0:
                 _refresh_after_sim(houses_changed=True)
             _maybe_annual_summary(ph)
+            _maybe_win_lose()
             _play_labor_sfx()
             _pump_advisor()
             from app.sim_log import last_line

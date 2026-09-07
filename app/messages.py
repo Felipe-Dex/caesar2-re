@@ -77,6 +77,27 @@ _FB = {
         0: "Stolen!",
         1: "Thieves have run off with much of your treasury.  Leaving your Denarii lying around on the floor of the Forum has proven to be a bad idea.",
     },
+    45: {
+        0: "GAME OVER",
+        1: (
+            "Your poor decisions have cost you your future.  Stripped of all "
+            "rank, position and honors, the Empire has another destiny planned for you..."
+        ),
+    },
+    69: {
+        0: "Promotion!!!",
+        4: (
+            "You have fulfilled the mandate the Emperor set out for you.  "
+            "He now invites you to leave this province in search of greater challenges..."
+        ),
+        5: "Hail, Caesar!",
+    },
+    76: {
+        17: "You need",
+        18: "promotions to",
+        19: "become Emperor.",
+        20: "win the game.",
+    },
     97: {
         0: "No Denarii!",
         1: "You have exhausted the funds in your treasury.",
@@ -128,6 +149,9 @@ class MessageWatch:
     status_line: str = ""
     status_alert: bool = False
     status_sfx: str = ""
+    won: bool = False
+    lost: bool = False
+    outcome: str = ""
 
 
 def _eng(eng, slot: int, skip: int, fallback: str) -> str:
@@ -209,6 +233,14 @@ def is_status_bar_key(key: str) -> bool:
     return key in STATUS_BAR_KEYS
 
 
+def take_outcome(sim) -> str:
+    """Pop win/lose once for the host report (0x59b06 / 0x59aa7)."""
+    watch = ensure_watch(sim)
+    key = watch.outcome
+    watch.outcome = ""
+    return key
+
+
 def seed_watch_from_city(sim, tiles: bytearray) -> MessageWatch:
     """After a successful SAV load, latch edges so scan does not dump.
 
@@ -264,6 +296,11 @@ def seed_watch_from_city(sim, tiles: bytearray) -> MessageWatch:
     watch.broke = treas < 0
     if treas < 0:
         watch.seen.add("broke")
+    from app.forum import city_only_won
+
+    if city_only_won(sim):
+        watch.won = True
+        watch.seen.add("win")
     return watch
 
 
@@ -466,7 +503,25 @@ def scan_city_messages(
         watch.seen.discard("broke")
         if enqueue(sim, _make(eng, "broke", 97)):
             fired.append("broke")
+        sim.broke_left = 0x18
+    elif broke and month_wrapped:
+        left = max(0, int(getattr(sim, "broke_left", 0)) - 1)
+        sim.broke_left = left
+        # 0x54e2e: countdown 0 → session report. [98] Stern Warning is Career.
+        if left <= 0 and not watch.lost:
+            watch.lost = True
+            watch.outcome = "lose"
+            fired.append("lose")
+    elif not broke:
+        sim.broke_left = 0
     watch.broke = broke
+
+    from app.forum import city_only_won
+
+    if city_only_won(sim) and not watch.won:
+        watch.won = True
+        watch.outcome = "win"
+        fired.append("win")
 
     watch.last_staffed = staffed
     return fired
@@ -753,6 +808,28 @@ def selftest() -> list[str]:
         lines.append("FAIL  unlocks table")
     else:
         lines.append("ok    unlock gates match unlocks.py")
+
+    win_sim = SimState(
+        city_only=1, skill=2, rating_prosperity=30, rating_culture=30, treasury=100
+    )
+    init_city_only_labor(win_sim)
+    got = scan_city_messages(win_sim, tiles3)
+    if "win" not in got or take_outcome(win_sim) != "win":
+        lines.append(f"FAIL  city-only win {got}")
+    elif any(m.slot >= 115 for m in ensure_watch(win_sim).pending):
+        lines.append("FAIL  win must not enqueue Emperor [115]+")
+    else:
+        lines.append("ok    City Only win is P+C Need (not pop 50), no [115]+")
+
+    lose_sim = SimState(city_only=1, treasury=-10, broke_left=1)
+    init_city_only_labor(lose_sim)
+    lose_sim.broke_left = 1
+    ensure_watch(lose_sim).broke = True
+    got = scan_city_messages(lose_sim, tiles3, month_wrapped=True)
+    if "lose" not in got or take_outcome(lose_sim) != "lose":
+        lines.append(f"FAIL  broke countdown lose {got}")
+    else:
+        lines.append("ok    GAME OVER after 0x54dc5 countdown, not Stern Warning")
     try:
         from app.assets import load_eng
         from app.config import resolve_game_dir
