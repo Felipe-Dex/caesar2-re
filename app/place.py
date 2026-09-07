@@ -47,8 +47,9 @@ the cursor; ghost overlay; release places once. Place uses dirty iso (no
 full-map flush — that thumbnailed the canvas and looked like a zoom pop).
 Clear of a tall building still sets ``flush_iso``. Tent / civic-rect drag
 is **atomic** if treasury < cost×N. N×N>1×1 (forum / temple / theater /
-barracks / …) is stamp-follow; Circus 6×3 and C.Maximus 4×8 are one
-paired ghost. Plaza is 1×1 rect on/next to a road. Wall is a road-style
+barracks / …) is stamp-follow; Circus 6×3 EW (0xEB+0xEC) / 3×6 NS
+(0xE9+0xEA) and C.Maximus 4×8 / 8×4 are one paired ghost — odd facing
+swaps the long axis. Plaza is 1×1 rect on/next to a road. Wall is a road-style
 line (gate when the line hits a road).
 
 Not the full EXE stamp. Tent 6 is observed (sav_c), not C2MODEL. City
@@ -176,6 +177,8 @@ ID_CIRCUS_C = 0xEB
 ID_CIRCUS_D = 0xEC
 ID_CMAX_A = 0xED
 ID_CMAX_B = 0xEE
+ID_CMAX_C = 0xEF
+ID_CMAX_D = 0xF0
 ID_GRAMMATICUS = 0xF3
 ID_RHETOR = 0xF4
 ID_LIBRARY = 0xF5
@@ -444,6 +447,18 @@ _reg(StampSpec(TOOL_CMAXIMUS, "C.Maximus", ID_CMAX_A, 4, 8, COST_CMAXIMUS, 0x01,
                tid2=ID_CMAX_B,
                variants2=(0x22, 0x24, 0x27, 0x2B, 0x23, 0x26, 0x2A, 0x2E,
                           0x25, 0x29, 0x2D, 0x30, 0x28, 0x2C, 0x2F, 0x31)))
+# Achea NS Circus 0xE9+0xEA at (35,38). BUILD1D +4 0x00–0x11.
+_CIRCUS_NS_VAR = (0x00, 0x02, 0x05, 0x01, 0x04, 0x07, 0x03, 0x06, 0x08)
+_CIRCUS_NS_VAR2 = (0x09, 0x0B, 0x0E, 0x0A, 0x0D, 0x10, 0x0C, 0x0F, 0x11)
+# Leftover C.Max EW 0xEF+0xF0 — BUILD1D continues after EW circus 0x43.
+_CMAX_EW_VAR = (
+    0x44, 0x46, 0x49, 0x4D, 0x45, 0x48, 0x4C, 0x50,
+    0x47, 0x4B, 0x4F, 0x52, 0x4A, 0x4E, 0x51, 0x53,
+)
+_CMAX_EW_VAR2 = (
+    0x54, 0x56, 0x59, 0x5D, 0x55, 0x58, 0x5C, 0x60,
+    0x57, 0x5B, 0x5F, 0x62, 0x5A, 0x5E, 0x61, 0x63,
+)
 _reg(StampSpec(TOOL_GRAMMATICUS, "Grammaticus", ID_GRAMMATICUS, 2, 2, COST_GRAMMATICUS, 0x01, 0x08,
                (0x40, 0x42, 0x41, 0x43), frozenset({0xF3})))
 _reg(StampSpec(TOOL_RHETOR, "Rhetor", ID_RHETOR, 3, 3, COST_RHETOR, 0x01, 0x08,
@@ -759,9 +774,16 @@ def building_group_cells(city: CityMap, x: int, y: int) -> list[tuple[int, int]]
     return cells
 
 
-def stamp_wh(tool: str) -> tuple[int, int]:
+def is_long_pair_building(tid: int) -> bool:
+    """Circus 0xE9–0xEC and C.Maximus 0xED–0xF0 — two N×N halves, not one square."""
+    return 0xE9 <= (int(tid) & 0xFF) <= 0xF0
+
+
+def stamp_wh(tool: str, facing: int = 0) -> tuple[int, int]:
     spec = _STAMPS.get(tool)
     if spec is not None:
+        if spec.tid2 and (int(facing) & 1):
+            return spec.h, spec.w
         return spec.w, spec.h
     n = _STAMP_SIZE.get(tool, 1)
     return n, n
@@ -771,6 +793,29 @@ def stamp_size(tool: str) -> int:
     """N for a square stamp. Non-square uses max(w,h) only as a fallback."""
     w, h = stamp_wh(tool)
     return w if w == h else max(w, h)
+
+
+def _pair_axis_spec(
+    spec: StampSpec, facing: int
+) -> tuple[int, int, int, tuple[int, ...], int, tuple[int, ...]]:
+    """w, h, tid, variants, tid2, variants2 for this view facing.
+
+    Odd facing swaps the long axis and the leftover orientation pair
+    (Achea NS Circus 0xE9+0xEA / leftover C.Max 0xEF+0xF0).
+    """
+    if spec.tid2 and (int(facing) & 1):
+        if spec.tool == TOOL_CIRCUS:
+            return (
+                spec.h, spec.w,
+                ID_CIRCUS_A, _CIRCUS_NS_VAR, ID_CIRCUS_B, _CIRCUS_NS_VAR2,
+            )
+        if spec.tool == TOOL_CMAXIMUS:
+            return (
+                spec.h, spec.w,
+                ID_CMAX_C, _CMAX_EW_VAR, ID_CMAX_D, _CMAX_EW_VAR2,
+            )
+        return spec.h, spec.w, spec.tid, spec.variants, spec.tid2, spec.variants2
+    return spec.w, spec.h, spec.tid, spec.variants, spec.tid2, spec.variants2
 
 
 def stamp_ghost_pieces(
@@ -785,16 +830,19 @@ def stamp_ghost_pieces(
     out: list[tuple[int, int, int, int, int]] = []
     if spec.tid2 and spec.variants2:
         # First half fills the NW block; second half is east (w>h) or south.
-        hw = spec.w // 2 if spec.w > spec.h else spec.w
-        hh = spec.h if spec.w > spec.h else spec.h // 2
-        ox2, oy2 = (hw, 0) if spec.w > spec.h else (0, hh)
-        for i, var in enumerate(spec.variants):
+        # Native +4 for this axis — do not N×N-remap halves (that stamps the
+        # origin piece on one end after paint remap).
+        w, h, tid, vars1, tid2, vars2 = _pair_axis_spec(spec, facing)
+        hw = w // 2 if w > h else w
+        hh = h if w > h else h // 2
+        ox2, oy2 = (hw, 0) if w > h else (0, hh)
+        for i, var in enumerate(vars1):
             dx, dy = i % hw, i // hw
-            out.append((dx, dy, spec.tid, spec.draw, var))
-        for i, var in enumerate(spec.variants2):
+            out.append((dx, dy, tid, spec.draw, var))
+        for i, var in enumerate(vars2):
             dx, dy = i % hw, i // hw
-            out.append((ox2 + dx, oy2 + dy, spec.tid2, spec.draw, var))
-        return _orient_stamp_ghost(out, facing)
+            out.append((ox2 + dx, oy2 + dy, tid2, spec.draw, var))
+        return out
     for i, var in enumerate(spec.variants):
         dx, dy = i % spec.w, i // spec.w
         out.append((dx, dy, spec.tid, spec.draw, var))
@@ -1449,15 +1497,21 @@ def _write_civic_1x1(city: CityMap, x: int, y: int, tool: str, *, step: int = 0)
     return f"civic {tool} em ({x},{y})"
 
 
-def _write_stamp(city: CityMap, ox: int, oy: int, spec: StampSpec) -> list[tuple[int, int]]:
+def _write_stamp(
+    city: CityMap, ox: int, oy: int, spec: StampSpec, facing: int = 0
+) -> list[tuple[int, int]]:
     dirty: list[tuple[int, int]] = []
-    for dx, dy, tid, draw, variant in stamp_ghost_pieces(spec.tool):
+    # Square N×N keeps facing-0 +4 in world bytes (paint remaps). Paired
+    # long stamps write the orientation pair for this facing (no paint remap).
+    write_face = facing if spec.tid2 else 0
+    w, h = stamp_wh(spec.tool, write_face)
+    for dx, dy, tid, draw, variant in stamp_ghost_pieces(spec.tool, write_face):
         x, y = ox + dx, oy + dy
-        piece = (dy * spec.w + dx) & 0xF
-        if spec.tid2 and spec.w > spec.h:
-            piece = (dy * (spec.w // 2) + (dx % (spec.w // 2))) & 0xF
+        piece = (dy * w + dx) & 0xF
+        if spec.tid2 and w > h:
+            piece = (dy * (w // 2) + (dx % (w // 2))) & 0xF
         elif spec.tid2:
-            piece = ((dy % (spec.h // 2)) * spec.w + dx) & 0xF
+            piece = ((dy % (h // 2)) * w + dx) & 0xF
         extra = spec.extra19 if (dx, dy) == (0, 0) else None
         if spec.tool == TOOL_FACTORY and (dx, dy) == (0, 0):
             extra = factory_goods()
@@ -1586,6 +1640,7 @@ def try_place(
     y: int,
     tool: str,
     sim: SimState | None = None,
+    facing: int = 0,
 ) -> PlaceResult:
     """Stamp one cell. River: road→bridge on straight, else refuse."""
     if not in_map(x, y):
@@ -1733,17 +1788,18 @@ def try_place(
         if locked:
             return PlaceResult(False, locked)
         spec = _STAMPS[tool]
-        cells = footprint_rect(x, y, spec.w, spec.h)
+        w, h = stamp_wh(tool, facing)
+        cells = footprint_rect(x, y, w, h)
         skip = [c for c in cells if _kind_for_tool(city, c[0], c[1], tool) == "skip"]
         if skip:
-            return PlaceResult(False, f"{spec.label} {spec.w}×{spec.h} recusado em ({x},{y})")
+            return PlaceResult(False, f"{spec.label} {w}×{h} recusado em ({x},{y})")
         stamp = [c for c in cells if _kind_for_tool(city, c[0], c[1], tool) == "stamp"]
         if not stamp:
             return PlaceResult(False, f"já {spec.label} em ({x},{y})")
         err = _debit(sim, spec.cost)
         if err:
             return PlaceResult(False, err, cost=spec.cost)
-        dirty = _write_stamp(city, x, y, spec)
+        dirty = _write_stamp(city, x, y, spec, facing)
         if spec.tid in (ID_GRAMMATICUS, ID_RHETOR):
             paint_education_emitter(city.tiles, x, y)
         if spec.tid == ID_BATHS or ID_BATHS <= spec.tid <= 0xE2:
@@ -1776,7 +1832,7 @@ def try_place(
             label = f"{spec.label} {spec.tid:#x}"
         return PlaceResult(
             True,
-            f"{label} {spec.w}×{spec.h} NO ({x},{y}){paid}",
+            f"{label} {w}×{h} NO ({x},{y}){paid}",
             dirty=list(dict.fromkeys(dirty)),
             cost=spec.cost,
         )
@@ -1893,7 +1949,7 @@ def query_tile(city: CityMap, x: int, y: int) -> str:
         bits.append("Coliseum")
     if t.terrain_id in (ID_CIRCUS_A, ID_CIRCUS_B, ID_CIRCUS_C, ID_CIRCUS_D):
         bits.append("Circus")
-    if t.terrain_id in (ID_CMAX_A, ID_CMAX_B, 0xEF, 0xF0):
+    if t.terrain_id in (ID_CMAX_A, ID_CMAX_B, ID_CMAX_C, ID_CMAX_D):
         bits.append("C.Maximus")
     if t.terrain_id == ID_GRAMMATICUS:
         bits.append("Grammaticus")
@@ -2015,12 +2071,12 @@ def rect_cells(x0: int, y0: int, x1: int, y1: int) -> list[tuple[int, int]]:
 
 
 def span_cells(
-    tool: str, x0: int, y0: int, x1: int, y1: int
+    tool: str, x0: int, y0: int, x1: int, y1: int, facing: int = 0
 ) -> list[tuple[int, int]]:
     if tool in LINE_TOOLS:
         return line_cells(x0, y0, x1, y1)
     if tool in STAMP_TOOLS:
-        w, h = stamp_wh(tool)
+        w, h = stamp_wh(tool, facing)
         return footprint_rect(x1, y1, w, h)
     if tool in RECT_TOOLS:
         return rect_cells(x0, y0, x1, y1)
@@ -2097,9 +2153,10 @@ def preview_span(
     x1: int,
     y1: int,
     treasury: int = 0,
+    facing: int = 0,
 ) -> DragPreview:
     """Classify a rubber-band without writing tiles or debiting."""
-    cells = span_cells(tool, x0, y0, x1, y1)
+    cells = span_cells(tool, x0, y0, x1, y1, facing)
     xa, xb = (min(x0, x1), max(x0, x1))
     ya, yb = (min(y0, y1), max(y0, y1))
     width, height = xb - xa + 1, yb - ya + 1
@@ -2220,7 +2277,7 @@ def preview_span(
         )
 
     if tool in STAMP_TOOLS:
-        w, h = stamp_wh(tool)
+        w, h = stamp_wh(tool, facing)
         width, height = w, h
         for cx, cy in cells:
             kind = _kind_for_tool(city, cx, cy, tool)
@@ -2298,14 +2355,15 @@ def try_place_span(
     y1: int,
     tool: str,
     sim: SimState | None = None,
+    facing: int = 0,
 ) -> PlaceResult:
     """Commit a rubber-band on mouse-up. Tent / civic drag is treasury-atomic."""
     if tool == TOOL_QUERY:
-        return try_place(city, x1, y1, tool, sim)
+        return try_place(city, x1, y1, tool, sim, facing=facing)
     if tool in STAMP_TOOLS:
-        return try_place(city, x1, y1, tool, sim)
+        return try_place(city, x1, y1, tool, sim, facing=facing)
     treasury = 0 if sim is None else sim.treasury
-    preview = preview_span(city, tool, x0, y0, x1, y1, treasury)
+    preview = preview_span(city, tool, x0, y0, x1, y1, treasury, facing=facing)
     if preview.refuse:
         return PlaceResult(False, preview.message, cost=preview.cost)
     if not preview.stamp:
@@ -3667,6 +3725,54 @@ def selftest() -> list[str]:
     else:
         lines.append("ok    Circus pair entra no wipe N×N")
 
+    from app.city_map import graphic_source_xy
+
+    ns_ghost = stamp_ghost_pieces(TOOL_CIRCUS, facing=1)
+    ns_ids = {(p[0], p[1], p[2], p[4]) for p in ns_ghost}
+    if (
+        stamp_wh(TOOL_CIRCUS, 1) != (3, 6)
+        or span_cells(TOOL_CIRCUS, 0, 0, 4, 5, facing=1) != footprint_rect(4, 5, 3, 6)
+        or (0, 0, ID_CIRCUS_A, 0x00) not in ns_ids
+        or (0, 3, ID_CIRCUS_B, 0x09) not in ns_ids
+        or (2, 5, ID_CIRCUS_B, 0x11) not in ns_ids
+        or any(p[2] in (ID_CIRCUS_C, ID_CIRCUS_D) for p in ns_ghost)
+    ):
+        lines.append(f"FAIL  circus ghost facing 1 {ns_ghost[:3]}")
+    else:
+        lines.append("ok    Circus ghost facing 1 is 0xE9+0xEA 3×6")
+    _grass_block(20, 20, 3, 6)
+    sim.treasury = 1500
+    r = try_place(city, 20, 20, TOOL_CIRCUS, sim, facing=1)
+    ns_a = city.tiles[city.offset(20, 20)]
+    ns_b = city.tiles[city.offset(20, 23)]
+    ns_var = city.tiles[city.offset(20, 20) + 4]
+    ns_piece = city.tiles[city.offset(22, 25) + 5] & 0xF
+    ns_group = building_group_cells(city, 20, 23)
+    leftover = [
+        (20 + dx, 20 + dy)
+        for dy in range(6)
+        for dx in range(3)
+        if city.tiles[city.offset(20 + dx, 20 + dy)] not in (
+            ID_CIRCUS_A, ID_CIRCUS_B,
+        )
+    ]
+    if (
+        not r.ok
+        or ns_a != ID_CIRCUS_A
+        or ns_b != ID_CIRCUS_B
+        or ns_var != 0x00
+        or ns_piece != 8
+        or len(ns_group) != 18
+        or leftover
+        or graphic_source_xy(city, 20, 23, 1) != (20, 23)
+    ):
+        lines.append(
+            f"FAIL  circus facing 1 {r.message} {ns_a:#x}/{ns_b:#x} "
+            f"+4={ns_var:#x} p={ns_piece} n={len(ns_group)} extra={leftover}"
+        )
+    else:
+        lines.append("ok    Circus facing 1 writes 0xE9+0xEA 3×6 cohesive")
+
     _grass_block(10, 2, 4, 8)
     sim.treasury = 2500
     sim.population = 0
@@ -3684,6 +3790,23 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  cmax {r.message} {cmax_a:#x} {cmax_b:#x}")
     else:
         lines.append("ok    C.Maximus 0xED+0xEE 4×8 custo 2500")
+    _grass_block(30, 40, 8, 4)
+    sim.treasury = 2500
+    sim.pop_peak = 4800
+    r = try_place(city, 30, 40, TOOL_CMAXIMUS, sim, facing=1)
+    cm_a = city.tiles[city.offset(30, 40)]
+    cm_b = city.tiles[city.offset(34, 40)]
+    if (
+        not r.ok
+        or stamp_wh(TOOL_CMAXIMUS, 1) != (8, 4)
+        or cm_a != ID_CMAX_C
+        or cm_b != ID_CMAX_D
+        or city.tiles[city.offset(30, 40) + 4] != 0x44
+        or len(building_group_cells(city, 34, 41)) != 32
+    ):
+        lines.append(f"FAIL  cmax facing 1 {r.message} {cm_a:#x}/{cm_b:#x}")
+    else:
+        lines.append("ok    C.Maximus facing 1 writes 0xEF+0xF0 8×4")
 
     _grass_block(16, 2, 3, 3)
     sim.treasury = 80

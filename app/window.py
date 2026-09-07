@@ -893,6 +893,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
             end[0],
             end[1],
             ctx.sim.treasury,
+            facing=map_facing,
         )
 
     def blit(extra: str | None = None) -> None:
@@ -2092,7 +2093,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
         if cell is None:
             blit("clique fora do mapa")
             return
-        result = try_place(ctx.city, cell[0], cell[1], tool, ctx.sim)
+        result = try_place(ctx.city, cell[0], cell[1], tool, ctx.sim, facing=map_facing)
         if result.query:
             open_place(cell[0], cell[1])
             return
@@ -2496,7 +2497,8 @@ def show(ctx: BootContext, *, game: Path) -> None:
             and not was_chrome
         ):
             result = try_place_span(
-                ctx.city, start[0], start[1], end[0], end[1], tool, ctx.sim
+                ctx.city, start[0], start[1], end[0], end[1], tool, ctx.sim,
+                facing=map_facing,
             )
             if result.ok and (result.dirty or result.flush_iso):
                 invalidate_iso(result.dirty, flush=result.flush_iso)

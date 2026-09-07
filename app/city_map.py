@@ -407,8 +407,12 @@ def graphic_source_xy(
     tid = city.tiles[off]
     if tid < ID_TERRAIN_MAX:
         return wx, wy
-    from app.place import building_footprint_size
+    from app.place import building_footprint_size, is_long_pair_building
 
+    # Circus / C.Maximus are two abutting N×N halves. Remapping each half
+    # independently stamps the origin +4 on one end of the long oval.
+    if is_long_pair_building(tid):
+        return wx, wy
     size = building_footprint_size(tid)
     if size <= 1:
         return wx, wy
