@@ -149,7 +149,7 @@ HUD_TREASURY_Y = 6
 HUD_TREASURY_SUFFIX = " Dn"
 HUD_GOLD = (255, 228, 160, 255)
 HUD_TREASURY_NEG = (255, 120, 90, 255)
-# Confirm-pack labor toasts ([7]+14 / [35]+26): red status bar, not cyan debug.
+# Labor-short HUD: red ``Plebs are needed!`` (unused.wav), not cyan debug.
 HUD_STATUS_CYAN = (180, 220, 255, 255)
 HUD_STATUS_RED = (255, 64, 48, 255)
 # C2.ENG [0] File · [1] Options · [2] Speed · [3] Help
@@ -944,7 +944,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
             shown = status
             extra_alert = True
         sfx_key = take_status_sfx(ctx.sim)
-        if sfx_key == "need_plebs":
+        if sfx_key in ("need_plebs", "idle"):
             _sfx("need_plebs")
         prev = current_preview()
         if prev is not None:

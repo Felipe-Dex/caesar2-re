@@ -2,11 +2,12 @@
 
 EXE: EAX = official C2.ENG slot + 1, 16-deep queue. Title is the official
 string; body is the next packed NUL ([slot]+1). Slots below 79 are
-confirm-pack / status-bar toasts (Need more plebs! [7]+14, Idle Plebs
-[35]+26): red HUD line + SFX, not a talking-head. Official C2.ENG [7]+14
-is ``Need More Plebs!!!``; the HUD line the original shouts is
-``Need more plebs!``. Fire [81] only after a real 69A37 housing ignite
-(timer 10), not leftover +3 bit7 / +11 0x30.
+confirm-pack / status-bar toasts: red HUD line + SFX, not a talking-head.
+Official C2.ENG [7]+14 is ``Need More Plebs!!!`` (confirm title, not the
+bar). [35]+26 ``Idle Plebs`` is the Forum labor-row label ([36]+19), not
+a HUD toast. The red bar the original shouts — same phrase as unused.wav
+``0x90448`` — is ``Plebs are needed!``. Fire [81] only after a real 69A37
+housing ignite (timer 10), not leftover +3 bit7 / +11 0x30.
 
 City Only only. Career banners (Emperor letters [115]+, invasion [82]/[90–95],
 cohorts, Empire Expands, Stern Warning) stay skipped. C2.ENG [60] is the
@@ -28,8 +29,8 @@ ID_HOUSING_LO = 0x82
 ID_HOUSING_HI = 0xA1
 # Confirm-pack / labor allocate — status bar, not 58c87 (slots < 79).
 STATUS_BAR_KEYS = frozenset({"need_plebs", "idle"})
-# User-verified HUD (C2.ENG [7]+14 is Title Case + !!!).
-NEED_PLEBS_HUD = "Need more plebs!"
+# User-verified HUD + unused.wav cue. C2.ENG [7]+14 is the confirm title.
+NEED_PLEBS_HUD = "Plebs are needed!"
 # Shrine / Temple / Basilica origins — Hail / Stolen copy.
 TEMPLE_LO, TEMPLE_HI = 0xA2, 0xAC
 
@@ -57,7 +58,7 @@ POP_MILESTONE: tuple[tuple[int, int], ...] = (
 )
 
 _FB = {
-    7: {11: "Click to Continue", 14: NEED_PLEBS_HUD},
+    7: {11: "Click to Continue", 14: "Need More Plebs!!!"},
     35: {26: "Idle Plebs"},
     78: {0: "Right Click to remove this message."},
     79: {
@@ -175,16 +176,18 @@ def pending_count(sim) -> int:
 
 
 def post_labor_status(sim, key: str, eng=None) -> str:
-    """Confirm-pack labor toast: red status bar, no 58c87 queue."""
+    """Labor-short toast: red status bar + unused.wav, no 58c87 queue.
+
+    Both the idle=0 short-row case and the leftover-idle + short-row case
+    use the HUD line (not C2.ENG [7]+14 / [35]+26). ``eng`` is accepted
+    so Forum allocate stays call-compatible.
+    """
+    _ = eng
     watch = ensure_watch(sim)
-    if key == "idle":
-        text = _line(eng, 35, 26)
-    else:
-        text = NEED_PLEBS_HUD
-    watch.status_line = text
+    watch.status_line = NEED_PLEBS_HUD
     watch.status_alert = True
-    watch.status_sfx = key if key in STATUS_BAR_KEYS else "need_plebs"
-    return text
+    watch.status_sfx = "need_plebs"
+    return NEED_PLEBS_HUD
 
 
 def peek_status(sim) -> str:
@@ -192,7 +195,7 @@ def peek_status(sim) -> str:
 
 
 def take_status_sfx(sim) -> str:
-    """Pop the pending labor SFX event (``need_plebs`` / ``idle``), or ``""``."""
+    """Pop the pending labor SFX event (``need_plebs`` → unused.wav), or ``""``."""
     watch = ensure_watch(sim)
     key = watch.status_sfx
     watch.status_sfx = ""
@@ -329,11 +332,11 @@ def _staffed(sim) -> tuple[bool, ...]:
 
 
 def _labor_toasts(sim) -> tuple[bool, bool]:
-    """Need more plebs! vs Idle Plebs.
+    """Labor-short rising edges: idle=0 vs leftover-idle + short row.
 
-    Construction assigned stays locked at 20. Need More fires when a row
-    cannot be staffed (no idle). Idle fires only when idle > 0 *and* a
-    row is below need — not merely because leftover plebs exist.
+    Construction assigned stays locked at 20. Both edges post the same
+    HUD line (``Plebs are needed!``). Idle-only leftover with every row
+    at need stays quiet.
     """
     from app.forum import labor_idle_of
 
@@ -500,9 +503,9 @@ def selftest() -> list[str]:
     elif peek_status(sim) != NEED_PLEBS_HUD:
         lines.append(f"FAIL  need plebs status {peek_status(sim)!r}")
     elif any(m.key == "need_plebs" for m in ensure_watch(sim).pending):
-        lines.append("FAIL  Need more plebs! must not enqueue 58c87")
+        lines.append("FAIL  Plebs are needed! must not enqueue 58c87")
     else:
-        lines.append("ok    Need more plebs! status-bar when a row is short and idle=0")
+        lines.append("ok    Plebs are needed! status-bar when a row is short and idle=0")
 
     sim = SimState(city_only=1, population=20, treasury=100)
     init_city_only_labor(sim)
@@ -512,12 +515,12 @@ def selftest() -> list[str]:
     got = scan_city_messages(sim, tiles)
     if "idle" not in got:
         lines.append(f"FAIL  idle {got}")
-    elif peek_status(sim) != "Idle Plebs":
+    elif peek_status(sim) != NEED_PLEBS_HUD:
         lines.append(f"FAIL  idle status {peek_status(sim)!r}")
     elif any(m.key == "idle" for m in ensure_watch(sim).pending):
-        lines.append("FAIL  Idle Plebs must not enqueue 58c87")
+        lines.append("FAIL  leftover-idle short-row must not enqueue 58c87")
     else:
-        lines.append("ok    Idle Plebs status-bar when surplus + a short row")
+        lines.append("ok    Plebs are needed! status-bar when surplus + a short row")
 
     sim = SimState(city_only=1, population=20, treasury=100)
     init_city_only_labor(sim)
@@ -695,10 +698,12 @@ def selftest() -> list[str]:
         return lines
     if eng.skip(7, 14) != "Need More Plebs!!!":
         lines.append(f"FAIL  [7]+14 {eng.skip(7, 14)!r}")
-    elif NEED_PLEBS_HUD != "Need more plebs!":
+    elif NEED_PLEBS_HUD != "Plebs are needed!":
         lines.append(f"FAIL  HUD {NEED_PLEBS_HUD!r}")
+    elif eng.skip(35, 26) != "Idle Plebs":
+        lines.append(f"FAIL  [35]+26 {eng.skip(35, 26)!r}")
     else:
-        lines.append("ok    C2.ENG [7]+14 Need More Plebs!!! / HUD Need more plebs!")
+        lines.append("ok    C2.ENG [7]+14 title / [35]+26 Forum row / HUD Plebs are needed!")
     if eng.skip(81, 0) != "Fire Alert!":
         lines.append(f"FAIL  [81] {eng.skip(81, 0)!r}")
     else:
