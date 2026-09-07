@@ -5,7 +5,9 @@ string; body is the next packed NUL ([slot]+1). Confirm-pack toasts
 (Need More Plebs!!! [7]+14) use the same host box.
 
 City Only only. Career banners (Emperor letters [115]+, invasion [82]/[90–95],
-cohorts, Empire Expands, Stern Warning) stay skipped.
+cohorts, Empire Expands, Stern Warning) stay skipped. C2.ENG [60] is the
+Query structure pack (title “NO Land Value”); [60]+4 “NO Water Supply” is
+overlay text, not a 58c87 city-map banner.
 """
 
 from __future__ import annotations
@@ -20,7 +22,6 @@ QUEUE_CAP = 16
 DRAW_FIRE = 0x80
 ID_HOUSING_LO = 0x82
 ID_HOUSING_HI = 0xA1
-WATER_HOUSE_BITS = 0x03  # fountain 0x01 | well/river 0x02
 # Shrine / Temple / Basilica origins — Hail / Stolen copy.
 TEMPLE_LO, TEMPLE_HI = 0xA2, 0xAC
 
@@ -50,7 +51,6 @@ POP_MILESTONE: tuple[tuple[int, int], ...] = (
 _FB = {
     7: {11: "Click to Continue", 14: "Need More Plebs!!!"},
     35: {26: "Idle Plebs"},
-    60: {4: "NO Water Supply"},
     78: {0: "Right Click to remove this message."},
     79: {
         0: "Hail",
@@ -111,7 +111,6 @@ class MessageWatch:
     pop: int = 0
     construction_short: bool = False
     idle_short: bool = False
-    water_dry: bool = False
     on_fire: bool = False
     broke: bool = False
     hail_done: bool = False
@@ -181,12 +180,12 @@ def _off(x: int, y: int) -> int:
     return y * MAP_W * TILE_STRIDE + x * TILE_STRIDE
 
 
-def _city_counts(tiles: bytearray) -> tuple[int, int, int, int, int]:
-    """houses, dry houses, temples, fires, max housing id."""
-    houses = dry = temples = fires = max_id = 0
+def _city_counts(tiles: bytearray) -> tuple[int, int, int, int]:
+    """houses, temples, fires, max housing id."""
+    houses = temples = fires = max_id = 0
     need = MAP_W * MAP_H * TILE_STRIDE
     if len(tiles) < need:
-        return 0, 0, 0, 0, 0
+        return 0, 0, 0, 0
     for y in range(MAP_H):
         for x in range(MAP_W):
             off = _off(x, y)
@@ -199,11 +198,9 @@ def _city_counts(tiles: bytearray) -> tuple[int, int, int, int, int]:
                 houses += 1
                 if tid > max_id:
                     max_id = tid
-                if not (tiles[off + 13] & WATER_HOUSE_BITS):
-                    dry += 1
             elif TEMPLE_LO <= tid <= TEMPLE_HI:
                 temples += 1
-    return houses, dry, temples, fires, max_id
+    return houses, temples, fires, max_id
 
 
 def _staffed(sim) -> tuple[bool, ...]:
@@ -243,7 +240,7 @@ def scan_city_messages(
 
     pop = int(getattr(sim, "population", 0))
     peak = peak_population(sim)
-    houses, dry, temples, fires, _max_house = _city_counts(tiles)
+    _houses, temples, fires, _ = _city_counts(tiles)
     staffed = _staffed(sim)
     ready = max(0, int(getattr(sim, "plebs_ready", 0)))
     idle = labor_idle_of(sim)
@@ -314,20 +311,6 @@ def scan_city_messages(
         if enqueue(sim, msg):
             fired.append("idle")
     watch.idle_short = idle_short
-
-    dry_all = houses > 0 and dry == houses
-    if dry_all and not watch.water_dry:
-        watch.seen.discard("water")
-        msg = AdvisorMessage(
-            key="water",
-            title=_line(eng, 60, 4),
-            body="",
-            slot=60,
-            dismiss=_line(eng, 78, 0),
-        )
-        if enqueue(sim, msg):
-            fired.append("water")
-    watch.water_dry = dry_all
 
     if (
         month_wrapped
@@ -452,10 +435,10 @@ def selftest() -> list[str]:
     sim = SimState(city_only=1, population=8, treasury=100)
     init_city_only_labor(sim)
     got = scan_city_messages(sim, tiles3)
-    if "water" not in got:
-        lines.append(f"FAIL  water {got}")
+    if "water" in got:
+        lines.append(f"FAIL  Query [60]+4 must not enqueue {got}")
     else:
-        lines.append("ok    NO Water Supply when houses are dry")
+        lines.append("ok    [60] Query pack is not a 58c87 banner")
 
     sim = SimState(city_only=1, population=20, treasury=500)
     init_city_only_labor(sim)
@@ -474,7 +457,7 @@ def selftest() -> list[str]:
         lines.append("ok    No Denarii! when treasury < 0")
 
     msg = pop_message(sim)
-    if msg is None or msg.slot not in (7, 35, 60, 79, 81, 84, 88, 97, 100, 103, 114):
+    if msg is None or msg.slot not in (7, 35, 79, 81, 84, 88, 97, 100, 103, 114):
         lines.append(f"FAIL  pop_message {msg}")
     else:
         lines.append("ok    queue pop + click-dismiss fields")
@@ -504,4 +487,8 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  [114] {eng.skip(114, 0)!r}")
     else:
         lines.append("ok    C2.ENG New Structure Available")
+    if eng.skip(60, 0) != "NO Land Value" or eng.skip(60, 4) != "NO Water Supply":
+        lines.append(f"FAIL  [60] pack {eng.skip(60, 0)!r} +4 {eng.skip(60, 4)!r}")
+    else:
+        lines.append("ok    C2.ENG [60] is Query pack, not a banner")
     return lines

@@ -4,9 +4,10 @@ EXE table @ VA 0x9A5BC (14-byte 8.3 names). Indexer 0x59248:
 ``lea eax, [esi-0x50]`` then ``eax * 14`` — ESI is enqueue EAX
 (official C2.ENG slot + 1). Stem = table[slot - 79].
 
-Slots below 79 (Need More Plebs / Idle / NO Water) go through the
-other player at 0x596DE and always load ``message.smk``. ``null.smk``
-means no clip.
+Slots below 79 (Need More Plebs / Idle) go through the other player
+at 0x596DE and always load ``message.smk``. ``null.smk`` means no clip.
+C2.ENG [60] is Query overlay, not a 58c87 slot — do not play a clip
+for it.
 
 City Only start Hail [79] is the “build your city” briefing. The EXE
 table names ``congrat.smk`` there (same talking-head as pop milestones
@@ -328,8 +329,9 @@ def videos_new_overrides(game: Path | None, stems: list[str]) -> list[str]:
 
 
 class AdvisorClip:
-    """Loop one mp4 into 320x152 RGB frames, paced to probed source fps.
+    """Play one mp4 into 320x152 RGB frames, paced to probed source fps.
 
+    One playthrough, then freeze on the last frame until ``close()``.
     ffmpeg is back-pressured: the decode thread only reads the next pipe
     frame when the PTS buffer has room. ``snapshot()`` picks the frame
     whose PTS window covers *now* — a late tk ``after()`` does not drain
@@ -343,6 +345,8 @@ class AdvisorClip:
         self.delay_ms = max(16, int(round(1000.0 / self.fps)))
         self.frame: Image.Image | None = None
         self.decoded = 0
+        self.finished = False
+        self.playthroughs = 0
         self._stop = threading.Event()
         self._cond = threading.Condition()
         self._buf: deque[tuple[float, Image.Image]] = deque()
@@ -477,8 +481,6 @@ class AdvisorClip:
                     "error",
                     "-nodisp",
                     "-autoexit",
-                    "-loop",
-                    "0",
                     str(self.path),
                 ],
                 stdout=subprocess.DEVNULL,
@@ -489,51 +491,53 @@ class AdvisorClip:
             return None
 
     def _loop(self) -> None:
+        video = self._spawn_video()
+        if video is None or video.stdout is None:
+            self.finished = True
+            return
+        with self._proc_lock:
+            self._video = video
+            if self._audio is None:
+                self._audio = self._spawn_audio()
+        index = 0
+        t0: float | None = None
         while not self._stop.is_set():
-            video = self._spawn_video()
-            if video is None or video.stdout is None:
-                return
-            with self._proc_lock:
-                self._video = video
-                if self._audio is None:
-                    self._audio = self._spawn_audio()
-            got = False
-            index = 0
-            t0: float | None = None
-            while not self._stop.is_set():
-                with self._cond:
-                    while len(self._buf) >= _BUF_CAP and not self._stop.is_set():
-                        self._cond.wait(timeout=0.05)
-                    if self._stop.is_set():
-                        break
-                raw = video.stdout.read(FRAME_BYTES)
-                if raw is None or len(raw) < FRAME_BYTES:
-                    break
-                img = Image.frombytes("RGB", (SMK_W, SMK_H), raw)
-                with self._cond:
-                    if t0 is None:
-                        t0 = time.monotonic()
-                        self._t0 = t0
-                    pts = t0 + index / self.fps
-                    self._buf.append((pts, img))
-                    self.decoded += 1
-                    if self._shown is None:
-                        self._shown = img
-                        self.frame = img
-                    self._cond.notify_all()
-                got = True
-                index += 1
-            self._wait_playthrough_end()
-            self._kill_video_only()
             with self._cond:
-                self._buf.clear()
-                self._t0 = None
+                while len(self._buf) >= _BUF_CAP and not self._stop.is_set():
+                    self._cond.wait(timeout=0.05)
+                if self._stop.is_set():
+                    break
+            raw = video.stdout.read(FRAME_BYTES)
+            if raw is None or len(raw) < FRAME_BYTES:
+                break
+            img = Image.frombytes("RGB", (SMK_W, SMK_H), raw)
+            with self._cond:
+                if t0 is None:
+                    t0 = time.monotonic()
+                    self._t0 = t0
+                pts = t0 + index / self.fps
+                self._buf.append((pts, img))
+                self.decoded += 1
+                if self._shown is None:
+                    self._shown = img
+                    self.frame = img
                 self._cond.notify_all()
-            if not got:
-                return
+            index += 1
+        self._wait_playthrough_end()
+        self._kill_video_only()
+        with self._cond:
+            if self._buf:
+                last = self._buf[-1]
+                self._buf.clear()
+                self._buf.append(last)
+                self._shown = last[1]
+                self.frame = last[1]
+            self.playthroughs = 1 if index else 0
+            self.finished = True
+            self._cond.notify_all()
 
     def _wait_playthrough_end(self) -> None:
-        """Hold until the last buffered PTS window ends, then allow a loop."""
+        """Hold until the last buffered PTS window ends, then freeze."""
         period = 1.0 / self.fps
         while not self._stop.is_set():
             with self._cond:
@@ -569,7 +573,6 @@ def hosted_city_stems() -> dict[str, str | None]:
         "hail": video_stem_for_slot(79),
         "need_plebs": video_stem_for_slot(7),
         "idle": video_stem_for_slot(35),
-        "water": video_stem_for_slot(60),
         "fire": video_stem_for_slot(81),
         "services_cut": video_stem_for_slot(84),
         "theft": video_stem_for_slot(88),
@@ -635,6 +638,10 @@ def selftest(game: Path | None = None) -> list[str]:
     else:
         lines.append("ok    missing stem stays banner-only")
     hosted = hosted_city_stems()
+    if "water" in hosted:
+        lines.append("FAIL  [60] Query pack must not host a clip")
+    else:
+        lines.append("ok    [60] not a hosted City Only banner")
     present = []
     for key, stem in hosted.items():
         path = resolve_advisor_video(game, stem)
@@ -684,6 +691,38 @@ def selftest(game: Path | None = None) -> list[str]:
         lines.append("FAIL  mute=True spawned ffplay")
     else:
         lines.append("ok    mute=True stays silent")
+    if clip.playthroughs > 1:
+        lines.append(f"FAIL  clip looped playthroughs={clip.playthroughs}")
+    else:
+        lines.append("ok    clip playthroughs<=1 in 0.3s")
+    once = AdvisorClip(clip_path, mute=True)
+    if once.start():
+        limit = min((once.duration_s or 2.0) + 1.5, 15.0)
+        deadline = time.monotonic() + limit
+        last = None
+        while not once.finished and time.monotonic() < deadline:
+            last = once.snapshot()
+            time.sleep(max(0.01, once.delay_ms / 1000.0))
+        d1 = once.decoded
+        frozen = once.snapshot() or last
+        time.sleep(0.30)
+        d2 = once.decoded
+        loops = once.playthroughs
+        ended = once.finished
+        once.close()
+        if loops > 1:
+            lines.append(f"FAIL  replayed clip playthroughs={loops}")
+        elif ended and d2 > d1:
+            lines.append(f"FAIL  decoded grew after EOF {d1}->{d2}")
+        elif ended and frozen is None:
+            lines.append("FAIL  last frame dropped after EOF")
+        elif ended:
+            lines.append("ok    play once then freeze last frame")
+        else:
+            lines.append("ok    play-once still first pass (long clip)")
+    else:
+        once.close()
+        lines.append("FAIL  play-once clip start")
     if shown is not None and shown.size == (SMK_W, SMK_H):
         left, right = _letterbox_lr(shown)
         if src_w == SMK_W and src_h == SMK_H:
