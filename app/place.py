@@ -1525,6 +1525,10 @@ def _write_stamp(
             off = city.offset(x, y)
             city.tiles[off + 3] |= 0x80
             city.tiles[off + 13] |= 0x80
+        elif spec.tool == TOOL_FACTORY and (dx, dy) == (1, 0):
+            # Career/D.SAV: +5 lo==1 also has bit7. 0x37F43 blits jugs
+            # from west +9 (origin stock) at CITYTOP[hi+0x18].
+            city.tiles[city.offset(x, y) + 3] |= 0x80
         dirty.append((x, y))
     return dirty
 
@@ -3814,14 +3818,17 @@ def selftest() -> list[str]:
     r = try_place(city, 16, 2, TOOL_FACTORY, sim)
     factory_extra = city.tiles[city.offset(16, 2) + 19]
     factory_draw = city.tiles[city.offset(16, 2) + 3]
+    east_draw = city.tiles[city.offset(17, 2) + 3]
     if (
         not r.ok
         or city.tiles[city.offset(16, 2)] != ID_FACTORY
         or factory_extra != 0
         or factory_draw != 0x8C
+        or east_draw != 0x8C
     ):
         lines.append(
-            f"FAIL  factory {r.message} +19={factory_extra} +3={factory_draw:#04x}"
+            f"FAIL  factory {r.message} +19={factory_extra} "
+            f"+3={factory_draw:#04x} east+3={east_draw:#04x}"
         )
     else:
         lines.append("ok    Factory 0xFA 3×3 +19=0 +3=0x8C (Bakery flag80)")

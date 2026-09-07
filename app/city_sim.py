@@ -2155,6 +2155,7 @@ def selftest() -> list[str]:
     )
 
     from app.city_paint import (
+        factory_jug_frame,
         factory_produce,
         factory_type_name,
         seed_city_only_good,
@@ -2186,6 +2187,24 @@ def selftest() -> list[str]:
     lines.append(
         f"City Only seeded workshop → stock {play}: {'ok' if ok else 'FAIL'} "
         f"+9={fac[foff + 9]:#04x} type={factory_type_name(0)}"
+    )
+    eoff = _off(11, 10)
+    fac[eoff] = 0xFA
+    fac[eoff + 3] = 0x0C
+    factory_produce(
+        fac, 10, 10, goods=sandbox, labor=CITY_ONLY_LABOR, city_only=True
+    )
+    jug = factory_jug_frame(fac[foff + 9])
+    stock = (fac[foff + 9] & 0xF0) >> 4
+    ok = (
+        (fac[eoff + 3] & 0x80) != 0
+        and stock > 0
+        and jug == stock + 0x18
+        and factory_jug_frame(0) is None
+    )
+    lines.append(
+        f"factory jugs frame {jug} + east bit7: {'ok' if ok else 'FAIL'} "
+        f"east+3={fac[eoff + 3]:#04x}"
     )
 
     d_like = bytearray(768)

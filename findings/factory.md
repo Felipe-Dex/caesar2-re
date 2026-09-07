@@ -15,7 +15,7 @@ Saves: `20230610.SAV` (OneDrive), Achea, **`findings/D.SAV`**. Parsers: `tools/_
 | Origin | NW cell: **`+5 & 0xF == 0`**, `+4 = 0x3E` |
 | Goods | **origin `+19` lo-nibble** (0–15). Other 8 cells have `+19 = 0` |
 | `+4` | Sheet cell 0x3E–0x46 (one each per 3×3). Same on Bakery / Winery / Ivory. **Not** the subtype |
-| Overlay | `city_tile_draw_flag80`: frame = `(+19 & 0xF) + 9` on the origin |
+| Overlay | `city_tile_draw_flag80`: origin etiqueta `(+19 & 0xF) + 9`; east cell jugs `hi(west +9) + 0x18` |
 
 `FUN_00041b33` (only from `FUN_00041719`, id `0xFA`, origin tile): `+19 & 0xF` indexes `goods_16x48` at `0xD2B6C` (stride 48). Writes production into **`+9`**, not back into +19. Full rule: §5.
 
@@ -125,9 +125,16 @@ Placement `0x30407` stamps `0xFA` 3×3 (`+4=0x3E…0x46`, `+3` sheet `0x0C`). Th
 
 The picker does **not** write `+9`. Overlay is a later blit, not a second building.
 
-`city_map_draw_overlays` `0x365CC` calls `city_tile_draw_flag80` `0x37E0F` only when **`+3 & 0x80`**. Origin (`+5` lo == 0): **CITYTOP** frame = `(+19 & 0xF) + 9` at dest LUT `0x9410C`/`0x9413C` (zoom-0 **(32, −18)**). Handle `[0x1023D0]` = `citytop1.pl8`. Non-origin with stock uses frame `hi(+9)+0x18`.
+`city_map_draw_overlays` `0x365CC` calls `city_tile_draw_flag80` `0x37E0F` only when **`+3 & 0x80`**. Handle `[0x1023D0]` = `citytop1.pl8`.
 
-Host: place ORs bit7; `_paint_iso_tile` blits `CITYTOP` on the origin. Without bit7 the factory is a bare BUILD1C pad.
+| Cell | Test | CITYTOP frame | Dest LUT (zoom-0 cam 0) |
+|---|---|---|---|
+| Origin (`+5` lo == 0) | — | `(+19 & 0xF) + 9` (etiqueta: wheat/grapes/…) | `0x9410C`/`0x9413C` **(32, −18)** |
+| Non-origin | `hi(west +9) ≠ 0` | `hi(west +9) + 0x18` (porch amphorae, frames 0x19–0x1F = 43×30) | `0x9416C`/`0x9419C` **(−54, 22)** |
+
+Non-origin reads **`[tile−20]+9`** (`0xE2FB1` = current `+9` − 20) — the **west** cell’s stock, not its own. Career / D.SAV put bit7 on origin **and** `+5` lo==1 (east of origin, `+4=0x40`). Stock hi lives only on the origin; the east cell borrows it. Stock 0 skips the jug blit (`je 0x382F3`). Etiqueta and jugs are separate frames — do not hide the grape/wheat overlay.
+
+Host: place ORs bit7 on origin and the east cell; `_paint_iso_tile` blits both CITYTOP layers. Without bit7 the factory is a bare BUILD1C pad.
 
 ### What starts production
 

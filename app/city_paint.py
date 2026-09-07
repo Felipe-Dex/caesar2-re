@@ -207,7 +207,9 @@ CITY_ONLY_SUPPLIED = 100
 CITY_ONLY_RAW = 500
 CITY_ONLY_LABOR = 4
 # Overlay: city_tile_draw_flag80 0x37F80. Origin frame = (+19 & 0xF) + 9.
+# Non-origin +3 bit7: CITYTOP[hi(west +9)+0x18] (0x37F43, dest 0x9416C).
 FACTORY_LABEL_FRAME_BASE = 9
+FACTORY_JUG_FRAME_BASE = 0x18
 # EXE debug strings 0x90FB5 + UI names from factory.md.
 FACTORY_TYPE_NAMES: tuple[str, ...] = (
     "Bakery",
@@ -239,6 +241,14 @@ def factory_type_name(nibble: int) -> str:
 def factory_label_frame(nibble: int) -> int:
     """CITYTOP frame for the origin goods etiqueta."""
     return (nibble & 0xF) + FACTORY_LABEL_FRAME_BASE
+
+
+def factory_jug_frame(plus9: int) -> int | None:
+    """CITYTOP frame for porch amphorae. Distinct from the goods etiqueta."""
+    stock = (plus9 & 0xF0) >> 4
+    if stock <= 0:
+        return None
+    return stock + FACTORY_JUG_FRAME_BASE
 
 
 def goods_i32(goods: bytes | bytearray | None, nibble: int, off: int) -> int:
@@ -426,6 +436,12 @@ def factory_produce(
     if stock > 7:
         stock = 7
     tiles[off + 9] = (tiles[off + 9] & 0x0F) | ((stock & 0xF) << 4)
+    # 0x37F43: east cell (+5 lo==1) flag80 reads west +9. Career/D.SAV
+    # already have +3 bit7 there; host place used to set only the origin.
+    if x + 1 < MAP_W:
+        eoff = _off(x + 1, y)
+        if tiles[eoff] == ID_FACTORY:
+            tiles[eoff + 3] |= 0x80
     if stage:
         cur = tiles[off + 9] & 0xFC
         if stage == 2:

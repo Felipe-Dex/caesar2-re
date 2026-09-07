@@ -727,7 +727,10 @@ def query_place(city: CityMap, x: int, y: int, eng=None) -> PlaceInfo:
         stock = (t.overlay_anim & 0xF0) >> 4
         lines.append(f"{kind}  +19={t.special & 0xF}  stock {stock}")
         if t.draw & 0x80:
-            lines.append("goods label (flag80)")
+            if t.spawn_packed & 0xF:
+                lines.append("output jugs (flag80)")
+            else:
+                lines.append("goods label (flag80)")
     if tid == 0xD7 or 0xDB <= tid <= 0xDE:
         if 0xDB <= tid <= 0xDE and not (splash & 4):
             lines.append("fountain dry (needs charged reservoir ring)")

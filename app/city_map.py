@@ -158,6 +158,14 @@ FACTORY_FLAG80_DEST: tuple[tuple[int, int], ...] = (
     (16, -9),
     (8, -4),
 )
+# Non-origin +3 bit7: CITYTOP[hi(west +9)+0x18] at LUT 0x9416C/0x9419C (cam 0).
+# 0x37F43 reads [tile-20]+9 (west cell). Career/D.SAV put bit7 on +5 lo==1.
+FACTORY_JUG_FRAME_BASE = 0x18
+FACTORY_JUG_DEST: tuple[tuple[int, int], ...] = (
+    (-54, 22),
+    (-27, 11),
+    (-13, 5),
+)
 
 # Zoom-0 column of each 4-byte LUT record (variant*4 + (zoom>>1), zoom==0).
 # HOUSES1 0x97158 (174), BUILD1A 0x97410 (124), BUILD1B 0x97600 (164),
@@ -1218,8 +1226,31 @@ def factory_flag80_dest(zoom: int = 0) -> tuple[int, int]:
     return FACTORY_FLAG80_DEST[z]
 
 
+def factory_jug_dest(zoom: int = 0) -> tuple[int, int]:
+    z = 0 if zoom < 0 else 2 if zoom > 2 else zoom
+    return FACTORY_JUG_DEST[z]
+
+
 def factory_label_frame(special: int) -> int:
     return (special & 0xF) + 9
+
+
+def factory_jug_frame(plus9: int) -> int | None:
+    """CITYTOP frame for porch amphorae, or None when hi(+9)==0."""
+    stock = (plus9 & 0xF0) >> 4
+    if stock <= 0:
+        return None
+    return stock + FACTORY_JUG_FRAME_BASE
+
+
+def factory_west_plus9(city: CityMap, x: int, y: int) -> int | None:
+    """+9 of the west neighbor (EXE [tile−20]+9). None if missing / not 0xFA."""
+    if x <= 0:
+        return None
+    west = city.tile(x - 1, y)
+    if west.terrain_id != 0xFA:
+        return None
+    return west.overlay_anim
 
 
 def _paint_factory_flag80(
@@ -1230,11 +1261,10 @@ def _paint_factory_flag80(
     *,
     zoom: int,
     sheets: dict[str, Sequence[Image.Image]] | None,
+    west_plus9: int | None = None,
 ) -> None:
-    """0x37E0F origin path: CITYTOP frame = (+19 & 0xF) + 9 when +3 bit7."""
+    """0x37E0F: origin etiqueta (+19)+9; non-origin jugs hi(west +9)+0x18."""
     if tile.terrain_id != 0xFA:
-        return
-    if tile.spawn_packed & 0xF:
         return
     if not (tile.draw & 0x80):
         return
@@ -1243,13 +1273,19 @@ def _paint_factory_flag80(
     citytop = sheets.get(PL8_CITYTOP)
     if citytop is None:
         return
-    frame = factory_label_frame(tile.special)
+    if tile.spawn_packed & 0xF:
+        frame = factory_jug_frame(west_plus9 if west_plus9 is not None else 0)
+        if frame is None:
+            return
+        dx, dy = factory_jug_dest(zoom)
+    else:
+        frame = factory_label_frame(tile.special)
+        dx, dy = factory_flag80_dest(zoom)
     if not (0 <= frame < len(citytop)):
         return
     spr = citytop[frame]
     if spr.mode != "RGBA":
         spr = spr.convert("RGBA")
-    dx, dy = factory_flag80_dest(zoom)
     img.paste(spr, (sx + dx, sy + dy), spr)
 
 
@@ -1267,6 +1303,7 @@ def _paint_iso_tile(
     facing: int = 0,
     zoom: int = 0,
     sprite_tile: Tile | None = None,
+    west_plus9: int | None = None,
 ) -> None:
     """Blit this cell's LUT sprite at ``(sx, sy)``.
 
@@ -1303,7 +1340,15 @@ def _paint_iso_tile(
         tile_w=tile_w,
         tile_h=tile_h,
     ):
-        _paint_factory_flag80(img, tile, sx, sy, zoom=zoom, sheets=sheets)
+        _paint_factory_flag80(
+            img,
+            tile,
+            sx,
+            sy,
+            zoom=zoom,
+            sheets=sheets,
+            west_plus9=west_plus9,
+        )
         return
     _draw_diamond(img, sx, sy, _fallback_color(tile), tile_w=tile_w, tile_h=tile_h)
 
@@ -1469,6 +1514,7 @@ def render_iso(
                 facing=facing,
                 zoom=zoom,
                 sprite_tile=iso_paint_tile(city, wx, wy, facing),
+                west_plus9=factory_west_plus9(city, wx, wy),
             )
     return img
 
@@ -1538,6 +1584,7 @@ def render_iso_view(
                 facing=facing,
                 zoom=z,
                 sprite_tile=iso_paint_tile(city, wx, wy, facing),
+                west_plus9=factory_west_plus9(city, wx, wy),
             )
     return img, cx, cy
 
@@ -1762,6 +1809,7 @@ def blit_water_tiles(
             facing=facing,
             zoom=z,
             sprite_tile=iso_paint_tile(city, wx, wy, facing),
+            west_plus9=factory_west_plus9(city, wx, wy),
         )
         n += 1
     img.paste(crop, (x0, y0))
@@ -2038,6 +2086,63 @@ def selftest() -> list[str]:
         )
     else:
         lines.append("ok    factory flag80 CITYTOP frame +19+9 dest (32,-18)")
+    if factory_jug_frame(0x20) != 0x1A or factory_jug_frame(0) is not None:
+        lines.append(
+            f"FAIL  factory jugs frame={factory_jug_frame(0x20)} "
+            f"zero={factory_jug_frame(0)}"
+        )
+    elif factory_jug_dest(0) != (-54, 22):
+        lines.append(f"FAIL  factory jugs dest={factory_jug_dest(0)}")
+    else:
+        lines.append("ok    factory jugs CITYTOP hi(+9)+0x18 dest (-54,22)")
+    build = [Image.new("RGBA", (16, 16), (20, 20, 20, 255)) for _ in range(0x47)]
+    tops = [Image.new("RGBA", (16, 16), (0, 0, 0, 0)) for _ in range(0x20)]
+    tops[10] = Image.new("RGBA", (16, 16), (200, 0, 200, 255))
+    tops[0x1A] = Image.new("RGBA", (16, 16), (240, 200, 40, 255))
+    fac_sheets = {PL8_BUILD1C: build, PL8_CITYTOP: tops}
+    origin_raw = bytearray(TILE_BYTES)
+    origin_raw[0] = 0xFA
+    origin_raw[3] = 0x8C
+    origin_raw[4] = 0x3E
+    origin_raw[9] = 0x20
+    origin_raw[19] = 1
+    east_raw = bytearray(TILE_BYTES)
+    east_raw[0] = 0xFA
+    east_raw[3] = 0x8C
+    east_raw[4] = 0x40
+    east_raw[5] = 1
+    canvas = Image.new("RGBA", (160, 80), (*ISO_BG, 255))
+    _paint_iso_tile(
+        canvas,
+        Tile.unpack(bytes(origin_raw)),
+        80,
+        30,
+        tile_w=16,
+        tile_h=16,
+        water_frame=0,
+        cityfixt=None,
+        sheets=fac_sheets,
+    )
+    _paint_iso_tile(
+        canvas,
+        Tile.unpack(bytes(east_raw)),
+        80,
+        30,
+        tile_w=16,
+        tile_h=16,
+        water_frame=0,
+        cityfixt=None,
+        sheets=fac_sheets,
+        west_plus9=0x20,
+    )
+    etiqueta = canvas.getpixel((80 + 32, 30 - 18))
+    jugs = canvas.getpixel((80 - 54, 30 + 22))
+    if etiqueta[:3] != (200, 0, 200):
+        lines.append(f"FAIL  factory etiqueta pixel {etiqueta}")
+    elif jugs[:3] != (240, 200, 40):
+        lines.append(f"FAIL  factory jugs pixel {jugs}")
+    else:
+        lines.append("ok    factory etiqueta + porch jugs both blit")
     f18 = [flag18.cityfixt_index(f) for f in range(WATER_FRAMES)]
     if f18 != [0x18 + CITYFIXT_TERRAIN_BIAS] * WATER_FRAMES:
         lines.append(f"FAIL  0x18 flag tile {f18}, want static grass")
