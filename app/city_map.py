@@ -96,6 +96,10 @@ ID_AQUEDUCT_HI = 0xD6
 ID_WELL = 0xD7
 ID_FOUNTAIN_LO = 0xDB
 ID_FOUNTAIN_HI = 0xDE
+ID_BATH_LO = 0xDF
+ID_BATH_HI = 0xE2
+# FUN_0003fef7 wet +4 (LUT 0x94f6c[id]+1). Dry fountain is 0x0C/0x0E/0x5F/0x61.
+_FOUNTAIN_WET_VAR = frozenset({0x0D, 0x0F, 0x60, 0x62})
 FLAG_RIVER = 0x10
 FLAG_RIVER_BANK = 0x08  # 0x65B3E: corner hits > 2 (0x36/0x3A/0x46/0x4A)
 FLAG_PAD = 0x20
@@ -399,11 +403,20 @@ def is_aqueduct_id(tid: int) -> bool:
     return ID_AQUEDUCT_LO <= tid <= ID_AQUEDUCT_HI
 
 
-def tile_wants_water_anim(tid: int, flags: int, coverage: int) -> bool:
-    """River diamond, well, charged aqueduct / reservoir, fountain.
+def tile_wants_water_anim(
+    tid: int,
+    flags: int,
+    coverage: int,
+    *,
+    splash: int = 0,
+    variant: int = 0,
+) -> bool:
+    """River diamond, well, charged aqueduct / reservoir, wet fountain/baths.
 
     Aqueduct channel blue is charge ``+10 & 3`` only — dry ``+9`` has no
     water pixels, but cycling every 0xCB–0xD6 still read as 'full'.
+    Fountain/baths shimmer only when ``+13&4`` or the wet ``+4`` (EXE
+    FUN_0003fef7). Dry fountain 0x5F / dry baths 0x63+ stay still.
     """
     if flags & FLAG_RIVER and ID_RIVER_LO <= tid <= ID_RIVER_HI:
         return True
@@ -414,7 +427,9 @@ def tile_wants_water_anim(tid: int, flags: int, coverage: int) -> bool:
     if tid == ID_RESERVOIR and (coverage & 3):
         return True
     if ID_FOUNTAIN_LO <= tid <= ID_FOUNTAIN_HI:
-        return True
+        return bool(splash & 4) or variant in _FOUNTAIN_WET_VAR
+    if ID_BATH_LO <= tid <= ID_BATH_HI:
+        return bool(splash & 4) or (0x20 <= variant <= 0x2F)
     return False
 
 
@@ -467,7 +482,13 @@ def water_anim_tile_xy(city: CityMap) -> list[tuple[int, int]]:
         row = y * ROW_STRIDE
         for x in range(city.width):
             off = row + x * TILE_STRIDE
-            if tile_wants_water_anim(tiles[off], tiles[off + 1], tiles[off + 10]):
+            if tile_wants_water_anim(
+                tiles[off],
+                tiles[off + 1],
+                tiles[off + 10],
+                splash=tiles[off + 13],
+                variant=tiles[off + 4],
+            ):
                 out.append((x, y))
     return out
 
@@ -1036,7 +1057,13 @@ def _tile_frames(
             tile = Tile.unpack(bytes(raw))
         idx = tile.cityfixt_index()
         if (
-            tile_wants_water_anim(tile.terrain_id, tile.flags, tile.coverage)
+            tile_wants_water_anim(
+                tile.terrain_id,
+                tile.flags,
+                tile.coverage,
+                splash=tile.desirability,
+                variant=tile.variant,
+            )
             and cityfixt is not None
             and idx is not None
             and 0 <= idx < len(cityfixt)
@@ -1062,7 +1089,13 @@ def _tile_frames(
         frames is not None
         and idx is not None
         and 0 <= idx < len(frames)
-        and tile_wants_water_anim(tile.terrain_id, tile.flags, tile.coverage)
+        and tile_wants_water_anim(
+            tile.terrain_id,
+            tile.flags,
+            tile.coverage,
+            splash=tile.desirability,
+            variant=tile.variant,
+        )
     ):
         return _water_interior_frames(frames[idx]), int(water_frame) % WATER_FRAMES
     return frames, idx
@@ -2075,6 +2108,33 @@ def selftest() -> list[str]:
         lines.append("FAIL  charged aqueduct water anim")
     else:
         lines.append("ok    Aqueduct carregado no ciclo de água")
+    dry_f = Tile.unpack(bytes([0xDD, 0x01, 0, 0x08, 0x5F]) + bytes(15))
+    if tile_wants_water_anim(
+        dry_f.terrain_id, dry_f.flags, dry_f.coverage, variant=dry_f.variant
+    ):
+        lines.append("FAIL  dry fountain water anim")
+    else:
+        lines.append("ok    Fountain seco 0x5F fora do ciclo de água")
+    wet_f = bytearray(20)
+    wet_f[0], wet_f[3], wet_f[4], wet_f[13] = 0xDD, 0x08, 0x60, 0x04
+    ft_wet = Tile.unpack(bytes(wet_f))
+    if not tile_wants_water_anim(
+        ft_wet.terrain_id,
+        ft_wet.flags,
+        ft_wet.coverage,
+        splash=ft_wet.desirability,
+        variant=ft_wet.variant,
+    ):
+        lines.append("FAIL  wet fountain water anim")
+    else:
+        lines.append("ok    Fountain +13&4 / +4=0x60 no ciclo de água")
+    dry_b = Tile.unpack(bytes([0xDF, 0x01, 0, 0x08, 0x63]) + bytes(15))
+    if tile_wants_water_anim(
+        dry_b.terrain_id, dry_b.flags, dry_b.coverage, variant=dry_b.variant
+    ):
+        lines.append("FAIL  dry baths water anim")
+    else:
+        lines.append("ok    Baths seco 0x63 fora do ciclo de água")
     dests: list[tuple[int, int]] = []
     specs: list[tuple[int, tuple[str, int] | None]] = []
     want_spr = {0xCB: 0x79, 0xCF: 0x79, 0xD0: 0x76, 0xD1: 0x7C, 0xD6: 0x70}

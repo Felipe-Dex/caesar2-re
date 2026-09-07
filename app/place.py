@@ -80,6 +80,7 @@ from app.city_paint import (
     factory_type_name,
     paint_baths_emitter,
     paint_education_emitter,
+    sync_water_building_graphic,
     paint_entertainment_emitter,
     paint_factory_emitter,
     paint_security_emitter,
@@ -189,7 +190,7 @@ VAR_RESERVOIR = 0x6E
 DRAW_WELL = 0x08
 VAR_WELL = 0x10
 DRAW_FOUNTAIN = 0x08
-VAR_FOUNTAIN = 0x60
+VAR_FOUNTAIN = 0x5F  # LUT 0x94f6c[0xDD] dry; wet is +1 (0x60) on +13&4
 DRAW_GARDEN = 0x04
 # FUN_00068950: +4 = (LUT[i]>>2)+0x77. Base 0x77 is the n=0 hedge, not a
 # fixed stamp — 0x77-only was the all-identical-tile bug.
@@ -451,7 +452,7 @@ _reg(StampSpec(TOOL_LIBRARY, "Library", ID_LIBRARY, 3, 3, COST_LIBRARY, 0x01, 0x
                (0x4D, 0x4F, 0x52, 0x4E, 0x51, 0x54, 0x50, 0x53, 0x55),
                frozenset({0xF5})))
 _reg(StampSpec(TOOL_BATHS, "Baths", ID_BATHS, 2, 2, COST_BATHS, 0x01, 0x08,
-               (0x20, 0x22, 0x21, 0x23), frozenset(range(0xDF, 0xE3))))
+               (0x63, 0x65, 0x64, 0x66), frozenset(range(0xDF, 0xE3))))
 _reg(StampSpec(TOOL_MARKET, "Market", ID_MARKET, 2, 2, COST_MARKET, 0x01, 0x08,
                (0x30, 0x32, 0x31, 0x33), frozenset(range(0xFC, 0x100))))
 _reg(StampSpec(TOOL_HOSPITAL, "Hospital", ID_HOSPITAL, 3, 3, COST_HOSPITAL, 0x01, 0x08,
@@ -1699,6 +1700,7 @@ def try_place(
             paint_education_emitter(city.tiles, x, y)
         if spec.tid == ID_BATHS or ID_BATHS <= spec.tid <= 0xE2:
             paint_baths_emitter(city.tiles, x, y)
+            sync_water_building_graphic(city.tiles, x, y)
         if spec.tid in (ID_BARRACKS, ID_PREFECTURE):
             paint_security_emitter(city.tiles, x, y)
         if spec.tool == TOOL_FACTORY:
@@ -1761,6 +1763,8 @@ def try_place(
             dirty.extend(rebuild_pipe_charge(city, [(x, y)]))
         if tool in (TOOL_WELL, TOOL_FOUNTAIN, TOOL_RESERVOIR):
             paint_water_emitter(city.tiles, x, y)
+        if tool == TOOL_FOUNTAIN:
+            sync_water_building_graphic(city.tiles, x, y)
         if tool == TOOL_PREFECTURE:
             paint_security_emitter(city.tiles, x, y)
         # Aqueduct must not trigger road retile — that wrote the fake 0x52.
@@ -2303,6 +2307,9 @@ def try_place_span(
         if tool in (TOOL_WELL, TOOL_FOUNTAIN, TOOL_RESERVOIR):
             for x, y in preview.stamp:
                 paint_water_emitter(city.tiles, x, y)
+        if tool == TOOL_FOUNTAIN:
+            for x, y in preview.stamp:
+                sync_water_building_graphic(city.tiles, x, y)
         if tool == TOOL_PREFECTURE:
             for x, y in preview.stamp:
                 paint_security_emitter(city.tiles, x, y)
@@ -2824,9 +2831,9 @@ def selftest() -> list[str]:
     r = try_place(city, 33, 30, TOOL_FOUNTAIN, sim)
     t = city.tile(33, 30)
     if not r.ok or t.terrain_id != ID_FOUNTAIN or t.variant != VAR_FOUNTAIN:
-        lines.append(f"FAIL  fountain {r.message}")
+        lines.append(f"FAIL  fountain {r.message} +4={t.variant:#x}")
     else:
-        lines.append("ok    Fountain 0xDD +3=0x08 +4=0x60 -15")
+        lines.append("ok    Fountain 0xDD +3=0x08 +4=0x5F dry -15")
     dry_nb = city.tiles[city.offset(35, 30) + 13] & 1
     if dry_nb:
         lines.append(f"FAIL  dry fountain leaked splash +13={dry_nb:#x}")
@@ -2838,12 +2845,13 @@ def selftest() -> list[str]:
     r = try_place(city, 24, 20, TOOL_FOUNTAIN, sim)
     wet = city.tiles[city.offset(30, 20) + 13] & 1
     past = city.tiles[city.offset(31, 20) + 13] & 1
-    if not r.ok or not wet or past:
+    fvar = city.tiles[city.offset(24, 20) + 4]
+    if not r.ok or not wet or past or fvar != 0x60:
         lines.append(
-            f"FAIL  charged fountain r=6 {r.message} d6={wet:#x} d7={past:#x}"
+            f"FAIL  charged fountain r=6 {r.message} d6={wet:#x} d7={past:#x} +4={fvar:#x}"
         )
     else:
-        lines.append("ok    charged Fountain +13 0x01 r=6 (reservoir ring)")
+        lines.append("ok    charged Fountain +13 0x01 r=6 +4=0x60 wet")
 
     city.tiles[city.offset(34, 30)] = 0x14
     sim.treasury = 75
@@ -3679,18 +3687,33 @@ def selftest() -> list[str]:
     from app.city_overlay import query_place
 
     qbath = " ".join(query_place(city, 24, 2).lines)
+    bath4 = city.tiles[city.offset(22, 2) + 4]
     if (
         not r.ok
         or city.tiles[city.offset(22, 2)] != ID_BATHS
         or not (bath13 & 0x08)
+        or bath4 != 0x20
         or "Near Baths" not in qbath
         or "Not Near Baths" in qbath
     ):
         lines.append(
-            f"FAIL  baths splash {r.message} +13={bath13:#x} query={qbath}"
+            f"FAIL  baths splash {r.message} +13={bath13:#x} +4={bath4:#x} query={qbath}"
         )
     else:
-        lines.append("ok    Baths 0xDF +13 0x08 r=5 extra=1 on hut in ring")
+        lines.append("ok    Baths 0xDF +13 0x08 r=5 extra=1 +4=0x20 wet")
+    _grass_block(50, 2, 2, 2)
+    sim.treasury = 30
+    r = try_place(city, 50, 2, TOOL_BATHS, sim)
+    dry4 = city.tiles[city.offset(50, 2) + 4]
+    from app.city_overlay import OVERLAY_WATER, overlay_pixel
+
+    dry_ov = overlay_pixel(city.tiles, city.offset(50, 2), OVERLAY_WATER)
+    if not r.ok or dry4 != 0x63 or dry_ov != 0:
+        lines.append(
+            f"FAIL  dry baths off-pipe {r.message} +4={dry4:#x} ov={dry_ov:#x}"
+        )
+    else:
+        lines.append("ok    Baths off-pipe +4=0x63 dry overlay plane 0")
 
     _grass_block(28, 2, 4, 3)
     city.tiles[city.offset(30, 2)] = ID_TENT

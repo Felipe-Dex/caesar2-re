@@ -238,16 +238,18 @@ def _is_pipe_building(tid: int) -> bool:
 
 
 def _paint_water(tid: int, flags: int, splash: int) -> int:
-    # 0x3E6BA: pipe tile +1&0xC0 or Well/Fountain 0xD7–0xDE → 0x96.
-    # +13&3 (well/fountain/reservoir-small) and +13&4 (reservoir ring).
-    # Else plane 0 — dimmed geography, not a dry-red flood.
-    # +1&0xC0 is only the reservoir/aqueduct cell itself, not a map-wide pipe.
-    if 0xD7 <= tid <= 0xDE:
+    # 0x3E6BA: pipe tile +1&0xC0 or Well 0xD7–0xDA → 0x96.
+    # Fountain 0xDB–0xDE / Baths 0xDF–0xE2: 0x96 only with +13&4 so the
+    # tan footprint matches the wet +4 blit (FUN_0003fef7). Dry stays
+    # plane 0. +13&3 / +13&4 on other tiles still 0x84 / 0x8D / 0x87.
+    if 0xD7 <= tid <= 0xDA:
+        return 0x96
+    ring = splash & 4
+    if 0xDB <= tid <= 0xE2 and ring:
         return 0x96
     if _is_pipe_building(tid) and (flags & 0xC0):
         return 0x96
     charge = splash & 3
-    ring = splash & 4
     if charge and ring:
         return 0x87
     if charge:
@@ -1209,6 +1211,34 @@ def selftest() -> list[str]:
         lines.append("FAIL  water well")
     else:
         lines.append("ok    water Well 0xD7 -> 0x96")
+    off = put(19, 0, tid=0xDD, flags=0)
+    if overlay_pixel(tiles, off, OVERLAY_WATER) != 0:
+        lines.append(
+            f"FAIL  dry fountain overlay {overlay_pixel(tiles, off, OVERLAY_WATER):#x}"
+        )
+    else:
+        lines.append("ok    water dry Fountain 0xDD -> plane 0")
+    off = put(20, 0, tid=0xDD, flags=0, **{"13": 0x04})
+    if overlay_pixel(tiles, off, OVERLAY_WATER) != 0x96:
+        lines.append(
+            f"FAIL  wet fountain overlay {overlay_pixel(tiles, off, OVERLAY_WATER):#x}"
+        )
+    else:
+        lines.append("ok    water Fountain +13&4 -> 0x96")
+    off = put(21, 0, tid=0xDF, flags=0)
+    if overlay_pixel(tiles, off, OVERLAY_WATER) != 0:
+        lines.append(
+            f"FAIL  dry baths overlay {overlay_pixel(tiles, off, OVERLAY_WATER):#x}"
+        )
+    else:
+        lines.append("ok    water dry Baths 0xDF -> plane 0")
+    off = put(22, 0, tid=0xDF, flags=0, **{"13": 0x04})
+    if overlay_pixel(tiles, off, OVERLAY_WATER) != 0x96:
+        lines.append(
+            f"FAIL  wet baths overlay {overlay_pixel(tiles, off, OVERLAY_WATER):#x}"
+        )
+    else:
+        lines.append("ok    water Baths +13&4 -> 0x96")
     off = put(13, 0, tid=0xBE, flags=0)
     if overlay_pixel(tiles, off, OVERLAY_WATER) != 0x96:
         lines.append("FAIL  water reservoir")

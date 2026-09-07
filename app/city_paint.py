@@ -85,6 +85,13 @@ EDU_GRAMMATICUS_BIT = 0x10
 EDU_RHETOR_BIT = 0x20
 BATH_SPLASH_BIT = 0x08
 BATH_SPLASH_EXTRA = 1
+# FUN_0003fef7: fountain +4 = LUT 0x94f6c[id] (dry) or +1 (wet / +13&4).
+FOUNTAIN_DRY_VAR = {0xDB: 0x0C, 0xDC: 0x0E, 0xDD: 0x5F, 0xDE: 0x61}
+# FUN_0006a368: baths 2×2 +4. Wet 0x20+stage*4; dry 0x63+stage*4.
+# Piece order raster y,x: +0,+2 / +1,+3 (LASTYEAR / place stamp).
+BATH_WET_BASE = 0x20
+BATH_DRY_BASE = 0x63
+BATH_PIECE_DELTA = (0, 2, 1, 3)
 SECURITY_COV_BITS = 0x30
 PREFECTURE_SPLASH_R = 2
 BARRACKS_SPLASH_R = 3
@@ -623,6 +630,7 @@ def paint_water_emitter(tiles: bytearray, x: int, y: int) -> int:
         if fountain_in_reservoir_ring(tiles, x, y):
             tile_or_radius(tiles, x, y, FOUNTAIN_SPLASH_R, 13, 0x01)
             painted += 1
+        sync_water_building_graphic(tiles, x, y)
     elif hid == ID_RESERVOIR:
         charge = tiles[off + 10] & 3
         ring_r = reservoir_ring_radius(charge)
@@ -662,9 +670,11 @@ def paint_plus13_water(
                 if water_staffed and tiles[off + 13] & 0x04:
                     tile_or_radius(tiles, x, y, FOUNTAIN_SPLASH_R, 13, 0x01)
                     painted += 1
+                sync_water_building_graphic(tiles, x, y, water_staffed=water_staffed)
             elif ID_BATH_LO <= hid <= ID_BATH_HI:
                 if water_staffed:
                     painted += paint_baths_emitter(tiles, x, y)
+                sync_water_building_graphic(tiles, x, y, water_staffed=water_staffed)
     return painted
 
 
@@ -703,6 +713,65 @@ def paint_baths_emitter(tiles: bytearray, x: int, y: int) -> int:
         tiles, x, y, radius, 13, BATH_SPLASH_BIT, extra=BATH_SPLASH_EXTRA
     )
     return 1
+
+
+def fountain_dry_variant(hid: int) -> int:
+    return FOUNTAIN_DRY_VAR.get(hid, 0)
+
+
+def bath_variant_pieces(hid: int, wet: bool) -> tuple[int, int, int, int]:
+    """2×2 +4 for FUN_0006a368. stage = id − 0xDF."""
+    if not (ID_BATH_LO <= hid <= ID_BATH_HI):
+        return (0, 0, 0, 0)
+    base = (BATH_WET_BASE if wet else BATH_DRY_BASE) + (hid - ID_BATH_LO) * 4
+    return tuple(base + d for d in BATH_PIECE_DELTA)
+
+
+def apply_fountain_wet_graphic(tiles: bytearray, x: int, y: int, wet: bool) -> None:
+    """Write +4 dry LUT or LUT+1. EXE 0x4005b / 0x40070."""
+    if not _in_map(x, y) or len(tiles) < MAP_W * MAP_H * TILE_STRIDE:
+        return
+    off = _off(x, y)
+    dry = fountain_dry_variant(tiles[off])
+    if not dry:
+        return
+    tiles[off + 4] = (dry + 1) if wet else dry
+
+
+def apply_baths_wet_graphic(tiles: bytearray, x: int, y: int, wet: bool) -> None:
+    """Rewrite the 2×2 +4 set. Origins only (+5 lo == 0)."""
+    if not _in_map(x, y) or len(tiles) < MAP_W * MAP_H * TILE_STRIDE:
+        return
+    off = _off(x, y)
+    if tiles[off + 5] & 0xF:
+        return
+    hid = tiles[off]
+    pieces = bath_variant_pieces(hid, wet)
+    i = 0
+    for dy in range(2):
+        for dx in range(2):
+            nx, ny = x + dx, y + dy
+            if _in_map(nx, ny) and ID_BATH_LO <= tiles[_off(nx, ny)] <= ID_BATH_HI:
+                tiles[_off(nx, ny) + 4] = pieces[i]
+            i += 1
+
+
+def sync_water_building_graphic(
+    tiles: bytearray, x: int, y: int, *, water_staffed: bool = True
+) -> bool:
+    """Wet blit iff charged reservoir ring and water labor (same +13&4 as overlay)."""
+    if not _in_map(x, y) or len(tiles) < MAP_W * MAP_H * TILE_STRIDE:
+        return False
+    hid = tiles[_off(x, y)]
+    if ID_FOUNTAIN_LO <= hid <= ID_FOUNTAIN_HI:
+        wet = bool(water_staffed and fountain_in_reservoir_ring(tiles, x, y))
+        apply_fountain_wet_graphic(tiles, x, y, wet)
+        return wet
+    if ID_BATH_LO <= hid <= ID_BATH_HI:
+        wet = bool(water_staffed and baths_in_reservoir_ring(tiles, x, y))
+        apply_baths_wet_graphic(tiles, x, y, wet)
+        return wet
+    return False
 
 
 def is_fortification_id(tid: int) -> bool:

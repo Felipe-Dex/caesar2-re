@@ -902,9 +902,11 @@ def fire_tick_rows(
         for x in range(MAP_W):
             off = _off(x, y)
             tid = tiles[off]
-            on_fire = bool(tiles[off + 3] & DRAW_FIRE)
+            # Leftover +3 bit7 with timer 0 is prefecture / aqueduct /
+            # villa stamp — not a 69A37 fire. Do not --+16 or spread.
+            timer = tiles[off + 16]
+            on_fire = bool(tiles[off + 3] & DRAW_FIRE) and timer != 0
             if on_fire:
-                timer = tiles[off + 16]
                 nxt = (timer - 1) & 0xFF
                 tiles[off + 16] = nxt
                 dec += 1
@@ -929,14 +931,32 @@ def fire_tick_rows(
                 continue
             if tiles[off + 5] & 0xF:
                 continue
+            # Villa leftover 0x9E–0xA1 keeps +3 bit7 as a graphic, not fire.
+            if (
+                0x9E <= tid <= 0xA1
+                and (tiles[off + 3] & DRAW_FIRE)
+                and timer == 0
+            ):
+                continue
             covered = bool(tiles[off + 10] & 0x30)
             if covered:
                 _lower_fire_risk(tiles, off)
                 continue
+            # Overlay / illness leftover +11 0x30 is not a new raise.
+            # 69A37 only on this-tick 0x20 → 0x30 (EXE 693BB after climb).
+            prev = tiles[off + 11] & 0x30
+            if prev >= 0x30:
+                continue
             risk = _raise_fire_risk(tiles, off)
             if risk == 0x30 and (state is None or state.fire_ignited == 0):
-                ign += tile_ignite_building(tiles, x, y)
-                if state is not None:
+                n = tile_ignite_building(tiles, x, y)
+                ign += n
+                if (
+                    state is not None
+                    and n
+                    and (tiles[off + 3] & DRAW_FIRE)
+                    and tiles[off + 16] == FIRE_TIMER_IGNITE
+                ):
                     state.fire_ignited = 1
     return dec, col, ign
 
@@ -1810,9 +1830,11 @@ def selftest() -> list[str]:
 
     paint_plus13_water(tiles, 8, 1)
     bath = tiles[_off(14, 8) + 13] & BATH_SPLASH_BIT
-    ok = bath == BATH_SPLASH_BIT
+    bath4 = tiles[_off(12, 8) + 4]
+    ok = bath == BATH_SPLASH_BIT and bath4 == 0x20
     lines.append(
-        f"baths +13 0x08 r=5 extra=1: {'ok' if ok else 'FAIL'} bit={bath:#x}"
+        f"baths +13 0x08 r=5 extra=1 +4=0x20: {'ok' if ok else 'FAIL'} "
+        f"bit={bath:#x} +4={bath4:#x}"
     )
     wipe_state = SimState(
         phase=0x51,
@@ -1919,10 +1941,11 @@ def selftest() -> list[str]:
     tiles[toff + 1] = 0x01
     paint_plus13_water(tiles, 8, 2)
     splash = tiles[toff + 13] & 1
-    ok = splash == 0
+    fvar = tiles[foff + 4]
+    ok = splash == 0 and fvar == 0x5F
     lines.append(
-        f"dry fountain no +13 splash: {'ok' if ok else 'FAIL'} "
-        f"+13={tiles[toff + 13]:#x}"
+        f"dry fountain no +13 splash +4=0x5F: {'ok' if ok else 'FAIL'} "
+        f"+13={tiles[toff + 13]:#x} +4={fvar:#x}"
     )
 
     from app.walker_tick import emit_walkers
@@ -2356,6 +2379,33 @@ def selftest() -> list[str]:
     lines.append(
         f"prefect +10 0x30 lowers fire risk: {'ok' if ok else 'FAIL'} "
         f"+11={tiles[hoff + 11] & 0x30:#x}"
+    )
+
+    tiles = _blank_tiles()
+    hoff = _off(10, 10)
+    tiles[hoff] = 0x82
+    tiles[hoff + 1] = 0x01
+    tiles[hoff + 11] = 0x30
+    st = SimState(phase=0x9E, year_raw=-300, month=0, city_only=1)
+    fire_tick_rows(tiles, 10, 1, st)
+    ok = not (tiles[hoff + 3] & DRAW_FIRE) and st.fire_ignited == 0
+    lines.append(
+        f"leftover +11 0x30 does not 69A37: {'ok' if ok else 'FAIL'} "
+        f"bit7={tiles[hoff + 3] & DRAW_FIRE:#x} ign={st.fire_ignited}"
+    )
+
+    tiles = _blank_tiles()
+    hoff = _off(10, 10)
+    tiles[hoff] = 0x9E
+    tiles[hoff + 1] = 0x01
+    tiles[hoff + 3] = DRAW_FIRE
+    tiles[hoff + 16] = 0
+    st = SimState(phase=0x9E, year_raw=-300, month=0, city_only=1)
+    fire_tick_rows(tiles, 10, 1, st)
+    ok = tiles[hoff + 16] == 0 and st.fire_ignited == 0
+    lines.append(
+        f"villa leftover +3 bit7 is not fire: {'ok' if ok else 'FAIL'} "
+        f"+16={tiles[hoff + 16]} ign={st.fire_ignited}"
     )
 
     from app.messages import selftest as message_selftest
