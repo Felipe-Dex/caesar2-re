@@ -910,6 +910,11 @@ def load_city_from_sav(
         raise ValueError(f"chunk {SAV_CHUNK} is {len(raw)} bytes, want {MAP_BYTES}")
     city = CityMap(tiles=bytearray(raw), source=path.name)
     snapshot_river_tags(city)
+    # Charge lives in +10 but older host saves / F4 loads can be dry.
+    # FUN_00029e36 is place-time; rebuild here so inland 0xBE stay wet.
+    from app.place import rebuild_all_pipe_charge
+
+    rebuild_all_pipe_charge(city)
     return city
 
 
