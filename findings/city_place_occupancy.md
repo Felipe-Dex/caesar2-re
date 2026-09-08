@@ -45,8 +45,10 @@ else if +0 >= 0x82:
     if type == 0x10: FUN_00069483(tile, size=4)
     else: FUN_000696e8  # 1×1 housing / BE / well / aqueduct segment
 else:
-    flatten via 697FE unless water + +3 bits
+    flatten via 697FE unless id < 8 and +3 has 0x40/0x80
 ```
+
+`0x68D2F` is the split: **`+0 >= 0x82`** → collapse `696E8` (host rubble `0x05`); below that → flatten `697FE`. Gardens `0x78–0x7B` and plaza / join / statue `0x7C–0x7E` are **below** `0x82`, so Clear restores grass (`697FE` writes `0x1A + (LUT[0x93FCC]>>2)` = `0x1A–0x1D`; host `0x1C`). They do **not** leave rubble. Housing / fire still uses `696E8` / host `0x05`.
 
 `FUN_00069483` (EAX = tile off, EDX = N):
 

@@ -46,6 +46,7 @@ class BootContext:
     audio_status: str
     notes: list[str] = field(default_factory=list)
     start_in_map: bool = False
+    play_audio: bool = True
 
     @property
     def key_ok(self) -> bool:
@@ -92,7 +93,11 @@ def run_boot(
 
     # 4. miles_init @ 0x11758 — not AIL
     audio_status = "audio skipped (--no-audio)"
-    if play_audio:
+    if play_audio and city_only:
+        # City Only opens on the map with Hail. A01.RAW is a boot probe,
+        # not the briefing — playing it here sounds like a promotion sting.
+        audio_status = "city SFX on (no boot RAW / A01 sting)"
+    elif play_audio:
         audio_status = audio.play_raw_preview(game)
     notes.append(audio_status)
 
@@ -156,6 +161,11 @@ def run_boot(
                     notes.append(f"walkers load failed: {exc}")
                 try:
                     sim = load_sim_from_sav(sav_path, sizes, game=game)
+                    from app.forum import apply_saved_plebs
+                    from app.messages import seed_watch_from_city
+
+                    apply_saved_plebs(sim, city.tiles)
+                    seed_watch_from_city(sim, city.tiles)
                     notes.append(
                         f"city_sim: {sav_path.name} phase={sim.phase:#x} "
                         f"({sim.date_label}) - Space = one slot then walkers"
@@ -181,4 +191,5 @@ def run_boot(
         audio_status=audio_status,
         notes=notes,
         start_in_map=start_in_map,
+        play_audio=play_audio,
     )

@@ -24,6 +24,8 @@ from app.city_map import (
     SAV_HISTORY_BYTES,
     TILE_STRIDE,
     CityMap,
+    restore_river_tags,
+    snapshot_river_tags,
 )
 from app.city_sim import SimState
 from app.config import find_file
@@ -384,6 +386,7 @@ def city_map_generate(
             break
     if isinstance(tiles, CityMap):
         tiles.source = "city_map_generate"
+        snapshot_river_tags(tiles)
     return rng
 
 
@@ -448,9 +451,16 @@ def start_city_assignment(
         history=bytearray(SAV_HISTORY_BYTES),
     )
     init_city_only_labor(sim)
+    from app.city_paint import seed_city_only_industry
+
+    seed_city_only_industry(sim)
     notes.append(
-        f"labor_init 0x563E2: ready={sim.plebs_ready} welfare={sim.welfare} "
-        f"assigned={list(sim.labor_assigned)}"
+        f"labor_init 0x563E2 (New Game only): ready={sim.plebs_ready} "
+        f"welfare={sim.welfare} assigned={list(sim.labor_assigned)}"
+    )
+    notes.append(
+        "city-only industry: seeded goods +24/+28 and factory_labor "
+        f"{sim.factory_labor} (no province farms; 41b33 cap 4)"
     )
     return NewCity(
         city=city,
@@ -502,6 +512,26 @@ def selftest(*, seed: int = 1) -> list[str]:
         lines.append("ok    river ids after 0x65B3E")
     if leftover_dir:
         lines.append(f"FAIL  {leftover_dir} river tiles still walk dirs 0/2/4/6")
+    if len(city.river_lock) != n_river:
+        lines.append(
+            f"FAIL  river_lock {len(city.river_lock)} vs flags {n_river}"
+        )
+    else:
+        mutated = 0
+        for (x, y), (tid, flags) in list(city.river_lock.items())[:8]:
+            city.tiles[city.offset(x, y)] = 0x21
+            mutated += 1
+        restore_river_tags(city)
+        bad = 0
+        for (x, y), (tid, flags) in city.river_lock.items():
+            if city.tiles[city.offset(x, y)] != tid:
+                bad += 1
+            if city.tiles[city.offset(x, y) + 1] != flags:
+                bad += 1
+        if bad or mutated < 1:
+            lines.append(f"FAIL  restore after shimmer mutate bad={bad}")
+        else:
+            lines.append("ok    generate lock restores +0 after mutate")
     if rubble_river:
         lines.append(f"FAIL  {rubble_river} river tiles are rubble 0x05")
     if counts.get(ID_RUBBLE, 0):
@@ -516,4 +546,13 @@ def selftest(*, seed: int = 1) -> list[str]:
         )
     else:
         lines.append("ok    City Only Normal labor ready 42 assigned 20/12/4/4")
+    from app.city_paint import CITY_ONLY_LABOR, GOODS_RAW, goods_i32
+
+    if fresh.sim.factory_labor < CITY_ONLY_LABOR or goods_i32(fresh.sim.goods, 0, GOODS_RAW) <= 0:
+        lines.append(
+            f"FAIL  city-only industry labor={fresh.sim.factory_labor} "
+            f"raw0={goods_i32(fresh.sim.goods, 0, GOODS_RAW)}"
+        )
+    else:
+        lines.append("ok    City Only goods table + factory_labor seeded")
     return lines

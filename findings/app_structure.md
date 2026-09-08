@@ -150,7 +150,7 @@ Depois, **draw** (não é tick):
 | `init_new_city` | `0x10565` | mesmo módulo (subset; sem REGIONS / economy) |
 | `apply_regions_map` | `0x706C3` | — (`REGIONS.DAT` 44×3600) **Career** |
 | `city_map_generate` | `0x65809` | `new_game.city_map_generate` (relva+rio; não zeros) |
-| `sav_read` / `sav_write` | `0x7024A` / `0x70174` | só **read** via `load_*_from_sav` |
+| `sav_read` / `sav_write` | `0x7024A` / `0x70174` | read `load_*_from_sav`; write `app/sav.py` (owned + zeros) |
 | `enter_view_mode` | `0x3351B` | **ausente** (já nasce “na cidade”) |
 | `view_frame` | `0x3CF9A` | **não existe**; Space ≈ só o pulso |
 | `sim_tick_due` | `0x3E4B9` | host ignora (tecla = due) |

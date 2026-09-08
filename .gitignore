@@ -25,6 +25,10 @@ videos/*.gif
 videos/*.GIF
 videos/*.png
 videos/*.PNG
+videos_new/*.mp4
+videos_new/*.MP4
+video/*.mp4
+video/*.MP4
 
 # Local extracted dumps (original game text / large tables)
 notes/c2_eng_strings.txt

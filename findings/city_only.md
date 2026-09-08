@@ -166,3 +166,4 @@ Cada fatia: **objetivo**, **depende de**, **não é Career**. Não avançar Care
 - `CityMap()` a zeros **não** é New Game.
 - Ano −300 **não** prova o modo; 406=1 + pid=0 sim.
 - Skill default do **host** é Normal (2), não o INF Novice (0) — o utilizador pediu default 2.
+- Save / F5: `app/sav.py` — 225745 B, owned chunks live, rest zero. 1.1A *pode* ler o contentor; não é BSS completa. `findings/sav_write.md`.

@@ -317,6 +317,8 @@ class PaletteState:
             if item.goods is not None:
                 self.factory_goods = item.goods & 0xF
                 set_factory_goods(self.factory_goods)
+            # EXE: pick dismisses the popup; the 3×5 category stays yellow.
+            self.close()
             return ClickResult(item.tool, f"ferramenta: {item.hint}")
         return ClickResult(None, "flyout", keep_tool=True)
 
@@ -340,9 +342,15 @@ class PaletteState:
     def blit(
         self, frame: Image.Image, *, selected: str | None = None, ox: int = 0
     ) -> Image.Image:
-        """Draw host flyouts. ``ox`` slides them with the INT_CITY strip."""
+        """Draw host flyouts. ``ox`` slides them with the INT_CITY strip.
+
+        Hits live in native 640 space (sidebar at x=478). Window clicks pass
+        the same ``ox`` as ``hit_test`` / ``covers``. RGBA frames keep alpha
+        outside the flyout so the iso well can sit underneath.
+        """
         if not self.hits:
             return frame
+        keep_alpha = frame.mode == "RGBA"
         out = frame.convert("RGBA")
         draw = ImageDraw.Draw(out)
         font = ImageFont.load_default()
@@ -359,6 +367,8 @@ class PaletteState:
             color = (240, 230, 180) if placeable else (150, 150, 150)
             suffix = "" if placeable else " …"
             draw.text((rx + 4, ry + 2), f"{hit.item.label}{suffix}"[:18], fill=color, font=font)
+        if keep_alpha:
+            return out
         return out.convert("RGB")
 
 
@@ -401,27 +411,56 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  water flyout tool={r.tool} n={len(pal.hits)}")
     else:
         lines.append("ok    Water abre 4 itens")
-    r = pal.click_item("reservoir")
-    if r.tool != TOOL_RESERVOIR:
-        lines.append(f"FAIL  reservoir {r.tool}")
+    res = pal.hits[0] if pal.hits else None
+    if res is None or res.key != "reservoir":
+        lines.append("FAIL  flyout hit reservoir missing")
     else:
-        lines.append("ok    Reservoir escolhe 0xBE")
+        rx, ry, rw, rh = res.rect
+        slide = 80
+        at0 = pal.hit_test(rx + 2, ry + 2, ox=0)
+        at_ox = pal.hit_test(rx + slide + 2, ry + 2, ox=slide)
+        miss = pal.hit_test(rx + 2, ry + 2, ox=slide)
+        if (
+            at0 is None
+            or at0.key != "reservoir"
+            or at_ox is None
+            or at_ox.key != "reservoir"
+            or miss is not None
+        ):
+            lines.append(
+                f"FAIL  flyout hit ox at0={getattr(at0, 'key', None)} "
+                f"at_ox={getattr(at_ox, 'key', None)} miss={getattr(miss, 'key', None)}"
+            )
+        else:
+            lines.append("ok    flyout hit +ox matches chrome slide")
+    r = pal.click_item("reservoir")
+    if r.tool != TOOL_RESERVOIR or pal.open is not None or pal.hits:
+        lines.append(f"FAIL  reservoir {r.tool} open={pal.open} hits={len(pal.hits)}")
+    else:
+        lines.append("ok    Reservoir escolhe 0xBE e fecha flyout")
+    r = pal.click_grid("water", (478, 300, 30, 24))
+    if pal.open != "water" or len(pal.hits) != 4:
+        lines.append(f"FAIL  water reopen open={pal.open} n={len(pal.hits)}")
+    else:
+        lines.append("ok    Water reabre depois do pick")
     r = pal.click_item("fountain")
-    if r.tool != TOOL_FOUNTAIN:
-        lines.append(f"FAIL  fountain {r.message}")
+    if r.tool != TOOL_FOUNTAIN or pal.open is not None:
+        lines.append(f"FAIL  fountain {r.message} open={pal.open}")
     else:
         lines.append("ok    Fountain escolhe 0xDD")
     r = pal.click_grid("security", (478, 330, 30, 24))
     r = pal.click_item("tower")
-    if r.tool != TOOL_TOWER:
-        lines.append(f"FAIL  tower {r.tool}")
+    if r.tool != TOOL_TOWER or pal.open is not None:
+        lines.append(f"FAIL  tower {r.tool} open={pal.open}")
     else:
         lines.append("ok    Tower escolhe 0xBF")
+    r = pal.click_grid("security", (478, 330, 30, 24))
     r = pal.click_item("barracks")
     if r.tool != TOOL_BARRACKS:
         lines.append(f"FAIL  barracks {r.tool}")
     else:
         lines.append("ok    Barracks escolhe 0xE4")
+    r = pal.click_grid("security", (478, 330, 30, 24))
     r = pal.click_item("wall")
     if r.tool != TOOL_WALL:
         lines.append(f"FAIL  wall {r.message}")
@@ -433,6 +472,7 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  gardens {r.tool}")
     else:
         lines.append("ok    Gardens escolhe ferramenta")
+    r = pal.click_grid("amenities", (478, 360, 30, 24))
     r = pal.click_item("plaza")
     if r.tool != TOOL_PLAZA:
         lines.append(f"FAIL  plaza {r.tool}")
@@ -446,19 +486,19 @@ def selftest() -> list[str]:
         lines.append("ok    Aventine escolhe 0xAF")
     r = pal.click_grid("entertainment", (478, 300, 30, 24))
     r = pal.click_item("arena")
-    if r.tool is not None or "leftover" not in r.message:
-        lines.append(f"FAIL  arena {r.message}")
+    if r.tool is not None or "leftover" not in r.message or pal.open != "entertainment":
+        lines.append(f"FAIL  arena {r.message} open={pal.open}")
     else:
         lines.append("ok    Arena permanece leftover")
     r = pal.click_item("circus")
-    if r.tool != TOOL_CIRCUS:
-        lines.append(f"FAIL  circus {r.tool}")
+    if r.tool != TOOL_CIRCUS or pal.open is not None:
+        lines.append(f"FAIL  circus {r.tool} open={pal.open}")
     else:
         lines.append("ok    Circus escolhe 0xEB+0xEC")
     r = pal.click_grid("health", (478, 330, 30, 24))
     r = pal.click_item("baths")
-    if r.tool != TOOL_BATHS:
-        lines.append(f"FAIL  health {r.message}")
+    if r.tool != TOOL_BATHS or pal.open is not None:
+        lines.append(f"FAIL  health {r.message} open={pal.open}")
     else:
         lines.append("ok    Sanitation → Baths 0xDF")
     r = pal.click_grid("commerce", (478, 330, 30, 24))
@@ -472,23 +512,23 @@ def selftest() -> list[str]:
     else:
         lines.append("ok    Factory abre type picker")
     r = pal.click_item("factory_1")
-    if r.tool != TOOL_FACTORY or pal.factory_goods != 1:
-        lines.append(f"FAIL  winery {r.message} goods={pal.factory_goods}")
+    if r.tool != TOOL_FACTORY or pal.factory_goods != 1 or pal.open is not None:
+        lines.append(f"FAIL  winery {r.message} goods={pal.factory_goods} open={pal.open}")
     else:
         lines.append("ok    Factory type Winery +19=1")
     pal.pop_peak = 0
     r = pal.click_grid("forums", (478, 280, 30, 24))
     r = pal.click_item("palatine")
-    if r.tool is not None or "leftover" not in r.message:
-        lines.append(f"FAIL  palatine locked {r.message}")
+    if r.tool is not None or "leftover" not in r.message or pal.open != "forums":
+        lines.append(f"FAIL  palatine locked {r.message} open={pal.open}")
     else:
         lines.append("ok    Palatine leftover at pop 0")
     pal.pop_peak = 1800
     pal.close()
     r = pal.click_grid("forums", (478, 280, 30, 24))
     r = pal.click_item("palatine")
-    if r.tool != TOOL_PALATINE:
-        lines.append(f"FAIL  palatine unlock {r.message}")
+    if r.tool != TOOL_PALATINE or pal.open is not None:
+        lines.append(f"FAIL  palatine unlock {r.message} open={pal.open}")
     else:
         lines.append("ok    Palatine unlock at pop 1800")
     from app.city_chrome import SPRITE_GRID, grid_action_at
@@ -514,4 +554,32 @@ def selftest() -> list[str]:
         lines.append("FAIL  action temple")
     else:
         lines.append("ok    Temple destaca Worship")
+    from app.city_chrome import CityChrome, SIDEBAR_X, chrome_ox
+
+    ch = CityChrome._fallback()
+    water = next((h for h in ch.hits if h.action == "water"), None)
+    slide = chrome_ox(720)
+    if water is None:
+        lines.append("FAIL  chrome water hit missing")
+    else:
+        wx, wy, _ww, _wh = water.rect
+        hit = ch.hit_test(wx + slide + 1, wy + 1, ox=slide)
+        covered = ch.covers(SIDEBAR_X + slide, wy, ox=slide)
+        if hit is None or hit.action != "water" or not covered:
+            lines.append(
+                f"FAIL  chrome 3x5 ox hit={getattr(hit, 'action', None)} covers={covered}"
+            )
+        else:
+            lines.append("ok    INT_CITY 3×5 hit +ox (Water)")
+    left = next((h for h in ch.hits if h.action == "rotate_left"), None)
+    right = next((h for h in ch.hits if h.action == "rotate_right"), None)
+    if left is None or right is None:
+        lines.append("FAIL  chrome rotate hits missing")
+    else:
+        lx, ly, _lw, _lh = left.rect
+        hit = ch.hit_test(lx + 1, ly + 1)
+        if hit is None or hit.action != "rotate_left":
+            lines.append(f"FAIL  rotate_left hit={getattr(hit, 'action', None)}")
+        else:
+            lines.append("ok    INT_CITY rotate-left / rotate-right gadgets")
     return lines

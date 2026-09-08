@@ -14,8 +14,11 @@ from app.sim import on_sim_step  # Space / T — phase slot then walkers
 
 
 def _print_status(ctx) -> None:
+    from app.sav import host_sav_dir
+
     print(f"install       : {ctx.game}")
     print(f"resolved via  : {ctx.source}")
+    print(f"sav slots     : {host_sav_dir()}")
     print("-- key files --")
     for item in ctx.key_files:
         mark = "ok" if item.ok else "MISSING"
@@ -74,7 +77,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--no-audio",
         action="store_true",
-        help="skip the optional 2s RAW preview",
+        help="mute city SFX, boot RAW preview, and advisor clips (Options Sound off)",
     )
     parser.add_argument(
         "--no-window",
@@ -85,7 +88,7 @@ def main(argv: list[str] | None = None) -> int:
         "--sav",
         type=Path,
         default=None,
-        help="load this .SAV as SavChunk 13 (default: FELIPE01 / first in install)",
+        help="load this .SAV (name: {repo}/sav/ first, then retail sav/)",
     )
     parser.add_argument(
         "--new",
@@ -168,10 +171,10 @@ def main(argv: list[str] | None = None) -> int:
                 break
         if sav is None:
             sav = pick_save(game)
-    if sav is not None and not sav.is_file():
-        alt = game / sav.name
-        if alt.is_file():
-            sav = alt
+    if sav is not None:
+        from app.sav import resolve_sav_path
+
+        sav = resolve_sav_path(sav, game)
 
     ctx = run_boot(
         game,
@@ -325,6 +328,17 @@ def main(argv: list[str] | None = None) -> int:
         if menu_fail:
             print("FAILED        : menu selftest")
             return 1
+        from app.sav import selftest as sav_selftest
+
+        print("-- sav_write selftest --")
+        sav_fail = 0
+        for line in sav_selftest():
+            print(f"  {line}")
+            if "FAIL" in line:
+                sav_fail += 1
+        if sav_fail:
+            print("FAILED        : sav_write selftest")
+            return 1
         print("-- forum selftest --")
         forum_fail = 0
         for line in forum_selftest():
@@ -333,6 +347,39 @@ def main(argv: list[str] | None = None) -> int:
                 forum_fail += 1
         if forum_fail:
             print("FAILED        : forum selftest")
+            return 1
+        from app.messages import selftest as message_selftest
+
+        print("-- advisor message selftest --")
+        msg_fail = 0
+        for line in message_selftest():
+            print(f"  {line}")
+            if "FAIL" in line:
+                msg_fail += 1
+        if msg_fail:
+            print("FAILED        : advisor message selftest")
+            return 1
+        from app.advisor_video import selftest as advisor_video_selftest
+
+        print("-- advisor video selftest --")
+        vid_fail = 0
+        for line in advisor_video_selftest(game):
+            print(f"  {line}")
+            if "FAIL" in line:
+                vid_fail += 1
+        if vid_fail:
+            print("FAILED        : advisor video selftest")
+            return 1
+        from app.audio import selftest as audio_selftest
+
+        print("-- city sfx selftest --")
+        sfx_fail = 0
+        for line in audio_selftest(game):
+            print(f"  {line}")
+            if "FAIL" in line:
+                sfx_fail += 1
+        if sfx_fail:
+            print("FAILED        : city sfx selftest")
             return 1
         if args.new:
             from app.new_game import river_tile_count

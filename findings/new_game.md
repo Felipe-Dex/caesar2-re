@@ -273,7 +273,7 @@ Cidade “vazia” no sentido de **sem casas / sem placement**. Terreno **não**
 | Sem `city_map_generate` | sem SAV = relva 0, não o terreno do EXE |
 | Sem pick de província | sem forum kind 6, sem `--region 15` (**só Career**) |
 | Sem **placement** | Space/T só faz tick do que já está no mapa; relva não evolui para cidade |
-| Sem `sav_write` | o host não grava o primeiro SAV (e não precisa, para *ver*) |
+| `sav_write` host | File→Save / F5 grava 225745 B (`app/sav.py`); chunks que o host tem + zeros. Risco: `findings/sav_write.md` |
 | Sem `view_kind` / `enter_view_mode` | já “nasce na cidade” se houver SAV (`app_structure.md`) |
 
 O README já diz: *“No live sim and no menu that starts a city.”*

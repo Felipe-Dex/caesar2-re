@@ -39,10 +39,15 @@ python -m app
 **City Only** (New Game — relva + rio, sem SAV). Abre já no mapa iso. Skill `0…4` (default **2 Normal**, tesouro 12000):
 
 ```text
+python -m app --new --city-only
 python -m app --new --city-only --no-audio
 python -m app --new --city-only --skill 0 --no-audio
 python -m app --new --city-only --check --no-audio
 ```
+
+Hail on map enter is text + ``congrat`` talking-head, **muted** (EXE table [79] is ``congrat.smk``; that file’s audio is the promotion fanfare, so Hail stays silent). Pop milestones and New Structure play the same clip **with** audio when Sound is on. Other advisor clips play mp4 audio unless Options Sound is off or you pass ``--no-audio``. Do not copy game mp4s into git.
+
+City SFX (place / click / fire / destroy / overlay / forum) play from the retail WAV names when Sound is on. Default ``python -m app --new --city-only`` is **not** muted — you should hear ``place.wav`` / ``poscl.wav`` etc. Mute with Options → Sound or ``--no-audio``. Do **not** play ``A01.RAW`` on City Only start. SFX are one-shot (no loop). Do not copy WAVs into git.
 
 Plano das fatias seguintes (placement, água, Forum…): `findings/city_only.md`. **Não** há `--career` nesta versão.
 
@@ -52,22 +57,22 @@ Check only (no window — good for a quick smoke test):
 python -m app --check --no-audio
 ```
 
-Pillow is already required by `tools/decode_pl8.py`. tkinter ships with this Windows Python. No Godot / pygame install.
+Pillow is already required by `tools/decode_pl8.py`. tkinter ships with this Windows Python. No Godot install. SFX use pygame if present, else ``ffplay`` (same as advisor clips).
 
-Keys in the window: **Esc** quit · **1** `backgrnd.pl8` · **2** first `CITYFIXT` tile · **3** 80×80 city map + people (SavChunk 8) · **+** / **-** zoom 0/1/2 · setas fazem pan · **Home** re-center · **Space** / **T** one `city_sim_phase` slot then `walkers_tick` · **E** host evolve-all-rows · **A** play 2 s of `A01.RAW`. No mapa: clique na **sidebar direita** (Housing / Roads / Clear / Query). **Housing** e **Clear** — clique-arrasta um **rectângulo** (soltar carimba; preview enquanto arrasta). **Roads** — só **linha recta** no eixo dominante (horizontal se |dx|≥|dy|, senão vertical; sem L); ponte no rio recto, curvas saltadas. Clique sem mover = 1 tile. Sem ferramenta / **Query**, arrastar ainda faz **pan**. **Direito** cancela o arrasto (não carimba) e a ferramenta. Tesouro: o rectângulo de tendas é **tudo ou nada** (recusa se não chega para todas as tendas novas × 6).
+Keys follow **C2MANUAL.DOC p.48** once the city map is up: **P** pause · **C** census · **A** faster · **Space** cancel build · **F** / **F2** forum · **F1** city · **F3** province (City Only stub) · **F4** load · **F5** save (225745 B, owned chunks; see `findings/sav_write.md`) · **1**/**2**/**3** closest/medium/furthest zoom · **Esc** dismiss panel/menu/tool (does not quit) · **+**/**-** zoom · setas pan. Host extras that do not collide: **T** sim slot · **E** evolve80 · **M** month · **Z** cycle zoom · **Home** re-center · **Q** quit. Off-map debug still uses **1** title · **2** CITYFIXT · **3** enter map · **Space**/**T** pulse · **A** `A01.RAW` · **Esc** quit. **&lt;**/**&gt;** (e INT_CITY sprites 4–5) rodam o mapa (facing 0–3). Leftovers (no bind): **Alt-F** flags, overlay letters, Query letter, **R** roads. No mapa: clique na **sidebar direita** (Housing / Roads / Clear / Query). **Housing** e **Clear** — clique-arrasta um **rectângulo**. **Roads** — linha recta. Sem ferramenta / **Query**, arrastar ainda faz **pan**. **Direito** cancela o arrasto e a ferramenta.
 
 ### Mapa da cidade / City map (tecla **3**)
 
-Boot carrega o primeiro save da pasta do jogo (`FELIPE01.SAV`, senão `FELIPE02` / `LASTYEAR` / qualquer `.SAV`). **Não copia** o ficheiro para o git.
+**F4** Load e **F5** Save usam `{repo}/sav/` (`C:\Users\Felip\caesar2-re\sav\`; cria se faltar), não o install Sierra/OneDrive. Boot carrega o primeiro `.SAV` dessa pasta; se estiver vazia, cai no `sav/` / raiz do install. `--game` / `CAESAR2_PATH` continua só para arte / ENG / PL8 / vídeos. **Não copia** o ficheiro para o git.
 
 A janela nativa é **640×480** (viewport sobre o canvas iso; já não encolhe o mapa inteiro). **Maximizar / redimensionar** alarga o recorte iso (mais tiles, mesmo zoom PL8). O chrome INT_CITY fica 162 px 1:1 à direita.
 
 - **3** desenha o mapa isométrico 80×80 (SavChunk 13, 20 bytes/tile) e as pessoas do SavChunk 8. Terreno (`id < 0x78`) usa `CITYFIXT[LUT[id×4+(zoom>>1)]+16]` (colunas da LUT = zoom, não frames). **Rio** (`+1 & 0x10`, ids `0x1E–0x51`): `+0` fica locked (o EXE em `0x361DC` não cicla ids; `[0x117AC8]` só incrementa). O host cintila só o azul interior (`WATER_FRAME_MS` 250) — as margens não mudam de silhueta. Relva fica quieta. Edifícios (`id ≥ 0x78`) usam `tile[+3] & 0x1C` → `HOUSES1` / `BUILD1A`–`D` / `CITYFIXT` e `LUT[tile[+4]]` (`city_tile_draw_building` `0x3739F`). Casas `0x82–0xA1` e fóruns `0xA2–0xA8` neste save vão para `HOUSES1`. `AHOUSE` / `AFORUM` são ícones 182×132 do menu, não o mapa iso. Deixa a janela aberta: o rio cintila sozinho (Space/T não é preciso).
 - **Pan:** setas (passo 96/48/24 px conforme o zoom) ou **clique-arrastar** quando **não** há ferramenta de construir (ou a ferramenta é **Query**). Com Housing / Roads / Clear, o arrasto é borracha, não pan. **Home** centra o canvas.
 - **Zoom:** `+` / `=` / `]` aproxima (set 0 = `HOUSES1` / `BUILD1*` / `LTLMEN1B`, 58×30, flags `0x0002`). `-` / `[` / **Z** afasta. Set 1 = `HOUSES2` / `BUILD2*` / `CITYFIX2` / `LTLMEN2B` (26×14, `0x0102`). Set 2 = `HOUSES3` / `BUILD3*` / `CITYFIX3` / `LTLMEN3B` (10×6, `0x0202`). Roda do rato também muda o zoom. Se o PL8 faltar, o host faz scale nearest do zoom 0.
-- **Space** / **T:** um pulso do EXE: `city_sim_phase` (1 slot) **depois** `walkers_tick`. **E:** as 80 filas de evolve (atalho). Achea `+15=0` faz casas **descerem**. Preferir `20230610.SAV`. Como testar: `findings/app_sim_phase.md`.
+- **T:** um pulso do EXE: `city_sim_phase` (1 slot) **depois** `walkers_tick`. **Space** no mapa cancela a ferramenta (1.1A). **E:** as 80 filas de evolve (atalho). Achea `+15=0` faz casas **descerem**. Preferir `20230610.SAV`. Como testar: `findings/app_sim_phase.md`.
 - PNG sem janela (gitignorado): `python -m app --map-preview --no-audio`
-- Save à escolha: `python -m app --sav "C:\Users\Felip\OneDrive\Games\Caesar2\LASTYEAR.SAV"`
+- Save à escolha: `python -m app --sav CITY.SAV` (procura `{repo}/sav/` primeiro; um path absoluto do install ainda vale)
 
 ---
 
@@ -77,7 +82,7 @@ A janela nativa é **640×480** (viewport sobre o canvas iso; já não encolhe o
 - A **640×480** window (stand-in for VESA `video_init` @ `0x28341`).
 - **Title art**: decoded `backgrnd.pl8` + `backgrnd.256` via `tools/decode_pl8.py` (not a copy of the format).
 - HUD: path, one `C2.ENG` string (the “Caesar II - Version …” line if present).
-- Optional: **2 seconds** of `A01.RAW` through Windows `winsound` (not Miles). Missing audio → skip.
+- Optional: **2 seconds** of `A01.RAW` through Windows `winsound` on the title screen only (not Miles, not City Only). City SFX are retail ``.wav`` via pygame/ffplay. Missing audio → skip.
 
 No intro video. `INTRO.SMK` is only verified on disk (`smk_play` @ `0x5AB3D` is a stub; `tools/decode_smk.py` remuxes with ffmpeg, it does not play in-process).
 
@@ -99,7 +104,7 @@ No intro video. `INTRO.SMK` is only verified on disk (`smk_play` @ `0x5AB3D` is 
 | city map SavChunk 13 | `0xE2FBC` | `city_map.py`: 80×80×20 from `.SAV` **ou** generate; tecla **3** |
 | walkers SavChunk 8 | `0x1107A4` | `walkers.py`: 201×58; overlay after `render_iso` (tecla **3**) |
 
-`--new --city-only` starts a city (grass + river, year −300, treasury from C2MODEL). Paleta `INT_CITY` + placement v1: Tent `0x82` (custo 6), estrada `0x52–0x5C`, ponte `0x4E–0x51` no rio recto (recusa curva), clear em dois passos (prédio→`0x05`, rubble→`0x1C`). Flyouts Water/Forums/… ainda stub. Houses / forums / industry / people blit from the original PL8s when a `.SAV` is loaded (tecla **3**).
+`--new --city-only` starts a city (grass + river, year −300, treasury from C2MODEL). Paleta `INT_CITY` + placement v1: Tent `0x82` (custo 6), estrada `0x52–0x5C`, ponte `0x4E–0x51` no rio recto (recusa curva), clear em dois passos (`id≥0x82`→`0x05`, rubble→`0x1C`; garden/plaza `0x78–0x7E` flatten `0x1C`). Flyouts Water/Forums/… ainda stub. Houses / forums / industry / people blit from the original PL8s when a `.SAV` is loaded (tecla **3**).
 
 ---
 

@@ -1,7 +1,7 @@
 """City HUD date from SavChunks 25/26 (FUN_0003fbcf / FUN_0006189d).
 
 year = chunk 25 (i32, negative = BC). month = chunk 26 (0=January … 11).
-city_sim_phase wrap > 0xD6 calls calendar_advance (month++).
+city_sim_phase wrap > 0xD6 calls calendar_advance (month++ + ESTIMATE treasury).
 
 City clock: sim_tick_due 0x3E4B9 gates pulses from [0x9CE50] + dt.
 """
@@ -124,17 +124,28 @@ def calendar_advance(state: DateCounters) -> bool:
 
     Chunk 27 week_gate += 1; if > 0 (always on saved cities) reset and month++.
     December (11) wraps to January and year_raw += 1 (−187 → −186 = 186 BC).
+    SimState also applies Treasurer ESTIMATE cash (0x45696 / 0x565f9).
+    Year wrap then 0x3fd3e / close_year_books; City Only posts [72]
+    Annual Summary (FUN_00061389), not Career [115]+ Emperor letters.
     """
     state.week_gate += 1
     if state.week_gate <= 0:
         return False
     state.week_gate = 0
-    # tax/treasury month tick: economy_recompute 0x3FCA0 (C2MODEL [247:279]/[378:404] not trivial) — stub
+    # 0x45696 collect + 0x565f9 operating. Tax Dn from Treasurer ESTIMATE.
+    if hasattr(state, "treasury"):
+        from app.forum import apply_month_treasury
+
+        apply_month_treasury(state)
     state.month += 1
     if state.month < 12:
         return True
     state.month = 0
     state.year_raw += 1
+    if hasattr(state, "pop_tax_last"):
+        from app.forum import close_year_books
+
+        close_year_books(state)
     return True
 
 
@@ -170,6 +181,49 @@ def selftest() -> list[str]:
     lines.append(
         f"calendar_advance Dec→Jan year++: {'ok' if ok else 'FAIL'} "
         f"{format_hud_date(GameDate(s.year_raw, s.month))}"
+    )
+
+    from app.city_sim import SimState
+    from app.forum import monthly_pop_tax_raw, ytd_tax_dn
+
+    eco = SimState(
+        city_only=1,
+        year_raw=-300,
+        month=0,
+        treasury=12000,
+        welfare=8,
+        tax_rate=5,
+        tax_wealth=100,
+    )
+    before = eco.treasury
+    moved = calendar_advance(eco)
+    pop_dn = ytd_tax_dn(monthly_pop_tax_raw(100, 5))
+    want = before + pop_dn - 8
+    ok = moved and eco.month == 1 and eco.treasury == want and eco.tribute == 0
+    lines.append(
+        f"calendar_advance WRAP treas: {'ok' if ok else 'FAIL'} "
+        f"{before}->{eco.treasury} want {want}"
+    )
+    dec = SimState(
+        city_only=1,
+        year_raw=-300,
+        month=11,
+        treasury=12000,
+        welfare=8,
+        tax_rate=0,
+        tribute=99,
+    )
+    calendar_advance(dec)
+    ok = (
+        dec.month == 0
+        and dec.year_raw == -299
+        and dec.operating_last == 8
+        and dec.pop_tax_last == 0
+        and dec.treasury == 11992
+    )
+    lines.append(
+        f"Dec→Jan last-year 33-37: {'ok' if ok else 'FAIL'} "
+        f"op_last={dec.operating_last} treas={dec.treasury}"
     )
 
     ok = sim_tick_interval_ms(100) == 50 and sim_tick_interval_ms(70) == 200

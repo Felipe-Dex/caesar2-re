@@ -55,6 +55,7 @@ Disposable Python host you can launch **now** (Godot was not installed). It read
 ```text
 python -m app
 python -m app --check --no-audio
+python -m app --new --city-only
 python -m app --new --city-only --no-audio
 ```
 
