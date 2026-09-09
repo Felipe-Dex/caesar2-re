@@ -967,7 +967,7 @@ def _fire_neighbor(x: int, y: int, facing: int) -> tuple[int, int] | None:
 
 
 def fire_spread_housing(tiles: bytearray, x: int, y: int, facing: int) -> int:
-    """FUN_00069334: ignite neighbor housing if that tile’s bit7 is clear."""
+    """FUN_00069334: ignite one cardinal neighbor if housing and bit7 clear."""
     nb = _fire_neighbor(x, y, facing)
     if nb is None:
         return 0
@@ -1030,18 +1030,18 @@ def fire_tick_rows(
                     if nxt == 0:
                         tiles[off + 3] &= 0x7F
                     else:
-                        fire_spread_housing(
-                            tiles, x, y, (0, 2, 4, 6)[(x + y) & 3]
-                        )
+                        # 69334 is one neighbor; host tries all four so a
+                        # road/reservoir facing cannot trap the blaze.
+                        for fac in (0, 2, 4, 6):
+                            fire_spread_housing(tiles, x, y, fac)
                     continue
                 if ID_HOUSING_LO <= tid <= ID_HOUSING_HI:
                     tiles[off + 11] &= 0xCF
                     if nxt == 0:
                         col += tile_collapse_rubble(tiles, x, y, leave_fire=True)
                     elif nxt != 9:
-                        fire_spread_housing(
-                            tiles, x, y, (0, 2, 4, 6)[(x + y) & 3]
-                        )
+                        for fac in (0, 2, 4, 6):
+                            fire_spread_housing(tiles, x, y, fac)
                 continue
             if not (ID_HOUSING_LO <= tid <= ID_HOUSING_HI):
                 continue
@@ -2610,6 +2610,26 @@ def selftest() -> list[str]:
     lines.append(
         f"fire spread neighbor house: {'ok' if ok else 'FAIL'} "
         f"bit7={tiles[boff + 3] & DRAW_FIRE:#x} +16={tiles[boff + 16]}"
+    )
+
+    tiles = _blank_tiles()
+    aoff = _off(10, 10)
+    eoff = _off(11, 10)  # east — (10+10)&3 would have been north
+    tiles[aoff] = 0x82
+    tiles[aoff + 1] = 0x01
+    tiles[aoff + 3] = DRAW_FIRE
+    tiles[aoff + 16] = 8
+    tiles[eoff] = 0x83
+    tiles[eoff + 1] = 0x01
+    fire_tick_rows(tiles, 10, 1)
+    # Same-row neighbor is ignited then --+16 in this pass (10→9).
+    ok = bool(tiles[eoff + 3] & DRAW_FIRE) and tiles[eoff + 16] in (
+        FIRE_TIMER_IGNITE,
+        FIRE_TIMER_IGNITE - 1,
+    )
+    lines.append(
+        f"fire spread cardinal not (x+y)&3: {'ok' if ok else 'FAIL'} "
+        f"bit7={tiles[eoff + 3] & DRAW_FIRE:#x} +16={tiles[eoff + 16]}"
     )
 
     tiles = _blank_tiles()
