@@ -1,5 +1,8 @@
 """City Only top menu — File / Options / Speed / Help (C2.ENG [0]…[3]).
 
+Host also adds **Disasters** (not C2.ENG) so testers can force Fire /
+Disease / Barbarian / Riot onto the real walker and 69A37 paths.
+
 Actions match 1.1A City Only strings. No Career empire / Forum PERSONAL.
 File→Save always lists `{repo}/sav/*.SAV` (click to overwrite, or type a
 new 8.3). First F5 this session shows that list; later F5 overwrites the
@@ -22,10 +25,20 @@ from app.config import find_file
 
 # C2.ENG packed run from File [0]. Official skip per title.
 SLOT_FILE, SLOT_OPTIONS, SLOT_SPEED, SLOT_HELP = 0, 1, 2, 3
+# Host-only tester menu. Not a C2.ENG packed slot — do not _eng_skip(4).
+SLOT_DISASTERS = 4
 FILE_NEW, FILE_LOAD, FILE_SAVE, FILE_QUIT = 1, 2, 3, 4
 OPT_MUSIC, OPT_SOUND, OPT_ANIM, OPT_YEAR, OPT_CENSUS = 1, 2, 3, 4, 5
 SPD_GAME, SPD_SCROLL, SPD_PAUSE = 1, 2, 3
 HLP_HINTS, HLP_GAME, HLP_HISTORY, HLP_ICONS, HLP_ABOUT = 1, 2, 3, 4, 5
+DIS_FIRE, DIS_DISEASE, DIS_BARBARIAN, DIS_RIOT = 1, 2, 3, 4
+DISASTER_TITLE = "Disasters"
+DISASTER_ITEMS: tuple[tuple[int, str], ...] = (
+    (DIS_FIRE, "Fire"),
+    (DIS_DISEASE, "Disease"),
+    (DIS_BARBARIAN, "Barbarian"),
+    (DIS_RIOT, "Riot"),
+)
 
 # HELP.ENG 58 B records @ 66 (forum_strings.md). Title u32 + body is the next C-string.
 _HELP_MAGIC = b"Helpfile"
@@ -365,11 +378,19 @@ def _wrap_adv(text: str, width: int = _ADV_LINE) -> list[str]:
     return out
 
 
+def _advisor_has_goto(msg) -> bool:
+    return bool(getattr(msg, "has_goto", False)) or (
+        getattr(msg, "tile_x", None) is not None
+        and getattr(msg, "tile_y", None) is not None
+    )
+
+
 def advisor_rect(msg, *, has_video: bool = False) -> tuple[int, int, int, int]:
     from app.advisor_video import SMK_H, SMK_W, SMK_X, SMK_Y
 
     lines = 1 + len(_wrap_adv(getattr(msg, "body", "") or "")) + 2
-    text_h = max(96, 28 + 13 * lines + 14)
+    extra = 16 if _advisor_has_goto(msg) else 0
+    text_h = max(96, 28 + 13 * lines + 14 + extra)
     if not has_video:
         return (_ADV_X, _ADV_Y, _ADV_W, text_h)
     # Video stays at EXE (80,96) 320×152. Center the banner on that hole
@@ -385,6 +406,24 @@ def advisor_contains(x: int, y: int, msg, *, has_video: bool = False) -> bool:
         return False
     x0, y0, w, h = advisor_rect(msg, has_video=has_video)
     return x0 <= x < x0 + w and y0 <= y < y0 + h
+
+
+def advisor_goto_rect(
+    msg, *, has_video: bool = False
+) -> tuple[int, int, int, int] | None:
+    """Hit row for C2.ENG [78]+1. EXE blit is (304, 368); host sits in the banner."""
+    if msg is None or not _advisor_has_goto(msg):
+        return None
+    x0, y0, w, h = advisor_rect(msg, has_video=has_video)
+    return (x0 + 8, y0 + h - 40, max(1, w - 16), 14)
+
+
+def advisor_goto_contains(x: int, y: int, msg, *, has_video: bool = False) -> bool:
+    box = advisor_goto_rect(msg, has_video=has_video)
+    if box is None:
+        return False
+    gx, gy, gw, gh = box
+    return gx <= x < gx + gw and gy <= y < gy + gh
 
 
 def blit_advisor_dialog(
@@ -422,6 +461,9 @@ def blit_advisor_dialog(
         eng, 78, 0, "Right Click to remove this message."
     )
     click = _eng(eng, 7, 11, "Click to Continue")
+    if _advisor_has_goto(msg):
+        goto = _eng(eng, 78, 1, "Go to Area?")
+        draw.text((x0 + 8, y0 + h - 40), goto[:40], fill=(255, 210, 120, 255), font=font)
     draw.text((x0 + 8, y0 + h - 26), click[:40], fill=(200, 190, 140, 255), font=font)
     draw.text((x0 + 8, y0 + h - 14), hint[:48], fill=(160, 150, 120, 255), font=font)
     composed = Image.alpha_composite(out, overlay).convert("RGB")
@@ -617,6 +659,17 @@ def selftest() -> list[str]:
         lines.append("FAIL  city key rotate < > missing")
     else:
         lines.append("ok    City Only key table has < > rotate")
+    if SLOT_DISASTERS == 4 and [sk for sk, _lab in DISASTER_ITEMS] != [
+        DIS_FIRE,
+        DIS_DISEASE,
+        DIS_BARBARIAN,
+        DIS_RIOT,
+    ]:
+        lines.append(f"FAIL  Disasters items {DISASTER_ITEMS!r}")
+    elif DISASTER_TITLE != "Disasters":
+        lines.append(f"FAIL  Disasters title {DISASTER_TITLE!r}")
+    else:
+        lines.append("ok    Disasters menu lists Fire / Disease / Barbarian / Riot")
     if report_line_at(_REPORT_X + 8, _REPORT_Y + 24, 3) != 0:
         lines.append("FAIL  report_line_at first line")
     elif report_line_at(_REPORT_X + 8, _REPORT_Y + 24 + 13, 2) != 1:
@@ -630,8 +683,24 @@ def selftest() -> list[str]:
     )
     if not advisor_contains(_ADV_X + 4, _ADV_Y + 4, demo):
         lines.append("FAIL  advisor hit")
+    elif advisor_goto_contains(_ADV_X + 12, _ADV_Y + 80, demo):
+        lines.append("FAIL  no-location banner has Go to Area")
     else:
         lines.append("ok    advisor dialog hitbox")
+    located = AdvisorMessage(
+        key="fire",
+        title="Fire Alert!",
+        body="x",
+        slot=81,
+        dismiss="Right Click",
+        tile_x=12,
+        tile_y=12,
+    )
+    box = advisor_goto_rect(located)
+    if box is None or not advisor_goto_contains(box[0] + 2, box[1] + 2, located):
+        lines.append(f"FAIL  Go to Area hitbox {box}")
+    else:
+        lines.append("ok    Go to Area hitbox on located banner")
     x0, y0, w, h = advisor_rect(demo, has_video=True)
     if h <= 152 or not advisor_contains(80 + 4, 96 + 4, demo, has_video=True):
         lines.append(f"FAIL  advisor video box {w}x{h}")

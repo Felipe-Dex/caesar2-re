@@ -176,6 +176,37 @@ PREFECTURE_FLAG_DEST: tuple[tuple[int, int], ...] = (
     (14, -15),
     (3, -6),
 )
+# 0x37EB9 dest (20, −2) / (10, −1) / (5, −1). CITYTOP[8] is the yellow
+# Disease skull (C2.ENG [80]); housing fire uses the same dest with the
+# flame loop 0–7 (water/rubble frames). Pin: CITYTOP1.PL8 + 37EB9 dest.
+FIRE_HOUSE_FRAME = 8  # leftover name — skull, not flames
+DISEASE_HOUSE_FRAME = 8
+FIRE_HOUSE_DEST: tuple[tuple[int, int], ...] = (
+    (20, -2),
+    (10, -1),
+    (5, -1),
+)
+DISEASE_HOUSE_DEST = FIRE_HOUSE_DEST
+# 0x37E3D water/rubble id<8: CITYTOP[(+9+phase)&7], dest LUT 0x99854.
+FIRE_WATER_FRAMES = 8
+FIRE_WATER_DEST: tuple[tuple[int, int], ...] = (
+    (0, 0),
+    (10, -3),
+    (21, -2),
+    (31, 3),
+    (44, 0),
+    (34, -5),
+    (16, 2),
+    (37, -3),
+    (28, -8),
+    (39, -3),
+    (22, -12),
+    (18, -6),
+    (36, -2),
+    (8, -3),
+    (37, 1),
+    (10, 2),
+)
 
 # Zoom-0 column of each 4-byte LUT record (variant*4 + (zoom>>1), zoom==0).
 # HOUSES1 0x97158 (174), BUILD1A 0x97410 (124), BUILD1B 0x97600 (164),
@@ -1285,6 +1316,89 @@ def prefecture_flag_dest(zoom: int = 0) -> tuple[int, int]:
     return PREFECTURE_FLAG_DEST[z]
 
 
+def tile_is_burning(tid: int, draw: int, timer: int) -> bool:
+    """69A37 leftover: housing / rubble +3 bit7 and +16 != 0.
+
+    Prefecture 0xE3 and aqueduct-over-road also use +3 bit7 as a graphic.
+    Those ids are not fire.
+    """
+    if not (draw & 0x80) or timer == 0:
+        return False
+    if tid < ID_WATER_MAX:
+        return True
+    return ID_HOUSING_LO <= tid <= ID_HOUSING_HI
+
+
+def fire_flag80_frame(tid: int, plus9: int, phase: int = 0) -> int:
+    """CITYTOP index: housing and water/rubble use the flame loop 0–7.
+
+    0x37EB9 wrote 8 for housing+bit7; that bitmap is the Disease skull.
+    Fire keeps dest (20, −2) and the water flame frames.
+    """
+    _ = tid
+    return (int(plus9) + int(phase)) & (FIRE_WATER_FRAMES - 1)
+
+
+def disease_flag80_frame() -> int:
+    """CITYTOP[8] yellow skull — 0x37EB9 housing overlay, C2.ENG [80]."""
+    return DISEASE_HOUSE_FRAME
+
+
+def disease_flag80_dest(zoom: int = 0) -> tuple[int, int]:
+    z = 0 if zoom < 0 else 2 if zoom > 2 else zoom
+    return DISEASE_HOUSE_DEST[z]
+
+
+def tile_is_diseased(tid: int, grade11: int, draw: int, timer: int) -> bool:
+    """Housing +11 0x30 leftover, not a 69A37 fire (timer / bit7)."""
+    if not (ID_HOUSING_LO <= tid <= ID_HOUSING_HI):
+        return False
+    if tile_is_burning(tid, draw, timer):
+        return False
+    return (grade11 & 0x30) == 0x30
+
+
+def fire_flag80_dest(tid: int, plus9: int, phase: int = 0, zoom: int = 0) -> tuple[int, int]:
+    z = 0 if zoom < 0 else 2 if zoom > 2 else zoom
+    if ID_HOUSING_LO <= tid <= ID_HOUSING_HI:
+        return FIRE_HOUSE_DEST[z]
+    idx = (int(plus9) + int(phase)) & 0xF
+    dx, dy = FIRE_WATER_DEST[idx]
+    if z == 1:
+        return dx // 2, dy // 2
+    if z == 2:
+        return dx // 4, dy // 4
+    return dx, dy
+
+
+def fire_flag80_tile_xy(city: CityMap) -> list[tuple[int, int]]:
+    """Burning housing / rubble cells for the live CITYTOP flame."""
+    out: list[tuple[int, int]] = []
+    tiles = city.tiles
+    for y in range(city.height):
+        row = y * ROW_STRIDE
+        for x in range(city.width):
+            off = row + x * TILE_STRIDE
+            if tile_is_burning(tiles[off], tiles[off + 3], tiles[off + 16]):
+                out.append((x, y))
+    return out
+
+
+def disease_flag80_tile_xy(city: CityMap) -> list[tuple[int, int]]:
+    """Housing with +11 0x30 leftover — CITYTOP[8] skull, not fire."""
+    out: list[tuple[int, int]] = []
+    tiles = city.tiles
+    for y in range(city.height):
+        row = y * ROW_STRIDE
+        for x in range(city.width):
+            off = row + x * TILE_STRIDE
+            if tile_is_diseased(
+                tiles[off], tiles[off + 11], tiles[off + 3], tiles[off + 16]
+            ):
+                out.append((x, y))
+    return out
+
+
 def prefecture_flag_tile_xy(city: CityMap) -> list[tuple[int, int]]:
     """0xE3 cells with +3 bit7 — looping CITYTOP flag while the building exists."""
     out: list[tuple[int, int]] = []
@@ -1441,6 +1555,65 @@ def _paint_prefecture_flag80(
     img.paste(spr, (sx + dx, sy + dy), spr)
 
 
+def _paint_fire_flag80(
+    img: Image.Image,
+    tile: Tile,
+    sx: int,
+    sy: int,
+    *,
+    zoom: int,
+    sheets: dict[str, Sequence[Image.Image]] | None,
+    overlay_phase: int = 0,
+) -> None:
+    """0x37E0F housing / water fire — CITYTOP[8] or (+9+phase)&7."""
+    if not tile_is_burning(tile.terrain_id, tile.draw, tile.unknown16):
+        return
+    if sheets is None:
+        return
+    citytop = sheets.get(PL8_CITYTOP)
+    if citytop is None:
+        return
+    frame = fire_flag80_frame(tile.terrain_id, tile.overlay_anim, overlay_phase)
+    if not (0 <= frame < len(citytop)):
+        return
+    dx, dy = fire_flag80_dest(
+        tile.terrain_id, tile.overlay_anim, overlay_phase, zoom
+    )
+    spr = citytop[frame]
+    if spr.mode != "RGBA":
+        spr = spr.convert("RGBA")
+    img.paste(spr, (sx + dx, sy + dy), spr)
+
+
+def _paint_disease_flag80(
+    img: Image.Image,
+    tile: Tile,
+    sx: int,
+    sy: int,
+    *,
+    zoom: int,
+    sheets: dict[str, Sequence[Image.Image]] | None,
+) -> None:
+    """CITYTOP[8] skull when +11 0x30 and the cell is not burning."""
+    if not tile_is_diseased(
+        tile.terrain_id, tile.housing_grade, tile.draw, tile.unknown16
+    ):
+        return
+    if sheets is None:
+        return
+    citytop = sheets.get(PL8_CITYTOP)
+    if citytop is None:
+        return
+    frame = disease_flag80_frame()
+    if not (0 <= frame < len(citytop)):
+        return
+    dx, dy = disease_flag80_dest(zoom)
+    spr = citytop[frame]
+    if spr.mode != "RGBA":
+        spr = spr.convert("RGBA")
+    img.paste(spr, (sx + dx, sy + dy), spr)
+
+
 def blit_prefecture_flags(
     img: Image.Image,
     city: CityMap,
@@ -1487,6 +1660,106 @@ def blit_prefecture_flags(
             zoom=z,
             sprite_tile=iso_paint_tile(city, px, py, facing),
             overlay_phase=overlay_phase,
+        )
+        n += 1
+    return n
+
+
+def blit_fire_flags(
+    img: Image.Image,
+    city: CityMap,
+    overlay_phase: int,
+    *,
+    zoom: int = 0,
+    cells: Sequence[tuple[int, int]] | None = None,
+    sheets: dict[str, Sequence[Image.Image]] | None = None,
+    cam_x: int = 0,
+    cam_y: int = 0,
+    facing: int = 0,
+) -> int:
+    """Re-blit burning housing / rubble so CITYTOP flames stay on the well."""
+    fires = cells if cells is not None else fire_flag80_tile_xy(city)
+    if not fires or sheets is None:
+        return 0
+    z = clamp_zoom(zoom)
+    tile_w, tile_h = iso_tile_size(z)
+    half_w, half_h = tile_w // 2, tile_h // 2
+    origin_x = (MAP_W - 1) * half_w
+    cityfixt = sheets.get(PL8_CITYFIXT)
+    vw, vh = img.size
+    n = 0
+    for px, py in fires:
+        if not (0 <= px < city.width and 0 <= py < city.height):
+            continue
+        dx, dy = world_to_draw(px, py, facing, width=city.width, height=city.height)
+        sx = int(round(origin_x + (dx - dy) * half_w - cam_x))
+        sy = int(round((dx + dy) * half_h - cam_y))
+        if sx + tile_w < 0 or sy + tile_h + 32 < 0 or sx >= vw or sy >= vh:
+            continue
+        world = city.tile(px, py)
+        _paint_iso_tile(
+            img,
+            world,
+            sx,
+            sy,
+            tile_w=tile_w,
+            tile_h=tile_h,
+            water_frame=0,
+            cityfixt=cityfixt,
+            sheets=sheets,
+            facing=facing,
+            zoom=z,
+            sprite_tile=iso_paint_tile(city, px, py, facing),
+            overlay_phase=overlay_phase,
+        )
+        n += 1
+    return n
+
+
+def blit_disease_flags(
+    img: Image.Image,
+    city: CityMap,
+    *,
+    zoom: int = 0,
+    cells: Sequence[tuple[int, int]] | None = None,
+    sheets: dict[str, Sequence[Image.Image]] | None = None,
+    cam_x: int = 0,
+    cam_y: int = 0,
+    facing: int = 0,
+) -> int:
+    """Re-blit diseased houses so CITYTOP[8] skulls stay on the well."""
+    sick = cells if cells is not None else disease_flag80_tile_xy(city)
+    if not sick or sheets is None:
+        return 0
+    z = clamp_zoom(zoom)
+    tile_w, tile_h = iso_tile_size(z)
+    half_w, half_h = tile_w // 2, tile_h // 2
+    origin_x = (MAP_W - 1) * half_w
+    cityfixt = sheets.get(PL8_CITYFIXT)
+    vw, vh = img.size
+    n = 0
+    for px, py in sick:
+        if not (0 <= px < city.width and 0 <= py < city.height):
+            continue
+        dx, dy = world_to_draw(px, py, facing, width=city.width, height=city.height)
+        sx = int(round(origin_x + (dx - dy) * half_w - cam_x))
+        sy = int(round((dx + dy) * half_h - cam_y))
+        if sx + tile_w < 0 or sy + tile_h + 32 < 0 or sx >= vw or sy >= vh:
+            continue
+        world = city.tile(px, py)
+        _paint_iso_tile(
+            img,
+            world,
+            sx,
+            sy,
+            tile_w=tile_w,
+            tile_h=tile_h,
+            water_frame=0,
+            cityfixt=cityfixt,
+            sheets=sheets,
+            facing=facing,
+            zoom=z,
+            sprite_tile=iso_paint_tile(city, px, py, facing),
         )
         n += 1
     return n
@@ -1562,6 +1835,23 @@ def _paint_iso_tile(
             zoom=zoom,
             sheets=sheets,
             overlay_phase=overlay_phase,
+        )
+        _paint_fire_flag80(
+            img,
+            tile,
+            sx,
+            sy,
+            zoom=zoom,
+            sheets=sheets,
+            overlay_phase=overlay_phase,
+        )
+        _paint_disease_flag80(
+            img,
+            tile,
+            sx,
+            sy,
+            zoom=zoom,
+            sheets=sheets,
         )
         return
     _draw_diamond(img, sx, sy, _fallback_color(tile), tile_w=tile_w, tile_h=tile_h)
@@ -2496,6 +2786,85 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  prefecture flag without +3 bit7 {no_flag}")
     else:
         lines.append("ok    prefecture roof flag loops CITYTOP 0x21/0x24")
+    if (
+        fire_flag80_frame(0x82, 0, 0) != 0
+        or fire_flag80_dest(0x82, 0, 0, 0) != (20, -2)
+        or fire_flag80_frame(0x05, 3, 1) != 4
+        or disease_flag80_frame() != DISEASE_HOUSE_FRAME
+        or not tile_is_burning(0x82, 0x80, 10)
+        or tile_is_burning(0xE3, 0x80, 0)
+        or tile_is_burning(0xD0, 0x80, 0)
+        or tile_is_burning(0x82, 0x80, 0)
+        or not tile_is_diseased(0x82, 0x30, 0, 0)
+        or tile_is_diseased(0x82, 0x30, 0x80, 10)
+    ):
+        lines.append("FAIL  fire/disease flag80 pin / leftover bit7")
+    else:
+        fire_tops = [Image.new("RGBA", (16, 16), (0, 0, 0, 0)) for _ in range(0x10)]
+        fire_tops[0] = Image.new("RGBA", (16, 16), (220, 40, 10, 255))
+        fire_tops[8] = Image.new("RGBA", (16, 16), (240, 220, 40, 255))
+        fire_houses = [
+            Image.new("RGBA", (ISO_W, ISO_H), (80, 60, 40, 255)) for _ in range(0x51)
+        ]
+        fire_sheets = {PL8_HOUSES1: fire_houses, PL8_CITYTOP: fire_tops}
+        raw = bytearray(TILE_BYTES)
+        raw[0] = 0x82
+        raw[3] = 0x80
+        raw[16] = 10
+        canvas = Image.new("RGBA", (160, 80), (*ISO_BG, 255))
+        _paint_iso_tile(
+            canvas,
+            Tile.unpack(bytes(raw)),
+            40,
+            40,
+            tile_w=ISO_W,
+            tile_h=ISO_H,
+            water_frame=0,
+            cityfixt=None,
+            sheets=fire_sheets,
+        )
+        flame = canvas.getpixel((40 + 20, 40 - 2))
+        leftover = bytearray(raw)
+        leftover[16] = 0
+        leftover[0] = 0xE3
+        leftover[4] = 0x50
+        quiet = Image.new("RGBA", (160, 80), (*ISO_BG, 255))
+        _paint_iso_tile(
+            quiet,
+            Tile.unpack(bytes(leftover)),
+            40,
+            40,
+            tile_w=ISO_W,
+            tile_h=ISO_H,
+            water_frame=0,
+            cityfixt=None,
+            sheets=fire_sheets,
+        )
+        no_flame = quiet.getpixel((40 + 20, 40 - 2))
+        sick = bytearray(TILE_BYTES)
+        sick[0] = 0x82
+        sick[11] = 0x30
+        skull_c = Image.new("RGBA", (160, 80), (*ISO_BG, 255))
+        _paint_iso_tile(
+            skull_c,
+            Tile.unpack(bytes(sick)),
+            40,
+            40,
+            tile_w=ISO_W,
+            tile_h=ISO_H,
+            water_frame=0,
+            cityfixt=None,
+            sheets=fire_sheets,
+        )
+        skull = skull_c.getpixel((40 + 20, 40 - 2))
+        if flame[:3] != (220, 40, 10):
+            lines.append(f"FAIL  housing fire CITYTOP flame pixel {flame}")
+        elif no_flame[:3] == (220, 40, 10):
+            lines.append("FAIL  prefecture leftover painted as fire")
+        elif skull[:3] != (240, 220, 40):
+            lines.append(f"FAIL  disease CITYTOP[8] skull pixel {skull}")
+        else:
+            lines.append("ok    housing fire flames 0–7; Disease CITYTOP[8] skull")
     f18 = [flag18.cityfixt_index(f) for f in range(WATER_FRAMES)]
     if f18 != [0x18 + CITYFIXT_TERRAIN_BIAS] * WATER_FRAMES:
         lines.append(f"FAIL  0x18 flag tile {f18}, want static grass")

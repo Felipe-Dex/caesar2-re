@@ -65,6 +65,7 @@ Load de `.SAV` **não mudou**: ainda começa no título; **3** entra no mapa.
 | **A** | 2 s `A01.RAW` (fora do mapa) |
 | clique na **sidebar direita** | paleta: Housing (Tent), Roads, Clear, Query; zoom ± |
 | clique no **minimapa** (poço `(478,48,162,160)`) | centra a câmara nesse tile; **não** rouba a paleta |
+| **Disasters** (barra de cima, City Only) | **Fire** = 69A37 + CITYTOP chamas 0–7 + vigile tipo 5; **Disease** = +11 `0x30` + CITYTOP[8] caveira + [80] (EAX `0x51`); **Barbarian** = Enemy tipo 3 no mapa (salta o gate 8 anos / 48 meses); **Riot** = overflow +11 numa casa 1×1 e type-7. Spawn real — sem só banner. Advisor **Go to Area?** `[78]+1` (58d31) centra a câmara no tile; City Only, sem mapa Career. [80] / [81] / [82] / [86] se o EXE os postaria |
 | clique no **mapa** | 1 tile (recusa rio); Query só lê |
 | **arrastar** com Housing / Clear | rectângulo; preview; carimba **só ao soltar**. Tendas: recusa o rect inteiro se o tesouro não chega para todas (6 cada) |
 | **arrastar** com Roads | linha **recta** (eixo dominante, sem L); ponte no rio recto; salta curvas; carimba ao soltar |
@@ -126,7 +127,7 @@ Cada fatia: **objetivo**, **depende de**, **não é Career**. Não avançar Care
 
 - **Objetivo:** depois de uma estrada + tenda, o pulso **pinta `+17`** (slots `0xA2–0xC1`, `0x430DA`) e **`+15`** (slots `0x76–0x8D`). Água (poço / fonte) entra no score. Imigrante `0x41DD4` (slots `0x9E–0xA1`) **ocupa** a tenda. Sem flood a casa não “vive”.
 - **Depende de:** (2) placement. Wipes `0x51–0x54` só quando o paint existir (hoje o host **não** wipe para não destruir SAV).
-- **Não Career:** spawn tipo 3 de **cidade** lê C2MODEL `[75:91]` só se 406≠0 — isso é City Only, mas é **inimigo**, não imigrante. Não abrir o ramo de invasão provincial.
+- **Não Career:** spawn tipo 3 de **cidade** lê C2MODEL `[75:91]` só se 406≠0 — isso é City Only, mas é **inimigo**, não imigrante. Host: `findings/city_enemy.md`. Não abrir o ramo de invasão provincial.
 
 ### 4. `economy_recompute` no wrap do mês
 

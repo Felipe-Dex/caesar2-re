@@ -22,11 +22,13 @@ from app.city_map import (
     MINIMAP_WELL,
     TILE_STRIDE,
     CityMap,
+    tile_is_burning,
 )
 from app.city_paint import (
     BATH_SPLASH_BIT,
     HOUSE_OCCUPANCY,
     HOUSE_SIZE,
+    ID_HOUSING_HI,
     ID_HOUSING_LO,
     ID_HOSPITAL,
     ID_LIBRARY,
@@ -73,7 +75,7 @@ OVERLAY_HELP: tuple[str, ...] = (
     "Shows property values across the city.",
     "Shows areas with access to water sources.",
     "Shows levels of security across the city.",
-    "Shows unrest / immigrant nibble on houses.",
+    "Shows unrest nibble on houses.",
     "Shows tax-collector coverage (+10 bits 0x0C).",
     "Shows entertainment coverage (+12).",
     "Shows education splash (+13 0x10/0x20).",
@@ -302,7 +304,7 @@ def _paint_security(tid: int, _flags: int, cov10: int, flood17: int) -> int:
 
 
 def _paint_unrest(grade11: int) -> int:
-    # 0x3EA8E: +11 lo-nibble (immigrant / unrest). 0 empty; ≥11 / ≥5 / else.
+    # 0x3EA8E: +11 lo-nibble (Unrest / riot). 0 empty; ≥11 / ≥5 / else.
     nibble = grade11 & 0x0F
     if nibble == 0:
         return 0
@@ -872,12 +874,13 @@ def query_place(city: CityMap, x: int, y: int, eng=None) -> PlaceInfo:
                         "this dwelling's ability to grow further.",
                     )
                 )
-    if t.draw & 0x80:
-        lines.append(f"fire risk  +3 bit7  timer +16={t.unknown16}")
-    elif t.unknown16:
-        lines.append(f"fire timer +16={t.unknown16}")
-    else:
-        lines.append("fire risk none")
+    if tile_is_burning(tid, t.draw, t.unknown16):
+        lines.append(f"on fire  timer +16={t.unknown16}")
+    elif ID_HOUSING_LO <= tid <= ID_HOUSING_HI:
+        if t.unknown16:
+            lines.append(f"fire timer +16={t.unknown16}")
+        else:
+            lines.append("fire risk none")
     return PlaceInfo(x, y, name, tid, t.flags, tuple(lines))
 
 
@@ -1463,6 +1466,25 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  query house risk {house.lines}")
     else:
         lines.append("ok    query housing workers/water/risk")
+    poff = city.offset(2, 0)
+    city.tiles[poff] = 0xE3
+    city.tiles[poff + 3] = 0x80
+    city.tiles[poff + 4] = 0x50
+    pref_q = query_place(city, 2, 0)
+    pjoin = " ".join(pref_q.lines)
+    if "on fire" in pjoin or "fire risk" in pjoin:
+        lines.append(f"FAIL  query prefecture treated as fire {pref_q.lines}")
+    else:
+        lines.append("ok    query prefecture +3 bit7 is not fire")
+    city.tiles[hoff + 3] = 0x80
+    city.tiles[hoff + 16] = 10
+    burn_q = query_place(city, 1, 0)
+    if "on fire" not in " ".join(burn_q.lines):
+        lines.append(f"FAIL  query burning house {burn_q.lines}")
+    else:
+        lines.append("ok    query painted ignite is on fire")
+    city.tiles[hoff + 3] = 0
+    city.tiles[hoff + 16] = 0
     # Screenshot bugs: +13 0x01 is fountain (not primitive); +12 51 = 0x33 → 6.
     city.tiles[hoff + 13] = 0x01
     city.tiles[hoff + 12] = 51

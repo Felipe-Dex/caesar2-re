@@ -8,18 +8,22 @@ bar). [35]+26 ``Idle Plebs`` is the Forum labor-row label ([36]+19), not
 a HUD toast. The red bar the original shouts — same phrase as unused.wav
 ``0x90448`` — is ``Plebs are needed!``. Fire [81] only after a real 69A37
 housing ignite (timer 10), not leftover +3 bit7 / +11 0x30.
+Rioter spawn posts [86] Rioting! (EAX=0x57) when 41DD4 type-7 lands.
+City Only type-3 spawn (0x52828) posts [82] The City Is Attacked!
+(EAX=0x53). Disease [80] EAX=0x51 when +11 0x30 leftover (0x44907).
+Career provincial [90–95] / Emperor [115]+ stay skipped.
 
-City Only only. Career banners (Emperor letters [115]+, invasion [82]/[90–95],
-cohorts, Empire Expands, Stern Warning) stay skipped. C2.ENG [60] is the
-Query structure pack (title “NO Land Value”); [60]+4 “NO Water Supply” is
-overlay text, not a 58c87 city-map banner.
+City Only only. Career banners (Emperor letters [115]+, provincial
+invasion [90–95], cohorts, Empire Expands, Stern Warning) stay skipped.
+C2.ENG [60] is the Query structure pack (title “NO Land Value”);
+[60]+4 “NO Water Supply” is overlay text, not a 58c87 city-map banner.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from app.city_map import MAP_H, MAP_W, TILE_STRIDE
+from app.city_map import MAP_H, MAP_W, TILE_STRIDE, tile_is_burning, tile_is_diseased
 from app.unlocks import POP_UNLOCK
 
 # FUN_00058c87 depth.
@@ -60,14 +64,37 @@ POP_MILESTONE: tuple[tuple[int, int], ...] = (
 _FB = {
     7: {11: "Click to Continue", 14: "Need More Plebs!!!"},
     35: {26: "Idle Plebs"},
-    78: {0: "Right Click to remove this message."},
+    78: {0: "Right Click to remove this message.", 1: "Go to Area?"},
     79: {
         0: "Hail",
         1: "It's time to build your city!  Remember that Temples guard the precious Denarii in your treasury.",
     },
+    80: {
+        0: "Disease!",
+        1: (
+            "Due to poor sanitation and lack of hospital coverage, an epidemic "
+            "has broken out in the city.  Isolate the area to prevent contagion, "
+            "but remember -- an ounce of prevention equals a pound of cure!"
+        ),
+    },
     81: {
         0: "Fire Alert!",
         1: "A fire has broken out somewhere in the city! It will quickly spread to adjacent buildings, unless contained or put out by vigiles.",
+    },
+    82: {
+        0: "The City Is Attacked!",
+        1: (
+            "Enemies have reached the city -- it is sure to be sacked!  "
+            "City walls will only keep them at bay for a limited time -- "
+            "soldiers will have to meet the threat!"
+        ),
+    },
+    86: {
+        0: "Rioting!",
+        1: (
+            "Mobs are forming in parts of the city.  Regardless of the cause "
+            "-- high taxes?  Conscription?  Unrest? -- their threat is clear."
+        ),
     },
     84: {
         0: "Services Cut",
@@ -124,13 +151,23 @@ _FB = {
 
 @dataclass(frozen=True)
 class AdvisorMessage:
-    """One 58c87 / confirm-pack line. Click or right-click dismisses."""
+    """One 58c87 / confirm-pack line. Click or right-click dismisses.
+
+    ``tile_x`` / ``tile_y`` are the 58c87 EDX tile (Go to Area? [78]+1).
+    City Only pans the city camera — not Career province.
+    """
 
     key: str
     title: str
     body: str
     slot: int  # official C2.ENG (EAX − 1). 7 = confirm pack.
     dismiss: str
+    tile_x: int | None = None
+    tile_y: int | None = None
+
+    @property
+    def has_goto(self) -> bool:
+        return self.tile_x is not None and self.tile_y is not None
 
 
 @dataclass
@@ -142,6 +179,8 @@ class MessageWatch:
     construction_short: bool = False
     idle_short: bool = False
     on_fire: bool = False
+    on_disease: bool = False
+    on_riot: bool = False
     broke: bool = False
     hail_done: bool = False
     last_ready: int = -1
@@ -283,6 +322,10 @@ def seed_watch_from_city(sim, tiles: bytearray) -> MessageWatch:
     watch.on_fire = fires > 0
     if fires > 0:
         watch.seen.add("fire")
+    sick = _count_diseased(tiles)
+    watch.on_disease = sick > 0
+    if sick > 0:
+        watch.seen.add("disease")
     watch.construction_short = need_more
     if need_more:
         watch.seen.add("need_plebs")
@@ -304,7 +347,9 @@ def seed_watch_from_city(sim, tiles: bytearray) -> MessageWatch:
     return watch
 
 
-def _make(eng, key: str, slot: int, *, extra: str = "") -> AdvisorMessage:
+def _make(
+    eng, key: str, slot: int, *, extra: str = "", tile_xy: tuple[int, int] | None = None
+) -> AdvisorMessage:
     title = _line(eng, slot, 0)
     if slot == 7:
         title = _line(eng, 7, 14)
@@ -312,9 +357,72 @@ def _make(eng, key: str, slot: int, *, extra: str = "") -> AdvisorMessage:
     if extra:
         body = f"{body}  {extra}".rstrip()
     dismiss = _line(eng, 78, 0)
+    tx = ty = None
+    if tile_xy is not None:
+        tx, ty = int(tile_xy[0]), int(tile_xy[1])
     return AdvisorMessage(
-        key=key, title=title, body=body, slot=slot, dismiss=dismiss
+        key=key,
+        title=title,
+        body=body,
+        slot=slot,
+        dismiss=dismiss,
+        tile_x=tx,
+        tile_y=ty,
     )
+
+
+def goto_label(eng=None) -> str:
+    """C2.ENG [78]+1 — 58d31 gadget when 58c87 EBX ≠ 0."""
+    return _line(eng, 78, 1)
+
+
+def event_tile_xy(tiles: bytearray, *, kind: str) -> tuple[int, int] | None:
+    """First city tile for a disaster banner (58c87 EDX stand-in)."""
+    need = MAP_W * MAP_H * TILE_STRIDE
+    if len(tiles) < need:
+        return None
+    for y in range(MAP_H):
+        for x in range(MAP_W):
+            off = _off(x, y)
+            tid = tiles[off]
+            if kind == "fire" and _is_burning(tid, tiles[off + 3], tiles[off + 16]):
+                return x, y
+            if kind == "disease" and tile_is_diseased(
+                tid, tiles[off + 11], tiles[off + 3], tiles[off + 16]
+            ):
+                return x, y
+    return None
+
+
+def _count_diseased(tiles: bytearray) -> int:
+    need = MAP_W * MAP_H * TILE_STRIDE
+    if len(tiles) < need:
+        return 0
+    n = 0
+    for y in range(MAP_H):
+        for x in range(MAP_W):
+            off = _off(x, y)
+            if tile_is_diseased(
+                tiles[off], tiles[off + 11], tiles[off + 3], tiles[off + 16]
+            ):
+                n += 1
+    return n
+
+
+def _resolve_event_xy(
+    sim,
+    tiles: bytearray,
+    kind: str,
+    event_xy: tuple[int, int] | None,
+) -> tuple[int, int] | None:
+    """58c87 EDX stand-in: explicit xy, then sim.event_*, then first matching tile."""
+    if event_xy is not None:
+        return int(event_xy[0]), int(event_xy[1])
+    sx = int(getattr(sim, "event_x", -1))
+    sy = int(getattr(sim, "event_y", -1))
+    if sx >= 0 and sy >= 0:
+        return sx, sy
+    return event_tile_xy(tiles, kind=kind)
 
 
 def _off(x: int, y: int) -> int:
@@ -327,11 +435,7 @@ def _is_burning(tid: int, draw: int, timer: int) -> bool:
     +3 ``0x80`` is also prefecture, aqueduct-over-road, and stamp leftovers
     on ``0x9E–0xA1`` villas — those have timer 0 and are not a fire.
     """
-    if not (draw & DRAW_FIRE) or timer == 0:
-        return False
-    if tid < 8:
-        return True
-    return ID_HOUSING_LO <= tid <= ID_HOUSING_HI
+    return tile_is_burning(tid, draw, timer)
 
 
 def _city_counts(tiles: bytearray) -> tuple[int, int, int, int]:
@@ -407,6 +511,10 @@ def scan_city_messages(
     houses_up: int = 0,
     month_wrapped: bool = False,
     fire_ignited: int = 0,
+    rioters_spawned: int = 0,
+    attack_spawned: int = 0,
+    disease_infected: int = 0,
+    event_xy: tuple[int, int] | None = None,
 ) -> list[str]:
     """Push City Only banners. Career / Emperor packs are not enqueued."""
     fired: list[str] = []
@@ -423,6 +531,7 @@ def scan_city_messages(
     pop = int(getattr(sim, "population", 0))
     peak = peak_population(sim)
     _houses, temples, fires, _ = _city_counts(tiles)
+    sick = _count_diseased(tiles)
     staffed = _staffed(sim)
     ready = max(0, int(getattr(sim, "plebs_ready", 0)))
     need_more, idle_short = _labor_toasts(sim)
@@ -452,9 +561,33 @@ def scan_city_messages(
     # Leftover +3 bit7 / +11 0x30 / fire_ignited-without-paint stay quiet.
     if fire_ignited > 0 and fires > 0 and not watch.on_fire:
         watch.seen.discard("fire")
-        if enqueue(sim, _make(eng, "fire", 81)):
+        fire_xy = _resolve_event_xy(sim, tiles, "fire", event_xy)
+        if enqueue(sim, _make(eng, "fire", 81, tile_xy=fire_xy)):
             fired.append("fire")
     watch.on_fire = fires > 0
+
+    # 58c87 EAX=0x51 → official slot 80. +11 0x30 leftover, not fire.
+    if disease_infected > 0 and sick > 0 and not watch.on_disease:
+        watch.seen.discard("disease")
+        sick_xy = _resolve_event_xy(sim, tiles, "disease", event_xy)
+        if enqueue(sim, _make(eng, "disease", 80, tile_xy=sick_xy)):
+            fired.append("disease")
+    watch.on_disease = sick > 0
+
+    # 58c87 EAX=0x57 → official slot 86 after a type-7 spawn (unless
+    # [0x117AA3]). Host posts once per session, same seen-key as fire.
+    if rioters_spawned > 0 and "riot" not in watch.seen:
+        riot_xy = _resolve_event_xy(sim, tiles, "riot", event_xy)
+        if enqueue(sim, _make(eng, "riot", 86, tile_xy=riot_xy)):
+            fired.append("riot")
+        watch.on_riot = True
+
+    # 58c87 EAX=0x53 → official slot 82 after 0x536E2 actually spawned.
+    if attack_spawned > 0:
+        watch.seen.discard("attack")
+        atk_xy = _resolve_event_xy(sim, tiles, "attack", event_xy)
+        if enqueue(sim, _make(eng, "attack", 82, tile_xy=atk_xy)):
+            fired.append("attack")
 
     # Rising edge only. Construction 20/20 and leftover idle with every
     # slider at need stay quiet. Overlay / clock blit must not re-post.
@@ -681,10 +814,97 @@ def selftest() -> list[str]:
     sim = SimState(city_only=1, population=8, treasury=100, fire_ignited=1)
     init_city_only_labor(sim)
     got = scan_city_messages(sim, tiles2, fire_ignited=1)
+    fire_msg = next((m for m in ensure_watch(sim).pending if m.key == "fire"), None)
     if "fire" not in got:
         lines.append(f"FAIL  fire {got}")
+    elif fire_msg is None or (fire_msg.tile_x, fire_msg.tile_y) != (12, 12):
+        lines.append(f"FAIL  fire goto {getattr(fire_msg, 'tile_x', None)}")
     else:
         lines.append("ok    Fire Alert! on ignite")
+
+    sim = SimState(city_only=1, population=8, treasury=100)
+    init_city_only_labor(sim)
+    got = scan_city_messages(sim, tiles2, rioters_spawned=1, event_xy=(12, 12))
+    msg = next((m for m in ensure_watch(sim).pending if m.key == "riot"), None)
+    if "riot" not in got or msg is None or msg.slot != 86:
+        lines.append(f"FAIL  riot {got} slot={getattr(msg, 'slot', None)}")
+    elif not msg.has_goto:
+        lines.append("FAIL  riot missing Go to Area tile")
+    else:
+        lines.append("ok    Rioting! [86] after type-7 spawn")
+    got2 = scan_city_messages(sim, tiles2, rioters_spawned=1)
+    if "riot" in got2:
+        lines.append(f"FAIL  riot re-post {got2}")
+    else:
+        lines.append("ok    Rioting! does not re-queue")
+
+    sim = SimState(city_only=1, population=8, treasury=100)
+    init_city_only_labor(sim)
+    got = scan_city_messages(sim, tiles2, attack_spawned=1, event_xy=(12, 12))
+    msg = next((m for m in ensure_watch(sim).pending if m.key == "attack"), None)
+    if "attack" not in got or msg is None or msg.slot != 82:
+        lines.append(f"FAIL  attack {got} slot={getattr(msg, 'slot', None)}")
+    elif not msg.has_goto:
+        lines.append("FAIL  attack missing Go to Area tile")
+    else:
+        lines.append("ok    The City Is Attacked! [82] after type-3 spawn")
+    career = SimState(city_only=0, population=8, treasury=100)
+    career.msg_watch = MessageWatch()
+    if scan_city_messages(career, tiles2, attack_spawned=1):
+        lines.append("FAIL  Career must skip [82]")
+    else:
+        lines.append("ok    Career skips City Only [82]")
+
+    tiles_dis = bytearray(MAP_W * MAP_H * TILE_STRIDE)
+    doff = 11 * MAP_W * TILE_STRIDE + 11 * TILE_STRIDE
+    tiles_dis[doff] = 0x82
+    tiles_dis[doff + 5] = 0
+    tiles_dis[doff + 11] = 0x30
+    sim = SimState(city_only=1, population=8, treasury=100, disease_infected=1)
+    init_city_only_labor(sim)
+    got = scan_city_messages(sim, tiles_dis, disease_infected=1)
+    dmsg = next((m for m in ensure_watch(sim).pending if m.key == "disease"), None)
+    if "disease" not in got or dmsg is None or dmsg.slot != 80:
+        lines.append(f"FAIL  disease {got} slot={getattr(dmsg, 'slot', None)}")
+    elif (dmsg.tile_x, dmsg.tile_y) != (11, 11) or dmsg.title != "Disease!":
+        lines.append(f"FAIL  disease goto/title {dmsg.title!r} xy=({dmsg.tile_x},{dmsg.tile_y})")
+    else:
+        lines.append("ok    Disease! [80] on +11 0x30 leftover")
+    if scan_city_messages(sim, tiles_dis, disease_infected=1):
+        lines.append("FAIL  disease re-post while still sick")
+    else:
+        lines.append("ok    Disease! does not re-queue while sick")
+    both = bytearray(MAP_W * MAP_H * TILE_STRIDE)
+    boff = 13 * MAP_W * TILE_STRIDE + 13 * TILE_STRIDE
+    both[boff] = 0x82
+    both[boff + 3] = DRAW_FIRE
+    both[boff + 11] = 0x30
+    both[boff + 16] = 10
+    sim = SimState(city_only=1, population=8, treasury=100)
+    init_city_only_labor(sim)
+    got = scan_city_messages(sim, both, disease_infected=1, fire_ignited=1)
+    if "disease" in got or "fire" not in got:
+        lines.append(f"FAIL  burning +11 0x30 is fire not disease {got}")
+    else:
+        lines.append("ok    burning house is Fire Alert, not Disease")
+    hail_sim = SimState(city_only=1, population=0, treasury=12000)
+    init_city_only_labor(hail_sim)
+    scan_city_messages(hail_sim, tiles_dis, hail=True)
+    hail = next((m for m in ensure_watch(hail_sim).pending if m.key == "hail"), None)
+    if hail is None or hail.has_goto:
+        lines.append(f"FAIL  hail must omit Go to Area {hail}")
+    else:
+        lines.append("ok    Hail has no Go to Area")
+    if goto_label() != "Go to Area?":
+        lines.append(f"FAIL  [78]+1 fallback {goto_label()!r}")
+    else:
+        lines.append("ok    [78]+1 Go to Area?")
+    career = SimState(city_only=0, population=8, treasury=100)
+    career.msg_watch = MessageWatch()
+    if scan_city_messages(career, tiles_dis, disease_infected=1):
+        lines.append("FAIL  Career must skip [80]")
+    else:
+        lines.append("ok    Career skips City Only [80]")
 
     tiles_flag = bytearray(MAP_W * MAP_H * TILE_STRIDE)
     sim = SimState(city_only=1, population=8, treasury=100)
@@ -799,7 +1019,7 @@ def selftest() -> list[str]:
         lines.append("ok    No Denarii! when treasury < 0")
 
     msg = pop_message(sim)
-    if msg is None or msg.slot not in (7, 35, 79, 81, 84, 88, 97, 100, 103, 114):
+    if msg is None or msg.slot not in (7, 35, 79, 81, 82, 84, 86, 88, 97, 100, 103, 114):
         lines.append(f"FAIL  pop_message {msg}")
     else:
         lines.append("ok    queue pop + click-dismiss fields")
@@ -847,10 +1067,38 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  [35]+26 {eng.skip(35, 26)!r}")
     else:
         lines.append("ok    C2.ENG [7]+14 title / [35]+26 Forum row / HUD Plebs are needed!")
+    if eng.skip(80, 0) != "Disease!":
+        lines.append(f"FAIL  [80] {eng.skip(80, 0)!r}")
+    else:
+        lines.append("ok    C2.ENG Disease!")
+    if eng.skip(78, 1) != "Go to Area?":
+        lines.append(f"FAIL  [78]+1 {eng.skip(78, 1)!r}")
+    else:
+        lines.append("ok    C2.ENG [78]+1 Go to Area?")
     if eng.skip(81, 0) != "Fire Alert!":
         lines.append(f"FAIL  [81] {eng.skip(81, 0)!r}")
     else:
         lines.append("ok    C2.ENG Fire Alert!")
+    if eng.skip(82, 0) != "The City Is Attacked!":
+        lines.append(f"FAIL  [82] {eng.skip(82, 0)!r}")
+    else:
+        lines.append("ok    C2.ENG The City Is Attacked!")
+    if eng.skip(66, 2) != " - Enemy":
+        lines.append(f"FAIL  [66]+2 {eng.skip(66, 2)!r}")
+    else:
+        lines.append("ok    C2.ENG [66]+2 Enemy")
+    if eng.skip(86, 0) != "Rioting!":
+        lines.append(f"FAIL  [86] {eng.skip(86, 0)!r}")
+    else:
+        lines.append("ok    C2.ENG Rioting!")
+    if eng.skip(66, 6) != " - Rioter":
+        lines.append(f"FAIL  [66]+6 {eng.skip(66, 6)!r}")
+    else:
+        lines.append("ok    C2.ENG [66]+6 Rioter")
+    if eng.skip(52, 4) != "Unrest":
+        lines.append(f"FAIL  [52]+4 {eng.skip(52, 4)!r}")
+    else:
+        lines.append("ok    C2.ENG [52]+4 Unrest")
     if eng.skip(114, 0) != "New Structure Available":
         lines.append(f"FAIL  [114] {eng.skip(114, 0)!r}")
     else:

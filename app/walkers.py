@@ -48,13 +48,14 @@ SAV_CHUNK = 8
 
 TYPE_MIN = 1
 TYPE_MAX = 7
+TYPE_RIOTER = 7  # C2.ENG [66]+6 " - Rioter"
 
 # walker_type_fn 0x45AFE..0x45D0A → walker_set_sprite(base).
 # LTLMEN1B rows (sprite.y): 6=201, 2=226, 1=251, 5=276, 4=301, 7=326, 3=351.
 TYPE_LTLMEN_BASE: dict[int, int] = {
     1: 0x36,  # 54
     2: 0x1B,  # 27
-    3: 0xA6,  # 166
+    3: 0xA6,  # 166 City Only Enemy — 0x52828 edge spawn, not C3 wolves
     4: 0x6E,  # 110
     5: 0x51,  # 81
     6: 0x00,
