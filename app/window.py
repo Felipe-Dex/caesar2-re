@@ -40,6 +40,11 @@ from app.forum import (
     open_forum,
 )
 from app.menus import (
+    DIS_BARBARIAN,
+    DIS_FIRE,
+    DIS_RIOT,
+    DISASTER_ITEMS,
+    DISASTER_TITLE,
     FILE_LOAD,
     FILE_NEW,
     FILE_QUIT,
@@ -60,6 +65,7 @@ from app.menus import (
     OPT_MUSIC,
     OPT_SOUND,
     OPT_YEAR,
+    SLOT_DISASTERS,
     SLOT_FILE,
     SLOT_HELP,
     SLOT_OPTIONS,
@@ -154,7 +160,7 @@ HUD_TREASURY_NEG = (255, 120, 90, 255)
 # Labor-short HUD: red ``Plebs are needed!`` (unused.wav), not cyan debug.
 HUD_STATUS_CYAN = (180, 220, 255, 255)
 HUD_STATUS_RED = (255, 64, 48, 255)
-# C2.ENG [0] File · [1] Options · [2] Speed · [3] Help
+# C2.ENG [0] File · [1] Options · [2] Speed · [3] Help · host Disasters
 _MENU_SLOTS = (0, 1, 2, 3)
 _MENU_FALLBACK = ("File", "Options", "Speed", "Help")
 _MENU_ITEM_SKIP = {
@@ -518,7 +524,10 @@ def top_menu_layout(
     options: HostOptions | None = None,
     sim=None,
 ) -> list[tuple[int, str, tuple[int, int, int, int], list[tuple[int, str]]]]:
-    """File / Options / Speed / Help plus packed dropdown rows (C2.ENG)."""
+    """File / Options / Speed / Help plus packed dropdown rows (C2.ENG).
+
+    City Only also appends host **Disasters** (Fire / Barbarian / Riot).
+    """
     x = _MENU_X0
     rows: list[tuple[int, str, tuple[int, int, int, int], list[tuple[int, str]]]] = []
     for i, slot in enumerate(_MENU_SLOTS):
@@ -541,6 +550,17 @@ def top_menu_layout(
         ]
         rows.append((slot, label, (x, 0, w, TOP_BAR_H), items))
         x += w + _MENU_GAP
+    if getattr(sim, "city_only", 0):
+        tw, _th = _text_size(font, DISASTER_TITLE)
+        w = max(28, tw + 10)
+        rows.append(
+            (
+                SLOT_DISASTERS,
+                DISASTER_TITLE,
+                (x, 0, w, TOP_BAR_H),
+                list(DISASTER_ITEMS),
+            )
+        )
     return rows
 
 
@@ -633,7 +653,7 @@ def compose_city_hud(
     report: MenuReport | None = None,
     extra_alert: bool = False,
 ) -> Image.Image:
-    """File/Options/Speed/Help + date + Dn on the INT_CITY top bar (0x6189D)."""
+    """File/Options/Speed/Help/Disasters + date + Dn on the INT_CITY top bar."""
     out = frame.convert("RGBA")
     fw, fh = out.size
     overlay = Image.new("RGBA", (fw, fh), (0, 0, 0, 0))
@@ -1500,6 +1520,67 @@ def show(ctx: BootContext, *, game: Path) -> None:
         )
         _play_labor_sfx()
         _pump_advisor()
+
+    def _apply_disaster(skip: int) -> None:
+        """Disasters menu — real 69A37 / type-3 / type-7 paths. City Only."""
+        from app.city_sim import debug_ignite_house
+        from app.messages import scan_city_messages
+        from app.walker_tick import city_only_try_invasion, debug_force_riot
+        from app.walkers import drawable_walkers
+
+        if not getattr(ctx.sim, "city_only", 0):
+            blit("Disasters — City Only only")
+            return
+        tiles = ctx.city.tiles
+        extra = "Disasters"
+        houses_changed = False
+        if skip == DIS_FIRE:
+            x, y, n = debug_ignite_house(tiles, ctx.sim)
+            if n <= 0:
+                blit("Disasters · Fire — no housing origin")
+                return
+            scan_city_messages(
+                ctx.sim, tiles, ctx.eng, fire_ignited=int(ctx.sim.fire_ignited)
+            )
+            extra = f"Disasters · Fire — 69A37 at ({x},{y})"
+            houses_changed = True
+        elif skip == DIS_BARBARIAN:
+            n = city_only_try_invasion(
+                ctx.sim,
+                tiles,
+                ctx.walkers,
+                years_played=99,
+                force=True,
+            )
+            if n <= 0:
+                blit("Disasters · Barbarian — spawn failed")
+                return
+            scan_city_messages(
+                ctx.sim, tiles, ctx.eng, attack_spawned=n
+            )
+            ctx.sim.attack_spawned = 0
+            extra = f"Disasters · Barbarian — {n} Enemy type 3"
+        elif skip == DIS_RIOT:
+            x, y, n = debug_force_riot(tiles, ctx.walkers, ctx.sim)
+            if n <= 0:
+                blit("Disasters · Riot — no 1x1 house")
+                return
+            scan_city_messages(
+                ctx.sim, tiles, ctx.eng, rioters_spawned=n
+            )
+            extra = f"Disasters · Riot — type 7 at ({x},{y})"
+            houses_changed = True
+        else:
+            blit(f"{DISASTER_TITLE} — ainda não")
+            return
+        remember_rivers()
+        if houses_changed:
+            _invalidate_live()
+        else:
+            _invalidate_live_only()
+        _play_labor_sfx()
+        _pump_advisor()
+        blit(f"{extra}  drawn={len(drawable_walkers(ctx.walkers))}")
 
     def _refresh_after_sim(*, houses_changed: bool) -> None:
         """Rebuild visible diamonds only when buildings changed."""
@@ -2528,6 +2609,9 @@ def show(ctx: BootContext, *, game: Path) -> None:
                         game, HELP_TOPIC_ICONS, _eng_skip(ctx.eng, 3, 4, "Icons")
                     )
                 )
+                return True
+            if slot == SLOT_DISASTERS:
+                _apply_disaster(skip)
                 return True
             blit(f"{lab} — ainda não")
             return True

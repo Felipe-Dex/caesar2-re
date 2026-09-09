@@ -838,6 +838,50 @@ def tile_ignite_building(tiles: bytearray, x: int, y: int) -> int:
     return n
 
 
+def debug_ignite_house(
+    tiles: bytearray, state: SimState | None = None
+) -> tuple[int, int, int]:
+    """Disasters→Fire: 69A37 on a housing origin. Prefer no prefect.
+
+    Same paint as uncovered risk ignite (timer 10, +3 bit7). Skips an
+    already-burning leftover. Returns (x, y, n_tiles) or (-1, -1, 0).
+    """
+    uncovered: tuple[int, int, int] | None = None
+    covered: tuple[int, int, int] | None = None
+    for y in range(MAP_H):
+        for x in range(MAP_W):
+            off = _off(x, y)
+            if tiles[off + 5] & 0xF:
+                continue
+            tid = tiles[off]
+            if not (ID_HOUSING_LO <= tid <= ID_HOUSING_HI):
+                continue
+            if (tiles[off + 3] & DRAW_FIRE) and tiles[off + 16] != 0:
+                continue
+            cell = (x, y, off)
+            if tiles[off + 10] & 0x30:
+                if covered is None:
+                    covered = cell
+            else:
+                uncovered = cell
+                break
+        if uncovered is not None:
+            break
+    pick = uncovered or covered
+    if pick is None:
+        return -1, -1, 0
+    x, y, off = pick
+    n = tile_ignite_building(tiles, x, y)
+    if (
+        state is not None
+        and n
+        and (tiles[off + 3] & DRAW_FIRE)
+        and tiles[off + 16] == FIRE_TIMER_IGNITE
+    ):
+        state.fire_ignited = 1
+    return x, y, n
+
+
 def tile_collapse_rubble(
     tiles: bytearray, x: int, y: int, *, leave_fire: bool = True
 ) -> int:
@@ -2642,6 +2686,29 @@ def selftest() -> list[str]:
     put_out = saw and did and (tiles[foff + 3] & DRAW_FIRE) == 0
     lines.append(
         f"e2e vigile extinguish rubble: {'ok' if put_out else 'FAIL'}"
+    )
+
+    tiles = _blank_tiles()
+    uoff = _off(8, 8)
+    coff = _off(20, 8)
+    tiles[uoff] = 0x82
+    tiles[uoff + 1] = 0x01
+    tiles[coff] = 0x83
+    tiles[coff + 1] = 0x01
+    tiles[coff + 10] = 0x30
+    st = SimState(city_only=1)
+    hx, hy, hn = debug_ignite_house(tiles, st)
+    ok = (
+        (hx, hy) == (8, 8)
+        and hn >= 1
+        and tiles[uoff + 16] == FIRE_TIMER_IGNITE
+        and tiles[uoff + 3] & DRAW_FIRE
+        and st.fire_ignited == 1
+        and not (tiles[coff + 3] & DRAW_FIRE)
+    )
+    lines.append(
+        f"Disasters Fire prefers uncovered: {'ok' if ok else 'FAIL'} "
+        f"xy=({hx},{hy}) ign={st.fire_ignited} +16={tiles[uoff + 16]}"
     )
 
     tiles = _blank_tiles()

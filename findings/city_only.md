@@ -65,6 +65,7 @@ Load de `.SAV` **não mudou**: ainda começa no título; **3** entra no mapa.
 | **A** | 2 s `A01.RAW` (fora do mapa) |
 | clique na **sidebar direita** | paleta: Housing (Tent), Roads, Clear, Query; zoom ± |
 | clique no **minimapa** (poço `(478,48,162,160)`) | centra a câmara nesse tile; **não** rouba a paleta |
+| **Disasters** (barra de cima, City Only) | **Fire** = 69A37 numa origem de casa (sem prefect se houver); **Barbarian** = um Enemy tipo 3 (salta o gate 8 anos / 48 meses); **Riot** = overflow +11 numa casa 1×1 e `unrest_spawn_rows`. Caminhos reais — sem sprites fake. Clique `poscl.wav`. [81] / [82] / [86] se o EXE os postaria |
 | clique no **mapa** | 1 tile (recusa rio); Query só lê |
 | **arrastar** com Housing / Clear | rectângulo; preview; carimba **só ao soltar**. Tendas: recusa o rect inteiro se o tesouro não chega para todas (6 cada) |
 | **arrastar** com Roads | linha **recta** (eixo dominante, sem L); ponte no rio recto; salta curvas; carimba ao soltar |

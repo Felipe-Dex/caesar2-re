@@ -1,5 +1,8 @@
 """City Only top menu — File / Options / Speed / Help (C2.ENG [0]…[3]).
 
+Host also adds **Disasters** (not C2.ENG) so testers can force Fire /
+Barbarian / Riot onto the real walker and 69A37 paths.
+
 Actions match 1.1A City Only strings. No Career empire / Forum PERSONAL.
 File→Save always lists `{repo}/sav/*.SAV` (click to overwrite, or type a
 new 8.3). First F5 this session shows that list; later F5 overwrites the
@@ -22,10 +25,19 @@ from app.config import find_file
 
 # C2.ENG packed run from File [0]. Official skip per title.
 SLOT_FILE, SLOT_OPTIONS, SLOT_SPEED, SLOT_HELP = 0, 1, 2, 3
+# Host-only tester menu. Not a C2.ENG packed slot — do not _eng_skip(4).
+SLOT_DISASTERS = 4
 FILE_NEW, FILE_LOAD, FILE_SAVE, FILE_QUIT = 1, 2, 3, 4
 OPT_MUSIC, OPT_SOUND, OPT_ANIM, OPT_YEAR, OPT_CENSUS = 1, 2, 3, 4, 5
 SPD_GAME, SPD_SCROLL, SPD_PAUSE = 1, 2, 3
 HLP_HINTS, HLP_GAME, HLP_HISTORY, HLP_ICONS, HLP_ABOUT = 1, 2, 3, 4, 5
+DIS_FIRE, DIS_BARBARIAN, DIS_RIOT = 1, 2, 3
+DISASTER_TITLE = "Disasters"
+DISASTER_ITEMS: tuple[tuple[int, str], ...] = (
+    (DIS_FIRE, "Fire"),
+    (DIS_BARBARIAN, "Barbarian"),
+    (DIS_RIOT, "Riot"),
+)
 
 # HELP.ENG 58 B records @ 66 (forum_strings.md). Title u32 + body is the next C-string.
 _HELP_MAGIC = b"Helpfile"
@@ -617,6 +629,16 @@ def selftest() -> list[str]:
         lines.append("FAIL  city key rotate < > missing")
     else:
         lines.append("ok    City Only key table has < > rotate")
+    if SLOT_DISASTERS == 4 and [sk for sk, _lab in DISASTER_ITEMS] != [
+        DIS_FIRE,
+        DIS_BARBARIAN,
+        DIS_RIOT,
+    ]:
+        lines.append(f"FAIL  Disasters items {DISASTER_ITEMS!r}")
+    elif DISASTER_TITLE != "Disasters":
+        lines.append(f"FAIL  Disasters title {DISASTER_TITLE!r}")
+    else:
+        lines.append("ok    Disasters menu lists Fire / Barbarian / Riot")
     if report_line_at(_REPORT_X + 8, _REPORT_Y + 24, 3) != 0:
         lines.append("FAIL  report_line_at first line")
     elif report_line_at(_REPORT_X + 8, _REPORT_Y + 24 + 13, 2) != 1:

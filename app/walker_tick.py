@@ -724,36 +724,46 @@ def city_only_try_invasion(
     *,
     years_played: int,
     clock: WalkerClock | None = None,
+    force: bool = False,
 ) -> int:
     """FUN_00052828. City Only (406≠0) only. Career returns 0.
 
     Monthly from economy_recompute. Not Stern Warning / Emperor / [90–95].
+    ``force`` is the Disasters→Barbarian tester: skip the 8-year / 48-month
+    / RNG window and spawn one type-3 Enemy.
     """
     if not getattr(state, "city_only", 0):
         return 0
     clk = clock if clock is not None else _CLOCK
     min_years, window, wait, count = invasion_row(int(getattr(state, "skill", 2)))
-    if min_years > years_played:
-        return 0
-    months = int(getattr(state, "invade_months", 0)) + 1
-    state.invade_months = months
-    if wait >= months:
-        return 0
-    clk.rng = (clk.rng + 1) & 0x7FFF
-    rng127 = clk.rng & 0x7F
-    forced = getattr(state, "invade_rng", None)
-    if forced is not None:
-        rng127 = int(forced) & 0x7F
-    if rng127 < 0x14:
-        return 0
-    if window + 0x14 <= rng127:
-        return 0
-    state.invade_months = 0
-    side = rng127 & 7
-    stamp = int(getattr(state, "stamp_clock", 0)) & 0x3F
-    count &= stamp + (rng127 & 7)
-    if count <= 0:
-        return 0
+    if force:
+        clk.rng = (clk.rng + 1) & 0x7FFF
+        rng127 = clk.rng & 0x7F
+        state.invade_months = 0
+        side = rng127 & 7
+        count = 1
+    else:
+        if min_years > years_played:
+            return 0
+        months = int(getattr(state, "invade_months", 0)) + 1
+        state.invade_months = months
+        if wait >= months:
+            return 0
+        clk.rng = (clk.rng + 1) & 0x7FFF
+        rng127 = clk.rng & 0x7F
+        forced = getattr(state, "invade_rng", None)
+        if forced is not None:
+            rng127 = int(forced) & 0x7F
+        if rng127 < 0x14:
+            return 0
+        if window + 0x14 <= rng127:
+            return 0
+        state.invade_months = 0
+        side = rng127 & 7
+        stamp = int(getattr(state, "stamp_clock", 0)) & 0x3F
+        count &= stamp + (rng127 & 7)
+        if count <= 0:
+            return 0
     pool = _pool_from(walkers if walkers is not None else bytearray(WALKER_BYTES))
     n = walker_spawn_type3_count(
         pool, tiles, count, side, clock=clk, rng=clk.rng
@@ -864,6 +874,44 @@ def unrest_spawn_rows(
     if walkers is not None and pool is not None:
         _write_back(walkers, pool)
     return spawned
+
+
+def debug_force_riot(
+    tiles: bytearray,
+    walkers: MutableSequence[Walker] | bytearray | None,
+    state=None,
+) -> tuple[int, int, int]:
+    """Disasters→Riot: overflow +11 on a 1×1 house, then unrest_spawn_rows.
+
+    Picks housing 0x82–0x9B (origin, not on fire). Bumps the unrest nibble
+    to 15 and adds +11 mood so score > 15 even with prefect / market
+    penalties. Returns (x, y, spawned).
+    """
+    pick: tuple[int, int, int] | None = None
+    for y in range(MAP_H):
+        for x in range(MAP_W):
+            off = _tile_off(x, y)
+            if off + TILE_BYTES > len(tiles):
+                continue
+            if tiles[off + _TILE_DRAW] & 0x80:
+                continue
+            tid = tiles[off]
+            if tid < ID_RIOTER_HOUSE_LO or tid > ID_RIOTER_HOUSE_HI:
+                continue
+            if tiles[off + 5] & 0x0F:
+                continue
+            pick = (x, y, off)
+            break
+        if pick is not None:
+            break
+    if pick is None:
+        return -1, -1, 0
+    x, y, off = pick
+    tiles[off + 11] = (tiles[off + 11] & 0xF0) | 0x0F
+    if state is not None:
+        state.unrest_add = int(getattr(state, "unrest_add", 0)) + 11
+    spawned = unrest_spawn_rows(tiles, walkers, y, 1, state)
+    return x, y, spawned
 
 
 def walker_finish_spawn(
@@ -3364,5 +3412,37 @@ def selftest() -> list[str]:
     nsp = city_only_try_invasion(early, tiles, bytearray(WALKER_BYTES), years_played=2)
     lines.append(
         f"year gate 8 > years: {'ok' if nsp == 0 else 'FAIL'} n={nsp}"
+    )
+
+    forced = _Inv()
+    forced.invade_months = 0
+    forced.invade_rng = 0
+    pool = bytearray(WALKER_BYTES)
+    nsp = city_only_try_invasion(
+        forced, tiles, pool, years_played=0, force=True
+    )
+    rec = _rec(pool, 1) if nsp else bytearray(WALKER_STRIDE)
+    ok = nsp == 1 and rec[_OFF_TYPE] == TYPE_ENEMY and rec[_OFF_NEXT_STATE] == 5
+    lines.append(
+        f"Disasters Barbarian force skips year gate: {'ok' if ok else 'FAIL'} "
+        f"n={nsp} type={rec[_OFF_TYPE]}"
+    )
+
+    tiles = bytearray(MAP_W * MAP_H * TILE_BYTES)
+    hoff = _tile_off(10, 12)
+    tiles[hoff] = 0x82
+    tiles[hoff + 1] = 0x01
+    tiles[hoff + 10] = 0x30
+    st = _St()
+    rx, ry, nsp = debug_force_riot(tiles, bytearray(WALKER_BYTES), st)
+    ok = (
+        (rx, ry) == (10, 12)
+        and nsp == 1
+        and tiles[hoff] == 5
+        and st.rioters_spawned == 1
+    )
+    lines.append(
+        f"Disasters Riot overflows 1x1 house: {'ok' if ok else 'FAIL'} "
+        f"xy=({rx},{ry}) n={nsp} id={tiles[hoff]:#x}"
     )
     return lines
