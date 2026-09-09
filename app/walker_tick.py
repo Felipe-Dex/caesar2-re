@@ -111,6 +111,7 @@ ID_FORUM_LO = 0xAE
 ID_FORUM_HI = 0xB9
 TYPE_CLERK = 1
 TYPE_ENEMY = 3
+TYPE_VIGILE = 5
 TYPE_RIOTER = 7
 
 # C2MODEL [75:91] / EXE 0x96ECB — skill*4. Skill 4 reads past 16 ints; use Hard.
@@ -772,7 +773,108 @@ def city_only_try_invasion(
         _write_back(walkers, pool)
     if n:
         state.attack_spawned = int(getattr(state, "attack_spawned", 0)) + n
+        rec = _rec(pool, 1) if n else bytearray(WALKER_STRIDE)
+        state.event_x = _i8(rec, _OFF_X)
+        state.event_y = _i8(rec, _OFF_Y)
+    if force and n <= 0:
+        sx, sy, got = debug_place_walker(
+            pool, tiles, TYPE_ENEMY, 40, 40, next_state=5, rng=clk.rng
+        )
+        if got and walkers is not None:
+            _write_back(walkers, pool)
+        if got:
+            state.attack_spawned = int(getattr(state, "attack_spawned", 0)) + 1
+            state.event_x = sx
+            state.event_y = sy
+            n = 1
     return n
+
+
+def _spawn_blocked(tiles: bytearray, off: int, *, pad: int) -> bool:
+    """walker_spawn 0x2A7EF rejects: both slots full, +1 0x8B, pad-0 +1 0x54."""
+    if off + TILE_BYTES > len(tiles):
+        return True
+    if tiles[off + _TILE_SLOT0] and tiles[off + _TILE_SLOT1]:
+        return True
+    flags = tiles[off + _TILE_FLAGS]
+    if flags & 0x8B:
+        return True
+    if pad:
+        return False
+    return bool(flags & 0x54)
+
+
+def debug_clear_spawn_flags(tiles: bytearray, off: int) -> None:
+    """Drop 0x8B / 0x54 leftover so pad-0 debug spawn can land (host only)."""
+    if 0 <= off < len(tiles):
+        tiles[off + _TILE_FLAGS] &= 0x24
+
+
+def debug_place_walker(
+    pool: bytearray,
+    tiles: bytearray,
+    type_id: int,
+    x: int,
+    y: int,
+    *,
+    next_state: int,
+    rng: int = 1,
+    prefer_house: bool = True,
+) -> tuple[int, int, int]:
+    """Debug spawn: try (x,y), then neighbors, then a housing origin.
+
+    Returns (sx, sy, slot) or (-1, -1, 0). Uses walker_spawn pad=0.
+    """
+    global _LAST_SPAWN_SLOT
+    candidates: list[tuple[int, int]] = []
+    if _in_map(x, y):
+        candidates.append((x, y))
+    for dy in range(-2, 3):
+        for dx in range(-2, 3):
+            nx, ny = x + dx, y + dy
+            if (nx, ny) not in candidates and _in_map(nx, ny):
+                candidates.append((nx, ny))
+    if prefer_house:
+        for hy in range(MAP_H):
+            for hx in range(MAP_W):
+                off = _tile_off(hx, hy)
+                if off + TILE_BYTES > len(tiles):
+                    continue
+                tid = tiles[off]
+                if 0x82 <= tid <= 0xA1 and not (tiles[off + 5] & 0xF):
+                    candidates.append((hx, hy))
+                    if hx + 1 < MAP_W:
+                        candidates.append((hx + 1, hy))
+                    break
+            else:
+                continue
+            break
+    for cx, cy in candidates:
+        off = _tile_off(cx, cy)
+        if _spawn_blocked(tiles, off, pad=0):
+            debug_clear_spawn_flags(tiles, off)
+        slot = walker_spawn(pool, tiles, type_id, cx, cy, pad=0, rng=rng)
+        if slot:
+            walker_finish_spawn(pool, slot, next_state=next_state)
+            return cx, cy, slot
+    return -1, -1, 0
+
+
+def debug_spawn_vigile(
+    tiles: bytearray,
+    walkers: MutableSequence[Walker] | bytearray | None,
+    x: int,
+    y: int,
+) -> tuple[int, int, int]:
+    """Disasters→Fire: type-5 vigile next to the blaze (state 8 → 9)."""
+    if walkers is None:
+        return -1, -1, 0
+    pool = _pool_from(walkers)
+    sx, sy, slot = debug_place_walker(
+        pool, tiles, TYPE_VIGILE, x, y, next_state=8, rng=3
+    )
+    _write_back(walkers, pool)
+    return sx, sy, slot
 
 
 def spawn_rioter(
@@ -910,7 +1012,22 @@ def debug_force_riot(
     tiles[off + 11] = (tiles[off + 11] & 0xF0) | 0x0F
     if state is not None:
         state.unrest_add = int(getattr(state, "unrest_add", 0)) + 11
+        state.event_x = x
+        state.event_y = y
     spawned = unrest_spawn_rows(tiles, walkers, y, 1, state)
+    if spawned <= 0 and walkers is not None:
+        pool = _pool_from(walkers)
+        sx, sy, slot = debug_place_walker(
+            pool, tiles, TYPE_RIOTER, x, y, next_state=0x0B
+        )
+        if slot:
+            _write_back(walkers, pool)
+            spawned = 1
+            x, y = sx, sy
+            if state is not None:
+                state.rioters_spawned = int(getattr(state, "rioters_spawned", 0)) + 1
+                state.event_x = sx
+                state.event_y = sy
     return x, y, spawned
 
 
@@ -3444,5 +3561,25 @@ def selftest() -> list[str]:
     lines.append(
         f"Disasters Riot overflows 1x1 house: {'ok' if ok else 'FAIL'} "
         f"xy=({rx},{ry}) n={nsp} id={tiles[hoff]:#x}"
+    )
+
+    tiles = bytearray(MAP_W * MAP_H * TILE_BYTES)
+    hoff = _tile_off(12, 12)
+    tiles[hoff] = 0x82
+    tiles[hoff + 1] = 0x8B
+    pool = bytearray(WALKER_BYTES)
+    sx, sy, slot = debug_place_walker(pool, tiles, TYPE_ENEMY, 12, 12, next_state=5)
+    rec = _rec(pool, slot) if slot else bytearray(WALKER_STRIDE)
+    ok = slot > 0 and rec[_OFF_TYPE] == TYPE_ENEMY and rec[_OFF_OCCUPIED] == 1
+    lines.append(
+        f"debug_place_walker type 3 through 0x8B flags: {'ok' if ok else 'FAIL'} "
+        f"slot={slot} xy=({sx},{sy})"
+    )
+    vx, vy, vslot = debug_spawn_vigile(tiles, pool, 12, 12)
+    vrec = _rec(pool, vslot) if vslot else bytearray(WALKER_STRIDE)
+    ok = vslot > 0 and vrec[_OFF_TYPE] == TYPE_VIGILE
+    lines.append(
+        f"debug_spawn_vigile type 5: {'ok' if ok else 'FAIL'} "
+        f"slot={vslot} xy=({vx},{vy})"
     )
     return lines

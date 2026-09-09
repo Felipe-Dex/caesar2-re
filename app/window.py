@@ -41,6 +41,7 @@ from app.forum import (
 )
 from app.menus import (
     DIS_BARBARIAN,
+    DIS_DISEASE,
     DIS_FIRE,
     DIS_RIOT,
     DISASTER_ITEMS,
@@ -75,6 +76,7 @@ from app.menus import (
     SPD_SCROLL,
     about_report,
     advisor_contains,
+    advisor_goto_contains,
     annual_summary_report,
     lose_game_report,
     win_game_report,
@@ -526,7 +528,7 @@ def top_menu_layout(
 ) -> list[tuple[int, str, tuple[int, int, int, int], list[tuple[int, str]]]]:
     """File / Options / Speed / Help plus packed dropdown rows (C2.ENG).
 
-    City Only also appends host **Disasters** (Fire / Barbarian / Riot).
+    City Only also appends host **Disasters** (Fire / Disease / Barbarian / Riot).
     """
     x = _MENU_X0
     rows: list[tuple[int, str, tuple[int, int, int, int], list[tuple[int, str]]]] = []
@@ -832,6 +834,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
     river_xy: list[tuple[int, int]] = []
     pref_xy: list[tuple[int, int]] = []
     fire_xy: list[tuple[int, int]] = []
+    disease_xy: list[tuple[int, int]] = []
     pl8_sheets: dict[int, dict] = {}
     last_extra: str | None = None
     water_after: str | None = None
@@ -1372,6 +1375,27 @@ def show(ctx: BootContext, *, game: Path) -> None:
                         cam_y=vy,
                         facing=map_facing,
                     )
+            if disease_xy and sheets is not None:
+                vis_sick = city_map.cells_in_iso_view(
+                    disease_xy,
+                    vx,
+                    vy,
+                    view.width,
+                    view.height,
+                    zoom=zoom,
+                    facing=map_facing,
+                )
+                if vis_sick:
+                    city_map.blit_disease_flags(
+                        view,
+                        ctx.city,
+                        zoom=zoom,
+                        cells=vis_sick,
+                        sheets=sheets,
+                        cam_x=vx,
+                        cam_y=vy,
+                        facing=map_facing,
+                    )
             live_base = view
             live_key = key
             view = view.copy()
@@ -1399,10 +1423,11 @@ def show(ctx: BootContext, *, game: Path) -> None:
         return view
 
     def remember_rivers() -> None:
-        nonlocal river_xy, pref_xy, fire_xy
+        nonlocal river_xy, pref_xy, fire_xy, disease_xy
         river_xy = city_map.water_anim_tile_xy(ctx.city)
         pref_xy = city_map.prefecture_flag_tile_xy(ctx.city)
         fire_xy = city_map.fire_flag80_tile_xy(ctx.city)
+        disease_xy = city_map.disease_flag80_tile_xy(ctx.city)
 
     def center_camera() -> None:
         nonlocal cam_x, cam_y
@@ -1522,10 +1547,14 @@ def show(ctx: BootContext, *, game: Path) -> None:
         _pump_advisor()
 
     def _apply_disaster(skip: int) -> None:
-        """Disasters menu — real 69A37 / type-3 / type-7 paths. City Only."""
-        from app.city_sim import debug_ignite_house
+        """Disasters menu — real 69A37 / +11 0x30 / type-3 / type-7. City Only."""
+        from app.city_sim import debug_ignite_house, debug_infect_house
         from app.messages import scan_city_messages
-        from app.walker_tick import city_only_try_invasion, debug_force_riot
+        from app.walker_tick import (
+            city_only_try_invasion,
+            debug_force_riot,
+            debug_spawn_vigile,
+        )
         from app.walkers import drawable_walkers
 
         if not getattr(ctx.sim, "city_only", 0):
@@ -1534,15 +1563,44 @@ def show(ctx: BootContext, *, game: Path) -> None:
         tiles = ctx.city.tiles
         extra = "Disasters"
         houses_changed = False
+
+        def _event_xy() -> tuple[int, int] | None:
+            ex = int(getattr(ctx.sim, "event_x", -1))
+            ey = int(getattr(ctx.sim, "event_y", -1))
+            if ex >= 0 and ey >= 0:
+                return ex, ey
+            return None
+
         if skip == DIS_FIRE:
             x, y, n = debug_ignite_house(tiles, ctx.sim)
             if n <= 0:
                 blit("Disasters · Fire — no housing origin")
                 return
+            vx, vy, vslot = debug_spawn_vigile(tiles, ctx.walkers, x, y)
             scan_city_messages(
-                ctx.sim, tiles, ctx.eng, fire_ignited=int(ctx.sim.fire_ignited)
+                ctx.sim,
+                tiles,
+                ctx.eng,
+                fire_ignited=int(ctx.sim.fire_ignited),
+                event_xy=_event_xy() or (x, y),
             )
             extra = f"Disasters · Fire — 69A37 at ({x},{y})"
+            if vslot:
+                extra += f"  vigile ({vx},{vy})"
+            houses_changed = True
+        elif skip == DIS_DISEASE:
+            x, y, n = debug_infect_house(tiles, ctx.sim)
+            if n <= 0:
+                blit("Disasters · Disease — no housing origin")
+                return
+            scan_city_messages(
+                ctx.sim,
+                tiles,
+                ctx.eng,
+                disease_infected=int(ctx.sim.disease_infected),
+                event_xy=_event_xy() or (x, y),
+            )
+            extra = f"Disasters · Disease — +11 0x30 at ({x},{y})"
             houses_changed = True
         elif skip == DIS_BARBARIAN:
             n = city_only_try_invasion(
@@ -1556,7 +1614,11 @@ def show(ctx: BootContext, *, game: Path) -> None:
                 blit("Disasters · Barbarian — spawn failed")
                 return
             scan_city_messages(
-                ctx.sim, tiles, ctx.eng, attack_spawned=n
+                ctx.sim,
+                tiles,
+                ctx.eng,
+                attack_spawned=n,
+                event_xy=_event_xy(),
             )
             ctx.sim.attack_spawned = 0
             extra = f"Disasters · Barbarian — {n} Enemy type 3"
@@ -1566,7 +1628,11 @@ def show(ctx: BootContext, *, game: Path) -> None:
                 blit("Disasters · Riot — no 1x1 house")
                 return
             scan_city_messages(
-                ctx.sim, tiles, ctx.eng, rioters_spawned=n
+                ctx.sim,
+                tiles,
+                ctx.eng,
+                rioters_spawned=n,
+                event_xy=_event_xy() or (x, y),
             )
             extra = f"Disasters · Riot — type 7 at ({x},{y})"
             houses_changed = True
@@ -1581,6 +1647,39 @@ def show(ctx: BootContext, *, game: Path) -> None:
         _play_labor_sfx()
         _pump_advisor()
         blit(f"{extra}  drawn={len(drawable_walkers(ctx.walkers))}")
+
+    def _goto_advisor_area() -> bool:
+        """58d31 Go to Area? — pan city camera. Not Career province."""
+        nonlocal cam_x, cam_y
+        msg = advisor_dlg
+        if msg is None or not getattr(msg, "has_goto", False):
+            return False
+        tx = getattr(msg, "tile_x", None)
+        ty = getattr(msg, "tile_y", None)
+        if tx is None or ty is None or not map_ready:
+            return False
+        ww, wh = world_wh()
+        cam_x, cam_y = city_map.camera_center_on_tile(
+            int(tx),
+            int(ty),
+            zoom,
+            ww,
+            wh,
+            view_w=max(1, win_w - SIDEBAR_W),
+            view_h=max(1, win_h - TOP_BAR_H),
+            screen_w=win_w,
+            screen_h=win_h,
+            facing=map_facing,
+        )
+        cam_x = max(0, min(cam_x, max(0, ww - win_w)))
+        cam_y = max(0, min(cam_y, max(0, wh - win_h)))
+        from app.walkers import drawable_walkers
+
+        blit(
+            f"Go to Area?  ({int(tx)},{int(ty)})  "
+            f"drawn={len(drawable_walkers(ctx.walkers))}"
+        )
+        return True
 
     def _refresh_after_sim(*, houses_changed: bool) -> None:
         """Rebuild visible diamonds only when buildings changed."""
@@ -2806,6 +2905,10 @@ def show(ctx: BootContext, *, game: Path) -> None:
             event.x, event.y, advisor_dlg, has_video=_advisor_has_video()
         ):
             _sfx("click")
+            if advisor_goto_contains(
+                event.x, event.y, advisor_dlg, has_video=_advisor_has_video()
+            ) and _goto_advisor_area():
+                return
             _dismiss_advisor()
             blit(last_extra)
             return

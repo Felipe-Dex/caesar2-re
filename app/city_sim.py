@@ -219,11 +219,14 @@ class SimState:
     pop_peak: int = 0  # FAQ latch: unlocks stay after pop drops
     flood_dir: int = 0  # [0x102678] 0…3
     fire_ignited: int = 0  # one 69A37 per 0x9E–0xA1 pass
+    disease_infected: int = 0  # +11 0x30 leftover; [80] Disease EAX=0x51
     invade_months: int = 0  # [0x102a78] — 0x52828 wait (RAM, not SAV)
     attack_spawned: int = 0  # type-3 wave this wrap; [82] banner
     unrest_rng: int = 0  # [0x1024c8] 0…63 → LUT 0x96c5b
     unrest_add: int = 0  # [0x102af0] added to +11 lo-nibble
     rioters_spawned: int = 0  # type-7 count this 0x9E–0xA1 pass
+    event_x: int = -1  # last disaster tile for 58c87 Go to Area
+    event_y: int = -1
     # Forum / PLEBS — chunks 52 / 54 / 55 / 56 @ 0x102A68 / 0x102A98 /
     # 0x102AC4 / 0xD2E6C. Tax 29/30 @ 0x102A7C / 0x102AA8. Oracle 286–289
     # + avg 46. New City Only seeds via init_city_only_labor (0x563E2);
@@ -879,7 +882,43 @@ def debug_ignite_house(
         and tiles[off + 16] == FIRE_TIMER_IGNITE
     ):
         state.fire_ignited = 1
+        state.event_x = x
+        state.event_y = y
     return x, y, n
+
+
+def debug_infect_house(
+    tiles: bytearray, state: SimState | None = None
+) -> tuple[int, int, int]:
+    """Disasters→Disease: +11 0x30 on a housing origin. No 69A37 fire.
+
+    0x448e2 / 0x44933: +11&0x30==0x30 latches [0x102900] then 58c87
+    EAX=0x51 [80] Disease!. CITYTOP[8] skull. Returns (x, y, 1) or (-1,-1,0).
+    """
+    pick: tuple[int, int, int] | None = None
+    for y in range(MAP_H):
+        for x in range(MAP_W):
+            off = _off(x, y)
+            if tiles[off + 5] & 0xF:
+                continue
+            tid = tiles[off]
+            if not (ID_HOUSING_LO <= tid <= ID_HOUSING_HI):
+                continue
+            if (tiles[off + 3] & DRAW_FIRE) and tiles[off + 16] != 0:
+                continue
+            pick = (x, y, off)
+            break
+        if pick is not None:
+            break
+    if pick is None:
+        return -1, -1, 0
+    x, y, off = pick
+    tiles[off + 11] = (tiles[off + 11] & 0xCF) | 0x30
+    if state is not None:
+        state.disease_infected = 1
+        state.event_x = x
+        state.event_y = y
+    return x, y, 1
 
 
 def tile_collapse_rubble(
@@ -1345,6 +1384,8 @@ def city_sim_phase(
                     ign = max(ign, int(note.split("ignite=", 1)[1].split()[0]))
                 except ValueError:
                     pass
+        ex = int(getattr(state, "event_x", -1))
+        ey = int(getattr(state, "event_y", -1))
         scan_city_messages(
             state,
             tiles,
@@ -1353,8 +1394,11 @@ def city_sim_phase(
             fire_ignited=ign,
             rioters_spawned=riot,
             attack_spawned=int(getattr(state, "attack_spawned", 0)),
+            disease_infected=int(getattr(state, "disease_infected", 0)),
+            event_xy=(ex, ey) if ex >= 0 and ey >= 0 else None,
         )
         state.attack_spawned = 0
+        state.disease_infected = 0
 
     return PhaseResult(
         phase=phase,
@@ -2709,6 +2753,25 @@ def selftest() -> list[str]:
     lines.append(
         f"Disasters Fire prefers uncovered: {'ok' if ok else 'FAIL'} "
         f"xy=({hx},{hy}) ign={st.fire_ignited} +16={tiles[uoff + 16]}"
+    )
+
+    tiles = _blank_tiles()
+    ioff = _off(9, 9)
+    tiles[ioff] = 0x82
+    tiles[ioff + 1] = 0x01
+    st = SimState(city_only=1)
+    dx, dy, dn = debug_infect_house(tiles, st)
+    ok = (
+        (dx, dy) == (9, 9)
+        and dn == 1
+        and (tiles[ioff + 11] & 0x30) == 0x30
+        and not (tiles[ioff + 3] & DRAW_FIRE)
+        and tiles[ioff + 16] == 0
+        and st.disease_infected == 1
+    )
+    lines.append(
+        f"Disasters Disease sets +11 0x30 not fire: {'ok' if ok else 'FAIL'} "
+        f"xy=({dx},{dy}) +11={tiles[ioff + 11]:#x} ign={st.fire_ignited}"
     )
 
     tiles = _blank_tiles()
