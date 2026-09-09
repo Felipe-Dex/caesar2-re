@@ -126,7 +126,7 @@ Cada fatia: **objetivo**, **depende de**, **não é Career**. Não avançar Care
 
 - **Objetivo:** depois de uma estrada + tenda, o pulso **pinta `+17`** (slots `0xA2–0xC1`, `0x430DA`) e **`+15`** (slots `0x76–0x8D`). Água (poço / fonte) entra no score. Imigrante `0x41DD4` (slots `0x9E–0xA1`) **ocupa** a tenda. Sem flood a casa não “vive”.
 - **Depende de:** (2) placement. Wipes `0x51–0x54` só quando o paint existir (hoje o host **não** wipe para não destruir SAV).
-- **Não Career:** spawn tipo 3 de **cidade** lê C2MODEL `[75:91]` só se 406≠0 — isso é City Only, mas é **inimigo**, não imigrante. Não abrir o ramo de invasão provincial.
+- **Não Career:** spawn tipo 3 de **cidade** lê C2MODEL `[75:91]` só se 406≠0 — isso é City Only, mas é **inimigo**, não imigrante. Host: `findings/city_enemy.md`. Não abrir o ramo de invasão provincial.
 
 ### 4. `economy_recompute` no wrap do mês
 

@@ -2413,7 +2413,7 @@ def selftest() -> list[str]:
         f"E={wrap.rating_empire} P={wrap.rating_peace} "
         f"pros={wrap.rating_prosperity} cult={wrap.rating_culture}"
     )
-    from app.walkers import WALKER_BYTES, Walker
+    from app.walkers import Walker
 
     tiles = _blank_tiles()
     tiles[_off(40, 40) + 15] = 40

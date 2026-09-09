@@ -22,6 +22,6 @@ Tipo 1–7 → estado 0–12. Roam/path → `walker_step` `0x488DC` (unlink/reli
 - Estado **9** (`0x46619`): vigile fire seek. `0x4A397` (sector 8×8 id&lt;8 + bit7) → `0x4A57F` dest; `0x4A716` extingue no tile; `0x4A76D` mantém o alvo. Estado 8 entra em 9 quando o sector tem fogo.
 - Path bloqueado (`can_step==0`): sidestep, sem `0x2B54A` / `0x2BA63`.
 - `FUN_0004a7ff` scores de casa — skip.
-- Rally `[0x10262C]`/`[0x102628]` (chunks 20/21) **não** lido; estados 5/11/12 mantêm dest do SAV.
+- Rally `[0x10262C]`/`[0x102628]`: City Only type 3 lê o pico de `+15` (`0x40695`) no spawn `0x536E2`. Estados 5/11/12 seguem esse dest.
 - `walker_set_sprite_t7` `0x47A95` = mesmo nibble que `0x479B8`.
 - Tipos sem pad à volta: estado 2 → free (como o EXE).
