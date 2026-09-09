@@ -811,6 +811,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
     overlay_phase = 0
     river_xy: list[tuple[int, int]] = []
     pref_xy: list[tuple[int, int]] = []
+    fire_xy: list[tuple[int, int]] = []
     pl8_sheets: dict[int, dict] = {}
     last_extra: str | None = None
     water_after: str | None = None
@@ -1329,6 +1330,28 @@ def show(ctx: BootContext, *, game: Path) -> None:
                         cam_y=vy,
                         facing=map_facing,
                     )
+            if fire_xy and sheets is not None:
+                vis_fire = city_map.cells_in_iso_view(
+                    fire_xy,
+                    vx,
+                    vy,
+                    view.width,
+                    view.height,
+                    zoom=zoom,
+                    facing=map_facing,
+                )
+                if vis_fire:
+                    city_map.blit_fire_flags(
+                        view,
+                        ctx.city,
+                        op,
+                        zoom=zoom,
+                        cells=vis_fire,
+                        sheets=sheets,
+                        cam_x=vx,
+                        cam_y=vy,
+                        facing=map_facing,
+                    )
             live_base = view
             live_key = key
             view = view.copy()
@@ -1356,9 +1379,10 @@ def show(ctx: BootContext, *, game: Path) -> None:
         return view
 
     def remember_rivers() -> None:
-        nonlocal river_xy, pref_xy
+        nonlocal river_xy, pref_xy, fire_xy
         river_xy = city_map.water_anim_tile_xy(ctx.city)
         pref_xy = city_map.prefecture_flag_tile_xy(ctx.city)
+        fire_xy = city_map.fire_flag80_tile_xy(ctx.city)
 
     def center_camera() -> None:
         nonlocal cam_x, cam_y
@@ -1479,10 +1503,11 @@ def show(ctx: BootContext, *, game: Path) -> None:
 
     def _refresh_after_sim(*, houses_changed: bool) -> None:
         """Rebuild visible diamonds only when buildings changed."""
+        remember_rivers()
+        _invalidate_live_only()
         if houses_changed:
             city_map.restore_river_tags(ctx.city)
             _invalidate_live()
-            remember_rivers()
         if not map_mode:
             show_city_map(reset_cam=True)
             return
@@ -1497,7 +1522,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
         water_after = root.after(WATER_FRAME_MS, on_water)
         if not map_mode or forum_state is not None or not options.animations:
             return
-        if not river_xy and not pref_xy:
+        if not river_xy and not pref_xy and not fire_xy:
             return
         water_frame = (water_frame + 1) % WATER_FRAMES
         overlay_phase = (overlay_phase + 1) % city_map.PREFECTURE_FLAG_FRAMES

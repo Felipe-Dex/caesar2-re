@@ -6,6 +6,7 @@ walker_set_sprite → life_phase. Movement is walker_anim_roam 0x47EFA /
 walker_anim_path 0x48084 → walker_step 0x488DC (tile[+7]/[+8]).
 
 city_sim_phase 0x3F60C lives in app/city_sim.py (called before this).
+Type 7 rioter spawn is unrest_spawn_rows (41DD4, next_state 0x0B).
 Not implemented here: actors26_tick 0x45A7A, path-fail helpers.
 State 8→9 fire seek is 0x4A397 / 0x4A57F / 0x4A716 / 0x4A76D.
 See findings/app_tick.md.
@@ -109,8 +110,34 @@ ID_PLAZA_HI = 0x7E
 ID_FORUM_LO = 0xAE
 ID_FORUM_HI = 0xB9
 TYPE_CLERK = 1
+TYPE_ENEMY = 3
+TYPE_RIOTER = 7
+
+# C2MODEL [75:91] / EXE 0x96ECB — skill*4. Skill 4 reads past 16 ints; use Hard.
+# (min years [0x102ac0], rng window, month wait [0x102a78], spawn count)
+INVASION_BY_SKILL: tuple[tuple[int, int, int, int], ...] = (
+    (10, 20, 60, 1),
+    (10, 20, 60, 1),
+    (8, 20, 48, 1),
+    (6, 25, 36, 3),
+)
+# 1×1 housing only — EXE 0x41DD4 cmp 0x82…0x9B (villas 0x9C–0xA1 skip).
+ID_RIOTER_HOUSE_LO = 0x82
+ID_RIOTER_HOUSE_HI = 0x9B
 # After this many step-dones still on 0xAE–0xB9, force dest toward road.
 _CLERK_FORUM_LINGER = 2
+# 0x96c5b — 64 signed ticks. 9 = use 0x96b53[tile_id] instead.
+_UNREST_TICK: tuple[int, ...] = (
+    9, 1, 0, 9, 0, -1, 0, 2, 0, 9, 0, 0, 9, 0, 0, 9,
+    0, 0, 1, 0, 1, 0, 9, -1, 0, 9, 0, 9, 3, 0, 0, 9,
+    0, 1, 9, 0, 0, 9, -1, 1, 0, -1, 0, 0, 1, 0, 9, 1,
+    0, 9, 0, 2, 0, 9, 0, 9, 9, -1, 1, 0, 9, 1, -2, 0,
+)
+# 0x96b53[id] for housing 0x82–0x9B (tents raise unrest; better houses damp).
+_UNREST_HOUSE: tuple[int, ...] = (
+    3, 3, 3, 3, 3, 2, 2, 2, 2, 2, 0, 0, -1, -1, -2, -2,
+    -3, -3, -3, -3, -6, -6, -6, -6, -8, -8,
+)
 
 
 def _is_forum_floor(tid: int) -> bool:
@@ -133,10 +160,11 @@ class WalkerClock:
     latch7: int = 0  # [0x10266C]
     latch3: int = 0  # [0x102674]
     rng: int = 1
-    # SavChunks 20/21 at [0x10262C]/[0x102628] — not loaded; keep record dest
+    # SavChunks 20/21 at [0x10262C]/[0x102628] — land-value peak (0x40695)
     rally_ok: bool = False
     rally_x: int = 0
     rally_y: int = 0
+    edge_clock: int = 0  # [0x117bac] — 0x537ed mix
 
 
 @dataclass(frozen=True)
@@ -579,6 +607,263 @@ def walker_spawn_retry(
             return n + 1
         idx = 0 if idx + 1 >= attempts else idx + 1
     return 0
+
+
+def invasion_row(skill: int) -> tuple[int, int, int, int]:
+    """C2MODEL [75:91] row. Skill 4 has no 5th dword-quad — Hard."""
+    if skill < 0:
+        skill = 0
+    if skill > 3:
+        skill = 3
+    return INVASION_BY_SKILL[skill]
+
+
+def edge_pick_type3(side: int, rng127: int, clock: WalkerClock) -> tuple[int, int]:
+    """0x537ed — map-edge (x,y). EAX=side 0–7, EDX=80, EBX=63."""
+    side &= 7
+    size = MAP_W
+    mask = 0x3F
+    clock.edge_clock = (clock.edge_clock + 1) & 0xFFFFFFFF
+    mix = (rng127 + clock.edge_clock) & mask
+    half_gap = (size - mask) >> 1
+    if half_gap < 0:
+        half_gap = 0
+    along = mask - (mask >> 2)
+    if along < 0:
+        along = 0
+    ebx = half_gap + mix
+    ecx = along + (mix >> 1)
+    wrapped = 0
+    if ebx >= size:
+        ebx >>= 1
+    if ecx >= size:
+        ecx -= size
+        wrapped = 1
+    last = size - 1
+    edx = last - ecx
+    if side == 0:
+        return ebx, 0
+    if side == 1:
+        return (last, ecx) if wrapped else (ecx, 0)
+    if side == 2:
+        return last, ebx
+    if side == 3:
+        return (edx, last) if wrapped else (last, ecx)
+    if side == 4:
+        return ebx, last
+    if side == 5:
+        return (0, edx) if wrapped else (edx, last)
+    if side == 6:
+        return 0, ebx
+    return (ecx, 0) if wrapped else (0, edx)
+
+
+def rally_from_plus15(tiles: bytearray) -> tuple[int, int]:
+    """0x40695 tail: max signed tile[+15] → [0x10262C]/[0x102628]."""
+    best = 0
+    rx, ry = 0, 0
+    found = False
+    for y in range(MAP_H):
+        for x in range(MAP_W):
+            off = _tile_off(x, y)
+            if off + 15 >= len(tiles):
+                continue
+            val = tiles[off + 15]
+            signed = val - 256 if val >= 128 else val
+            if not found or signed > best:
+                best = signed
+                rx, ry = x, y
+                found = True
+    if not found or best <= 0:
+        return 0, 0
+    return rx, ry
+
+
+def walker_spawn_type3_count(
+    pool: bytearray,
+    tiles: bytearray,
+    count: int,
+    side: int,
+    *,
+    clock: WalkerClock | None = None,
+    rng: int = 1,
+) -> int:
+    """walker_spawn_type3_count 0x536E2. Pad 0, state 1 → 5, dest = rally."""
+    clk = clock if clock is not None else _CLOCK
+    rx, ry = rally_from_plus15(tiles)
+    clk.rally_ok = True
+    clk.rally_x = rx & 0xFF
+    clk.rally_y = ry & 0xFF
+    spawned = 0
+    rng127 = rng & 0x7F
+    for _ in range(max(0, count)):
+        x, y = edge_pick_type3(side, rng127, clk)
+        x = max(0, min(MAP_W - 1, x))
+        y = max(0, min(MAP_H - 1, y))
+        off = _tile_off(x, y)
+        if off + 1 < len(tiles) and (tiles[off + 1] & 0xE7):
+            # EXE 0x68c01 dirties/smashes this cell; host only tries spawn.
+            pass
+        slot = walker_spawn(pool, tiles, TYPE_ENEMY, x, y, pad=0, rng=rng)
+        if not slot:
+            break
+        walker_finish_spawn(pool, slot, next_state=5)
+        rec = _rec(pool, slot)
+        rec[_OFF_DEST_X] = clk.rally_x & 0xFF
+        rec[_OFF_DEST_Y] = clk.rally_y & 0xFF
+        rec[_OFF_LINGER] = 3
+        _put(pool, slot, rec)
+        spawned += 1
+    return spawned
+
+
+def city_only_try_invasion(
+    state,
+    tiles: bytearray,
+    walkers: MutableSequence[Walker] | bytearray | None,
+    *,
+    years_played: int,
+    clock: WalkerClock | None = None,
+) -> int:
+    """FUN_00052828. City Only (406≠0) only. Career returns 0.
+
+    Monthly from economy_recompute. Not Stern Warning / Emperor / [90–95].
+    """
+    if not getattr(state, "city_only", 0):
+        return 0
+    clk = clock if clock is not None else _CLOCK
+    min_years, window, wait, count = invasion_row(int(getattr(state, "skill", 2)))
+    if min_years > years_played:
+        return 0
+    months = int(getattr(state, "invade_months", 0)) + 1
+    state.invade_months = months
+    if wait >= months:
+        return 0
+    clk.rng = (clk.rng + 1) & 0x7FFF
+    rng127 = clk.rng & 0x7F
+    forced = getattr(state, "invade_rng", None)
+    if forced is not None:
+        rng127 = int(forced) & 0x7F
+    if rng127 < 0x14:
+        return 0
+    if window + 0x14 <= rng127:
+        return 0
+    state.invade_months = 0
+    side = rng127 & 7
+    stamp = int(getattr(state, "stamp_clock", 0)) & 0x3F
+    count &= stamp + (rng127 & 7)
+    if count <= 0:
+        return 0
+    pool = _pool_from(walkers if walkers is not None else bytearray(WALKER_BYTES))
+    n = walker_spawn_type3_count(
+        pool, tiles, count, side, clock=clk, rng=clk.rng
+    )
+    if walkers is not None:
+        _write_back(walkers, pool)
+    if n:
+        state.attack_spawned = int(getattr(state, "attack_spawned", 0)) + n
+    return n
+
+
+def spawn_rioter(
+    pool: bytearray,
+    tiles: bytearray,
+    x: int,
+    y: int,
+    *,
+    rng: int = 1,
+) -> int:
+    """41DD4 tail: type 7, pad=0, retry class=0, next_state=0x0B."""
+    if not walker_spawn_retry(
+        pool, tiles, TYPE_RIOTER, x, y, pad=0, retry_class=0, rng=rng
+    ):
+        return 0
+    walker_finish_spawn(pool, _LAST_SPAWN_SLOT, next_state=0x0B)
+    return _LAST_SPAWN_SLOT
+
+
+def _unrest_tick_score(tiles: bytearray, off: int, tid: int, addend: int, lut: int) -> int:
+    """+11&0xF, then −1 no-market / −1 prefect / −1 +14&3, plus mood + LUT."""
+    score = tiles[off + 11] & 0x0F
+    if (tiles[off + 10] & 0x0C) == 0:
+        score -= 1
+    if tiles[off + 10] & 0x30:
+        score -= 1
+    if tiles[off + 14] & 3:
+        score -= 1
+    score += addend
+    if lut == 9:
+        idx = tid - ID_RIOTER_HOUSE_LO
+        if 0 <= idx < len(_UNREST_HOUSE):
+            score += _UNREST_HOUSE[idx]
+    else:
+        score += lut
+    if score < 0:
+        return 0
+    return score
+
+
+def unrest_spawn_rows(
+    tiles: bytearray,
+    walkers: MutableSequence[Walker] | bytearray | None,
+    y0: int,
+    n: int,
+    state=None,
+) -> int:
+    """41DD4 else-branch: unrest nibble + type-7 rioter. Fire owns bit7.
+
+    Housing 0x82–0x9B origin, not +3 bit7. Score > 15 → 691C4 rubble
+    (no fire) then walker_spawn_retry EAX=7 pad=0 class=0, next_state 0x0B.
+    """
+    if y0 == 0 and state is not None:
+        state.rioters_spawned = 0
+        state.unrest_rng = (int(getattr(state, "unrest_rng", 0)) + 1) & 0x3F
+    spawned = 0
+    pool = None if walkers is None else _pool_from(walkers)
+    y1 = min(MAP_H, y0 + n)
+    addend = int(getattr(state, "unrest_add", 0)) if state is not None else 0
+    for y in range(y0, y1):
+        for x in range(MAP_W):
+            off = _tile_off(x, y)
+            if off + TILE_BYTES > len(tiles):
+                continue
+            if tiles[off + _TILE_DRAW] & 0x80:
+                continue
+            tid = tiles[off]
+            if tid < ID_RIOTER_HOUSE_LO or tid > ID_RIOTER_HOUSE_HI:
+                continue
+            if tiles[off + 5] & 0x0F:
+                continue
+            rng = 0
+            if state is not None:
+                rng = (int(getattr(state, "unrest_rng", 0)) + 1) & 0x3F
+                state.unrest_rng = rng
+            lut = _UNREST_TICK[rng]
+            score = _unrest_tick_score(tiles, off, tid, addend, lut)
+            if score <= 15:
+                tiles[off + 11] = (tiles[off + 11] & 0xF0) | (score & 0x0F)
+                continue
+            if state is not None:
+                mood = int(getattr(state, "unrest_add", 0))
+                if mood > 6:
+                    state.unrest_add = 6
+                elif mood > 2:
+                    state.unrest_add = 2
+                addend = int(state.unrest_add)
+            from app.city_sim import tile_collapse_rubble
+
+            tile_collapse_rubble(tiles, x, y, leave_fire=False)
+            if pool is None:
+                continue
+            if spawn_rioter(pool, tiles, x, y):
+                spawned += 1
+                if state is not None:
+                    state.rioters_spawned = (
+                        int(getattr(state, "rioters_spawned", 0)) + 1
+                    )
+    if walkers is not None and pool is not None:
+        _write_back(walkers, pool)
+    return spawned
 
 
 def walker_finish_spawn(
@@ -2956,4 +3241,128 @@ def selftest() -> list[str]:
             f"emit_walkers city_only clerk on road: {'ok' if ok else 'FAIL'} "
             f"spawn={nsp} type={live[0].type if live else 0} id={tid:#x}"
         )
+
+    reset_clock()
+    pool = bytearray(WALKER_BYTES)
+    tiles = bytearray(MAP_W * MAP_H * TILE_BYTES)
+    hoff = _tile_off(10, 10)
+    tiles[hoff] = 0x82
+    tiles[hoff + 1] = 0x01
+    tiles[hoff + 11] = 0x0F
+    class _St:
+        unrest_rng = 1
+        unrest_add = 2
+        rioters_spawned = 0
+
+    st = _St()
+    nsp = unrest_spawn_rows(tiles, pool, 10, 1, st)
+    rec = _rec(pool, 1) if nsp else bytearray(WALKER_STRIDE)
+    ok = (
+        nsp == 1
+        and tiles[hoff] == 0x05
+        and (tiles[hoff + 3] & 0x80) == 0
+        and rec[_OFF_TYPE] == TYPE_RIOTER
+        and rec[_OFF_STATE] == 1
+        and rec[_OFF_NEXT_STATE] == 0x0B
+        and rec[_OFF_WAIT] == 0x14
+        and st.rioters_spawned == 1
+    )
+    lines.append(
+        f"rioter spawn type 7 next=0x0B rubble: {'ok' if ok else 'FAIL'} "
+        f"n={nsp} id={tiles[hoff]:#x} type={rec[_OFF_TYPE]} "
+        f"st={rec[_OFF_STATE]} nxt={rec[_OFF_NEXT_STATE]}"
+    )
+
+    if nsp:
+        for _ in range(22):
+            walkers_tick(tiles, pool)
+        rec = _rec(pool, 1)
+        ok = rec[_OFF_OCCUPIED] == 1 and rec[_OFF_TYPE] == TYPE_RIOTER and rec[_OFF_STATE] in (
+            11,
+            12,
+        )
+        lines.append(
+            f"rioter roam states 11/12: {'ok' if ok else 'FAIL'} "
+            f"state={rec[_OFF_STATE]} latch7={_CLOCK.latch7}"
+        )
+    else:
+        lines.append("FAIL  rioter roam skipped (no spawn)")
+
+    tiles = bytearray(MAP_W * MAP_H * TILE_BYTES)
+    hoff = _tile_off(10, 10)
+    tiles[hoff] = 0x82
+    tiles[hoff + 1] = 0x01
+    tiles[hoff + 10] = 0x30
+    tiles[hoff + 11] = 0x0F
+    st = _St()
+    st.unrest_rng = 1
+    st.unrest_add = 2
+    nsp = unrest_spawn_rows(tiles, bytearray(WALKER_BYTES), 10, 1, st)
+    ok = nsp == 0 and tiles[hoff] == 0x82 and (tiles[hoff + 11] & 0x0F) == 0x0F
+    lines.append(
+        f"prefect +10 0x30 holds unrest <=15: {'ok' if ok else 'FAIL'} "
+        f"n={nsp} nibble={tiles[hoff + 11] & 0x0F}"
+    )
+
+    tiles = bytearray(MAP_W * MAP_H * TILE_BYTES)
+    hoff = _tile_off(10, 10)
+    tiles[hoff] = 0x9E
+    tiles[hoff + 1] = 0x01
+    tiles[hoff + 11] = 0x0F
+    st = _St()
+    st.unrest_rng = 1
+    st.unrest_add = 2
+    nsp = unrest_spawn_rows(tiles, bytearray(WALKER_BYTES), 10, 1, st)
+    ok = nsp == 0 and tiles[hoff] == 0x9E
+    lines.append(
+        f"villa 0x9E does not spawn rioter: {'ok' if ok else 'FAIL'} n={nsp}"
+    )
+
+    reset_clock()
+    tiles = bytearray(MAP_W * MAP_H * TILE_BYTES)
+    peak = _tile_off(40, 40)
+    tiles[peak + 15] = 40
+    pool = bytearray(WALKER_BYTES)
+
+    class _Inv:
+        city_only = 1
+        skill = 2
+        invade_months = 48
+        invade_rng = 0x20
+        stamp_clock = 1
+        attack_spawned = 0
+
+    nsp = city_only_try_invasion(_Inv(), tiles, pool, years_played=8)
+    rec = _rec(pool, 1) if nsp else bytearray(WALKER_STRIDE)
+    ok = (
+        nsp == 1
+        and rec[_OFF_TYPE] == TYPE_ENEMY
+        and rec[_OFF_STATE] == 1
+        and rec[_OFF_NEXT_STATE] == 5
+        and rec[_OFF_WAIT] == 0x14
+        and rec[_OFF_DEST_X] == 40
+        and rec[_OFF_DEST_Y] == 40
+        and _Inv.city_only == 1
+    )
+    xy = (_i8(rec, _OFF_X), _i8(rec, _OFF_Y)) if nsp else (-1, -1)
+    edge = xy[0] in (0, 79) or xy[1] in (0, 79)
+    lines.append(
+        f"City Only type 3 from edge toward +15: {'ok' if ok and edge else 'FAIL'} "
+        f"n={nsp} xy={xy} dest={rec[_OFF_DEST_X]},{rec[_OFF_DEST_Y]} "
+        f"st={rec[_OFF_STATE]} nxt={rec[_OFF_NEXT_STATE]}"
+    )
+
+    career = _Inv()
+    career.city_only = 0
+    nsp = city_only_try_invasion(career, tiles, bytearray(WALKER_BYTES), years_played=20)
+    lines.append(
+        f"Career skips 0x52828: {'ok' if nsp == 0 else 'FAIL'} n={nsp}"
+    )
+
+    early = _Inv()
+    early.invade_months = 0
+    nsp = city_only_try_invasion(early, tiles, bytearray(WALKER_BYTES), years_played=2)
+    lines.append(
+        f"year gate 8 > years: {'ok' if nsp == 0 else 'FAIL'} n={nsp}"
+    )
     return lines

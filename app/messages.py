@@ -8,18 +8,21 @@ bar). [35]+26 ``Idle Plebs`` is the Forum labor-row label ([36]+19), not
 a HUD toast. The red bar the original shouts — same phrase as unused.wav
 ``0x90448`` — is ``Plebs are needed!``. Fire [81] only after a real 69A37
 housing ignite (timer 10), not leftover +3 bit7 / +11 0x30.
+Rioter spawn posts [86] Rioting! (EAX=0x57) when 41DD4 type-7 lands.
+City Only type-3 spawn (0x52828) posts [82] The City Is Attacked!
+(EAX=0x53). Career provincial [90–95] / Emperor [115]+ stay skipped.
 
-City Only only. Career banners (Emperor letters [115]+, invasion [82]/[90–95],
-cohorts, Empire Expands, Stern Warning) stay skipped. C2.ENG [60] is the
-Query structure pack (title “NO Land Value”); [60]+4 “NO Water Supply” is
-overlay text, not a 58c87 city-map banner.
+City Only only. Career banners (Emperor letters [115]+, provincial
+invasion [90–95], cohorts, Empire Expands, Stern Warning) stay skipped.
+C2.ENG [60] is the Query structure pack (title “NO Land Value”);
+[60]+4 “NO Water Supply” is overlay text, not a 58c87 city-map banner.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from app.city_map import MAP_H, MAP_W, TILE_STRIDE
+from app.city_map import MAP_H, MAP_W, TILE_STRIDE, tile_is_burning
 from app.unlocks import POP_UNLOCK
 
 # FUN_00058c87 depth.
@@ -68,6 +71,21 @@ _FB = {
     81: {
         0: "Fire Alert!",
         1: "A fire has broken out somewhere in the city! It will quickly spread to adjacent buildings, unless contained or put out by vigiles.",
+    },
+    82: {
+        0: "The City Is Attacked!",
+        1: (
+            "Enemies have reached the city -- it is sure to be sacked!  "
+            "City walls will only keep them at bay for a limited time -- "
+            "soldiers will have to meet the threat!"
+        ),
+    },
+    86: {
+        0: "Rioting!",
+        1: (
+            "Mobs are forming in parts of the city.  Regardless of the cause "
+            "-- high taxes?  Conscription?  Unrest? -- their threat is clear."
+        ),
     },
     84: {
         0: "Services Cut",
@@ -142,6 +160,7 @@ class MessageWatch:
     construction_short: bool = False
     idle_short: bool = False
     on_fire: bool = False
+    on_riot: bool = False
     broke: bool = False
     hail_done: bool = False
     last_ready: int = -1
@@ -327,11 +346,7 @@ def _is_burning(tid: int, draw: int, timer: int) -> bool:
     +3 ``0x80`` is also prefecture, aqueduct-over-road, and stamp leftovers
     on ``0x9E–0xA1`` villas — those have timer 0 and are not a fire.
     """
-    if not (draw & DRAW_FIRE) or timer == 0:
-        return False
-    if tid < 8:
-        return True
-    return ID_HOUSING_LO <= tid <= ID_HOUSING_HI
+    return tile_is_burning(tid, draw, timer)
 
 
 def _city_counts(tiles: bytearray) -> tuple[int, int, int, int]:
@@ -407,6 +422,8 @@ def scan_city_messages(
     houses_up: int = 0,
     month_wrapped: bool = False,
     fire_ignited: int = 0,
+    rioters_spawned: int = 0,
+    attack_spawned: int = 0,
 ) -> list[str]:
     """Push City Only banners. Career / Emperor packs are not enqueued."""
     fired: list[str] = []
@@ -455,6 +472,19 @@ def scan_city_messages(
         if enqueue(sim, _make(eng, "fire", 81)):
             fired.append("fire")
     watch.on_fire = fires > 0
+
+    # 58c87 EAX=0x57 → official slot 86 after a type-7 spawn (unless
+    # [0x117AA3]). Host posts once per session, same seen-key as fire.
+    if rioters_spawned > 0 and "riot" not in watch.seen:
+        if enqueue(sim, _make(eng, "riot", 86)):
+            fired.append("riot")
+        watch.on_riot = True
+
+    # 58c87 EAX=0x53 → official slot 82 after 0x536E2 actually spawned.
+    if attack_spawned > 0:
+        watch.seen.discard("attack")
+        if enqueue(sim, _make(eng, "attack", 82)):
+            fired.append("attack")
 
     # Rising edge only. Construction 20/20 and leftover idle with every
     # slider at need stay quiet. Overlay / clock blit must not re-post.
@@ -686,6 +716,35 @@ def selftest() -> list[str]:
     else:
         lines.append("ok    Fire Alert! on ignite")
 
+    sim = SimState(city_only=1, population=8, treasury=100)
+    init_city_only_labor(sim)
+    got = scan_city_messages(sim, tiles2, rioters_spawned=1)
+    msg = next((m for m in ensure_watch(sim).pending if m.key == "riot"), None)
+    if "riot" not in got or msg is None or msg.slot != 86:
+        lines.append(f"FAIL  riot {got} slot={getattr(msg, 'slot', None)}")
+    else:
+        lines.append("ok    Rioting! [86] after type-7 spawn")
+    got2 = scan_city_messages(sim, tiles2, rioters_spawned=1)
+    if "riot" in got2:
+        lines.append(f"FAIL  riot re-post {got2}")
+    else:
+        lines.append("ok    Rioting! does not re-queue")
+
+    sim = SimState(city_only=1, population=8, treasury=100)
+    init_city_only_labor(sim)
+    got = scan_city_messages(sim, tiles2, attack_spawned=1)
+    msg = next((m for m in ensure_watch(sim).pending if m.key == "attack"), None)
+    if "attack" not in got or msg is None or msg.slot != 82:
+        lines.append(f"FAIL  attack {got} slot={getattr(msg, 'slot', None)}")
+    else:
+        lines.append("ok    The City Is Attacked! [82] after type-3 spawn")
+    career = SimState(city_only=0, population=8, treasury=100)
+    career.msg_watch = MessageWatch()
+    if scan_city_messages(career, tiles2, attack_spawned=1):
+        lines.append("FAIL  Career must skip [82]")
+    else:
+        lines.append("ok    Career skips City Only [82]")
+
     tiles_flag = bytearray(MAP_W * MAP_H * TILE_STRIDE)
     sim = SimState(city_only=1, population=8, treasury=100)
     init_city_only_labor(sim)
@@ -799,7 +858,7 @@ def selftest() -> list[str]:
         lines.append("ok    No Denarii! when treasury < 0")
 
     msg = pop_message(sim)
-    if msg is None or msg.slot not in (7, 35, 79, 81, 84, 88, 97, 100, 103, 114):
+    if msg is None or msg.slot not in (7, 35, 79, 81, 82, 84, 86, 88, 97, 100, 103, 114):
         lines.append(f"FAIL  pop_message {msg}")
     else:
         lines.append("ok    queue pop + click-dismiss fields")
@@ -851,6 +910,26 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  [81] {eng.skip(81, 0)!r}")
     else:
         lines.append("ok    C2.ENG Fire Alert!")
+    if eng.skip(82, 0) != "The City Is Attacked!":
+        lines.append(f"FAIL  [82] {eng.skip(82, 0)!r}")
+    else:
+        lines.append("ok    C2.ENG The City Is Attacked!")
+    if eng.skip(66, 2) != " - Enemy":
+        lines.append(f"FAIL  [66]+2 {eng.skip(66, 2)!r}")
+    else:
+        lines.append("ok    C2.ENG [66]+2 Enemy")
+    if eng.skip(86, 0) != "Rioting!":
+        lines.append(f"FAIL  [86] {eng.skip(86, 0)!r}")
+    else:
+        lines.append("ok    C2.ENG Rioting!")
+    if eng.skip(66, 6) != " - Rioter":
+        lines.append(f"FAIL  [66]+6 {eng.skip(66, 6)!r}")
+    else:
+        lines.append("ok    C2.ENG [66]+6 Rioter")
+    if eng.skip(52, 4) != "Unrest":
+        lines.append(f"FAIL  [52]+4 {eng.skip(52, 4)!r}")
+    else:
+        lines.append("ok    C2.ENG [52]+4 Unrest")
     if eng.skip(114, 0) != "New Structure Available":
         lines.append(f"FAIL  [114] {eng.skip(114, 0)!r}")
     else:

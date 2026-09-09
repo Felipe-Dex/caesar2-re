@@ -1,7 +1,7 @@
 """Host stand-in for city_sim_phase 0x3F60C — one slot per pulse.
 
 Implemented: housing evolve 1–0x50, wipes + paint +13/+14/+15, +17 flood,
-walker emit, fire tick / collapse 0x9E–0xA1, wrap → calendar month.
+walker emit, fire tick / rioter 0x9E–0xA1, wrap → calendar month.
 City Only stubs (0xC2–0xD1, 0xD3) advance the slot with no work — they
 are not jumped for a fake month.
 """
@@ -124,7 +124,7 @@ def slot_name(phase: int) -> str:
     if 0x9A <= phase <= 0x9D:
         return f"market/factory emit row {(phase - 0x9A) * 20}"
     if 0x9E <= phase <= 0xA1:
-        return "immigrant / rioter 0x41DD4 (City Only skip)"
+        return "fire / rioter 0x41DD4"
     if 0xA2 <= phase <= 0xC1:
         return f"road flood +17 dir {(phase - 0xA2) // 8} row {((phase - 0xA2) % 8) * 10}"
     if 0xC2 <= phase <= 0xC9:
@@ -160,6 +160,8 @@ def slot_implemented(phase: int) -> bool:
         return True
     if 0x8E <= phase <= 0x9D:
         return True
+    if 0x9E <= phase <= 0xA1:
+        return True
     if 0xA2 <= phase <= 0xC1:
         return True
     if phase == 0xD2:
@@ -172,8 +174,6 @@ def slot_implemented(phase: int) -> bool:
 def slot_city_only_skip(phase: int) -> bool:
     """EXE still increments these; City Only has nothing to do."""
     if phase == 0:
-        return True
-    if 0x9E <= phase <= 0xA1:
         return True
     if 0xC2 <= phase <= 0xD1:
         return True
@@ -219,6 +219,11 @@ class SimState:
     pop_peak: int = 0  # FAQ latch: unlocks stay after pop drops
     flood_dir: int = 0  # [0x102678] 0…3
     fire_ignited: int = 0  # one 69A37 per 0x9E–0xA1 pass
+    invade_months: int = 0  # [0x102a78] — 0x52828 wait (RAM, not SAV)
+    attack_spawned: int = 0  # type-3 wave this wrap; [82] banner
+    unrest_rng: int = 0  # [0x1024c8] 0…63 → LUT 0x96c5b
+    unrest_add: int = 0  # [0x102af0] added to +11 lo-nibble
+    rioters_spawned: int = 0  # type-7 count this 0x9E–0xA1 pass
     # Forum / PLEBS — chunks 52 / 54 / 55 / 56 @ 0x102A68 / 0x102A98 /
     # 0x102AC4 / 0xD2E6C. Tax 29/30 @ 0x102A7C / 0x102AA8. Oracle 286–289
     # + avg 46. New City Only seeds via init_city_only_labor (0x563E2);
@@ -286,10 +291,11 @@ class PhaseResult:
     year_wrapped: bool = False
     date_label: str = ""
     note: str = ""
+    fire_changed: int = 0
 
     @property
     def houses_changed(self) -> int:
-        return self.houses_up + self.houses_down
+        return self.houses_up + self.houses_down + self.fire_changed
 
 
 def _off(x: int, y: int) -> int:
@@ -772,14 +778,30 @@ def _band20(phase: int, lo: int) -> tuple[int, int]:
 ID_RUBBLE = 0x05
 DRAW_FIRE = 0x80
 FIRE_TIMER_IGNITE = 10
+# 0x93FCC[0x117a60] — 69A37 writes this into +9 (flag80 water flame).
+_RNG_93FCC = bytes.fromhex(
+    "0a050b030d040f07090800020c0e0106"
+    "000b020d040f060908070a010c030e05"
+    "090a01020d0e0500070c03040f060b08"
+    "06010d030b0500040c020e0f09070a08"
+)
+_fire_rng_i = 0
+
+
+def _fire_rng_byte() -> int:
+    """Advance [0x117a60] wrap 0x40 and return LUT 0x93FCC."""
+    global _fire_rng_i
+    _fire_rng_i = (_fire_rng_i + 1) & 0x3F
+    return _RNG_93FCC[_fire_rng_i]
 
 
 def tile_ignite(tiles: bytearray, off: int) -> None:
-    """FUN_00069a37: +11 &= 0xC0, +3 |= 0x81, +16 = 10."""
+    """FUN_00069a37: +11 &= 0xC0, +3 |= 0x81, +9 = rng, +16 = 10."""
     if off < 0 or off + 16 >= len(tiles):
         return
     tiles[off + 11] &= 0xC0
     tiles[off + 3] = (tiles[off + 3] | 0x81) & 0xFF
+    tiles[off + 9] = _fire_rng_byte()
     tiles[off + 16] = FIRE_TIMER_IGNITE
 
 
@@ -836,6 +858,7 @@ def tile_collapse_rubble(
         tiles[off + 11] &= 0xC0
         if leave_fire:
             tiles[off + 3] = (tiles[off + 3] | 0x81) & 0xFF
+            tiles[off + 9] = _fire_rng_byte()
             tiles[off + 16] = FIRE_TIMER_IGNITE
         else:
             tiles[off + 3] = (tiles[off + 3] & 0x7F) | 0x01
@@ -900,7 +923,7 @@ def fire_tick_rows(
     n: int,
     state: SimState | None = None,
 ) -> tuple[int, int, int]:
-    """41DD4 fire slice (City Only: skip immigrant / rioter spawn).
+    """41DD4 fire slice. Rioter type-7 spawn is a sibling on this slot.
 
     Returns (decremented, collapsed, ignited).
     """
@@ -1045,6 +1068,7 @@ def city_sim_phase(
     name = slot_name(phase)
     implemented = slot_implemented(phase)
     up = down = merge = spawned = painted = 0
+    col = ign = 0
     wrapped = False
     year_wrapped = False
     note = ""
@@ -1162,6 +1186,12 @@ def city_sim_phase(
         dec, col, ign = fire_tick_rows(tiles, y0, n, state)
         painted = dec + col + ign
         note = f"fire --={dec} collapse={col} ignite={ign}"
+        riot_fn = getattr(wt, "unrest_spawn_rows", None)
+        if callable(riot_fn):
+            extra = riot_fn(tiles, walkers, y0, n, state) or 0
+            spawned += int(extra)
+            if extra:
+                note += f" rioter={extra}"
     elif 0xA2 <= phase <= 0xC1 and can:
         slot = phase - 0xA2
         state.flood_dir = slot // 8
@@ -1214,8 +1244,16 @@ def city_sim_phase(
         treas_before = int(state.treasury)
         year_before = int(state.year_raw)
         month_was = int(state.month)
+        years_played = max(0, year_before + 300)
         wrapped = _phase_wrap(state)
         year_wrapped = wrapped and int(state.year_raw) != year_before
+        if getattr(state, "city_only", 0) and can and walkers is not None:
+            extra = wt.city_only_try_invasion(
+                state, tiles, walkers, years_played=years_played
+            )
+            if extra:
+                spawned += extra
+                note = (note + " " if note else "") + f"enemy={extra}"
         if not log_this:
             _log_phase(
                 state,
@@ -1254,8 +1292,10 @@ def city_sim_phase(
         from app.messages import scan_city_messages
 
         ign = 0
+        riot = 0
         if 0x9E <= phase <= 0xA1:
             ign = int(getattr(state, "fire_ignited", 0))
+            riot = int(getattr(state, "rioters_spawned", 0))
             if "ignite=" in note:
                 try:
                     ign = max(ign, int(note.split("ignite=", 1)[1].split()[0]))
@@ -1267,7 +1307,10 @@ def city_sim_phase(
             houses_up=up,
             month_wrapped=wrapped,
             fire_ignited=ign,
+            rioters_spawned=riot,
+            attack_spawned=int(getattr(state, "attack_spawned", 0)),
         )
+        state.attack_spawned = 0
 
     return PhaseResult(
         phase=phase,
@@ -1281,6 +1324,7 @@ def city_sim_phase(
         year_wrapped=year_wrapped,
         date_label=state.date_label,
         note=note or log_line,
+        fire_changed=col + ign if 0x9E <= phase <= 0xA1 else 0,
     )
 
 
@@ -2510,6 +2554,91 @@ def selftest() -> list[str]:
     lines.append(
         f"villa leftover +3 bit7 is not fire: {'ok' if ok else 'FAIL'} "
         f"+16={tiles[hoff + 16]} ign={st.fire_ignited}"
+    )
+
+    tiles = _blank_tiles()
+    poff = _off(12, 12)
+    tiles[poff] = 0xE3
+    tiles[poff + 3] = DRAW_FIRE
+    tiles[poff + 16] = 0
+    aoff = _off(13, 12)
+    tiles[aoff] = 0xD0
+    tiles[aoff + 3] = DRAW_FIRE
+    tiles[aoff + 16] = 0
+    st = SimState(phase=0x9E, year_raw=-300, month=0, city_only=1)
+    fire_tick_rows(tiles, 12, 1, st)
+    ok = tiles[poff + 16] == 0 and tiles[aoff + 16] == 0 and st.fire_ignited == 0
+    lines.append(
+        f"prefecture/aqueduct bit7 is not fire: {'ok' if ok else 'FAIL'} "
+        f"p+16={tiles[poff + 16]} a+16={tiles[aoff + 16]}"
+    )
+
+    tiles = _blank_tiles()
+    a = _off(10, 10)
+    b = _off(10, 9)
+    tiles[a] = 0x82
+    tiles[a + 1] = 0x01
+    tiles[b] = 0x83
+    tiles[b + 1] = 0x01
+    st = SimState(phase=0x9E, year_raw=-300, month=0, city_only=1)
+    ignited = spread = collapsed = False
+    for _ in range(4):
+        fire_tick_rows(tiles, 10, 1, st)
+        if tiles[a + 3] & DRAW_FIRE and tiles[a + 16] == FIRE_TIMER_IGNITE:
+            ignited = True
+            break
+    if ignited:
+        tiles[a + 16] = 8
+        fire_tick_rows(tiles, 10, 1, st)
+        spread = bool(tiles[b + 3] & DRAW_FIRE) and tiles[b + 16] == FIRE_TIMER_IGNITE
+        tiles[a + 16] = 1
+        fire_tick_rows(tiles, 10, 1, st)
+        collapsed = tiles[a] == ID_RUBBLE and bool(tiles[a + 3] & DRAW_FIRE)
+    ok = ignited and spread and collapsed
+    lines.append(
+        f"e2e risk-ignite-spread-collapse: {'ok' if ok else 'FAIL'} "
+        f"ign={ignited} spread={spread} col={collapsed} id={tiles[a]:#x}"
+    )
+
+    from app.walker_tick import vigile_extinguish_here, vigile_sector_has_fire
+    from app.walkers import WALKER_STRIDE
+
+    tiles = _blank_tiles()
+    foff = _off(12, 10)
+    tiles[foff] = ID_RUBBLE
+    tiles[foff + 3] = DRAW_FIRE
+    tiles[foff + 16] = 1
+    rec = bytearray(WALKER_STRIDE)
+    struct.pack_into("<i", rec, 6, foff)
+    saw = vigile_sector_has_fire(tiles, 10, 10)
+    did = vigile_extinguish_here(tiles, rec)
+    put_out = saw and did and (tiles[foff + 3] & DRAW_FIRE) == 0
+    lines.append(
+        f"e2e vigile extinguish rubble: {'ok' if put_out else 'FAIL'}"
+    )
+
+    tiles = _blank_tiles()
+    hoff = _off(10, 10)
+    tiles[hoff] = 0x82
+    tiles[hoff + 1] = 0x01
+    tiles[hoff + 11] = 0x0F
+    st = SimState(
+        phase=0x9E, year_raw=-300, month=0, city_only=1, unrest_rng=1, unrest_add=2
+    )
+    walkers: list = []
+    city_sim_phase(tiles, st, walkers)
+    live = [w for w in walkers if getattr(w, "occupied", 0)]
+    ok = (
+        tiles[hoff] == ID_RUBBLE
+        and live
+        and live[0].type == 7
+        and live[0].next_state == 0x0B
+        and st.rioters_spawned == 1
+    )
+    lines.append(
+        f"0x9E rioter type 7 not occupy: {'ok' if ok else 'FAIL'} "
+        f"id={tiles[hoff]:#x} type={live[0].type if live else 0} "
+        f"next={live[0].next_state if live else -1} n={st.rioters_spawned}"
     )
 
     from app.messages import selftest as message_selftest
