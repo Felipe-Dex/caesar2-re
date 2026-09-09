@@ -2413,6 +2413,33 @@ def selftest() -> list[str]:
         f"E={wrap.rating_empire} P={wrap.rating_peace} "
         f"pros={wrap.rating_prosperity} cult={wrap.rating_culture}"
     )
+    from app.walkers import WALKER_BYTES, Walker
+
+    tiles = _blank_tiles()
+    tiles[_off(40, 40) + 15] = 40
+    walkers: list[Walker] = []
+    inv = SimState(
+        phase=PHASE_MAX,
+        year_raw=-292,
+        month=0,
+        city_only=1,
+        skill=2,
+        treasury=12000,
+        invade_months=48,
+    )
+    inv.invade_rng = 0x20
+    inv.stamp_clock = 1
+    city_sim_phase(tiles, inv, walkers)
+    enemies = [w for w in walkers if getattr(w, "type", 0) == 3]
+    from app.messages import ensure_watch
+
+    watch = ensure_watch(inv)
+    has_82 = any(m.slot == 82 for m in watch.pending)
+    ok = len(enemies) == 1 and has_82 and enemies[0].next_state == 5
+    lines.append(
+        f"WRAP City Only type 3 + [82]: {'ok' if ok else 'FAIL'} "
+        f"n={len(enemies)} banner={has_82}"
+    )
     tiles = _blank_tiles()
     toff = _off(10, 10)
     tiles[toff] = 0x9B  # grand domus wealth 100
