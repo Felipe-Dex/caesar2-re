@@ -626,15 +626,14 @@ def blit_int_city_minimap(
 ) -> tuple[Image.Image, tuple[int, int, int, int] | None]:
     """Scale the 80×80 map to ``MINIMAP_RECT`` (INT_CITY well above the 3×5).
 
-    INT_CITY sprite 3 (478,368) is the stone relief, not this slot. ``chrome``
-    is unused on purpose so a sibling HUD edit cannot pull dests[3] back in.
+    INT_CITY sprite 3 (478,368) is the stone relief, not this slot.
+    After the 80×80 paste, MISC[4] N-up sits at (482,50)+ox (3ed7c).
     """
     from app import city_map
 
     fn = getattr(city_map, "render_minimap", None)
     if fn is None:
         return frame, None
-    _ = chrome
     mini = fn(city, viewport, overlay_id=overlay_id, facing=facing)
     mx, my, mw, mh = city_map.MINIMAP_RECT
     mx += ox

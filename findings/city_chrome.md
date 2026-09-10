@@ -25,6 +25,7 @@ python -m app --new --city-only --no-audio
 | Peça | Onde | Notas |
 |---|---|---|
 | `INT_CITY.PL8` | boot asset 11, paleta `CITY1.256` | 28 sprites. **Não** copiar para o git |
+| `MISC.PL8` | boot asset 9, dest `0xD1A2C` | Norte: **0–3** (18×15, 4 facings) + **4** (15×16 N-up). **Não** copiar |
 | Sprite 0 | `(0,0)` 640×24 | barra de topo |
 | Sprite 1 | `(478,24)` 162×24 | faixa direita |
 | Sprite 2 | `(478,208)` 162×160 | **painel com a grelha 3×5 já pintada** |
@@ -55,6 +56,7 @@ Tabela **0x98B34** (18 B, `u16 id` + `u32 handler`) é o **overlay de relatório
 **Fiel o bastante**
 
 - Blit `INT_CITY` 0–3 nas dest x/y do PL8 (sidebar direita, como o EXE).
+- Blit `MISC` 0–3 em (452, 26) e `MISC[4]` em (482, 50) — seta do norte. Host nunca pintava.
 - Hitboxes da 3×5: sprites 13–27 deslocados `(478-244, 208-211)` para cima do painel 2.
 - Housing → Tent `0x82` `+1=0x01` `+15=1` no próprio tile (`sav_c.md`).
 - Roads → terreno `0x52–0x5C` + `+1 |= 0x20`. Autotile cardinal (NS `0x52`, EW `0x53`, cantos/T/cruz) e retile dos 4 vizinhos (inclui ponte como vizinho). LUT 8-vizinhos `0x94AEF` **não** portada (diagonais don’t-care no EXE).
@@ -68,7 +70,7 @@ Tabela **0x98B34** (18 B, `u16 id` + `u32 handler`) é o **overlay de relatório
 - **Gardens** `0x78` 1×1 BUILD1A `+3=0x04` `+4=0`.
 - **Praefecture** `0xE3` 1×1 HOUSES1 `+4=0x50`.
 - **Aqueduct** isolado → stub `0xCB`; NS → `0xD0`; EW → `0xD1`; cruzamento → `0xD6`. `+1=0x40` (junção `0x60`). Sem débito. LUT completa `0xCF–0xD6` **não** portada.
-- Clique paleta / clique mapa / direito ou **Space** cancela a ferramenta. **Esc** fecha painel/menu (City Only não sai). **P** pause · **C** census · **A** faster · **F**/**F2** forum · **F1** cidade · **F4**/**F5** load/save. **Q** ainda sai (host). **Rotate** = INT_CITY sprites **4** (CCW / facing−1) e **5** (CW / facing+1), também **<**/**>**. Facing 0–3; walkers / ghost / overlays / place usam o mesmo eixo. Minimapa **norte-cima** (world x/y); o rectângulo amarelo e o clique falam tiles mundo. Ghidra HTTP em baixo — `[0x117AC8]` é increment %4 sem xref (não é o byte). Leftovers: flags / overlay letters / Query letter.
+- Clique paleta / clique mapa / direito ou **Space** cancela a ferramenta. **Esc** fecha painel/menu (City Only não sai). **P** pause · **C** census · **A** faster · **F**/**F2** forum · **F1** cidade · **F4**/**F5** load/save. **Q** ainda sai (host). **Rotate** = INT_CITY sprites **4** (CCW / facing−1) e **5** (CW / facing+1), também **<**/**>**. Facing 0–3; walkers / ghost / overlays / place usam o mesmo eixo. Minimapa **norte-cima** (world x/y); o rectângulo amarelo e o clique falam tiles mundo. **Norte:** `MISC.PL8` (não INT_CITY). `gfx_blit` `0x27BFA` EAX=`0xD1A2C`. Seta do mapa = sprites **0–3** em **(452, 26)** (`0x3D065` / `0x5ACF0`); índice = `[0x102BE0] >> 1` = `walker_camera(facing) >> 1` = `(-facing)&3` — roda com o facing para o N continuar a apontar o norte do mundo (facing 0 = up-right). `MISC[4]` N-up no minimapa **(482, 50)** (`3ed7c`, `[0x102B5C]+2` / `[0x102B60]+2`, boot 480/48). Faster (`[0xC45A0]≥2`) salta o blit em `view_frame`; o host pinta sempre. Leftovers: flags / overlay letters / Query letter.
 - **Top menus** (`C2.ENG` [0]…[3], `app/menus.py`). **File:** New Game = City Only de novo (`Start a New Game?` [9]+1, mesma skill; sem Campaign). Load = diálogo `*.sav` no install (não redistribui). Save / **F5** = diálogo e `app/sav.py` (225745 B; chunks que o host tem; resto a zero — `findings/sav_write.md`). Quit = `Exit to DOS?` [9]+0. **Options:** Music / Sound / Animations ON|OFF ([56]); End of Year = `Auto-Save is` (sem `lastyear.sav`); **Census** = painel [74] pop + origens Tent…Mansion. **Speed:** Pause toggle; Game Speed cicla Play↔Faster (INT_CITY 7–8); Scroll Speed = 1×/2×/3× do pan. **Help:** título + 1ª frase HELP.ENG (Hints 119 / Help 0 / History 2 / Icons 91); About = [10] versão + [56]+13. Sem ecrãs Career.
 - **Speed** (INT_CITY sprites 6–8 remapeados no painel, acima da 3×5): **Pause** / **Play** (triângulo azul) / **Faster** (amarelo). Default **unpaused** (play, 1 pulso / due, scalar 70 → 200 ms). Faster = 4 pulsos (`[0xC45A0]`). HUD date (chunks 25/26) actualiza no wrap. **M** ainda fecha um mês. Sem economia.
 - Clique-arrasta: preview (diamantes) até ao mouse-up; direito aborta sem stamp. Estrada = linha recta (eixo dominante). Casa/Clear = bbox. Tesouro do arrasto de tendas é **atómico** (tudo ou nada).

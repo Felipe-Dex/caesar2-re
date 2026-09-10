@@ -582,4 +582,7 @@ def selftest() -> list[str]:
             lines.append(f"FAIL  rotate_left hit={getattr(hit, 'action', None)}")
         else:
             lines.append("ok    INT_CITY rotate-left / rotate-right gadgets")
+    from app.city_chrome import selftest as chrome_selftest
+
+    lines.extend(chrome_selftest())
     return lines
