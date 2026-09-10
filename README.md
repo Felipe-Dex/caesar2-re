@@ -59,6 +59,8 @@ python -m app --new --city-only
 python -m app --new --city-only --no-audio
 ```
 
+Double-click `city-only.bat` at the repo root for the same City Only command.
+
 Set `CAESAR2_PATH`, or copy `app/config.example.json` → `app/config.local.json` (gitignored). Shows a 640×480 window with a decoded title `backgrnd.pl8` and C2.ENG text. **City Only** (`--new --city-only`) opens the iso map (grass + river). Keys / city map: `app/README.md`. Host layers: `findings/app_structure.md`. Roadmap: `findings/city_only.md`.
 
 ## Status
