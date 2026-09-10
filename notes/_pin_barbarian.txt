@@ -1,0 +1,97 @@
+City Only type-3 Enemy — 0x537ed rim / 0x536E2 spawn
+0x536E2: EAX=side EDX=0x50 EBX=0x3F -> 0x537ed
+  [0x117bb0]=x [0x117bb4]=y; +1&0xE7 -> 0x68c01 1x1
+  walker_spawn EAX=3 pad=0; fail → stop (no retry)
+0x2A7EF pad=0: reject +1&0x8B or +1&0x54 (0x54 has river 0x10)
+0x68c01 1×1: +3 &= 0xBF; does not clear 0x54
+Host &=0x24 left 0x04 so still rejected. Corners are water.
+
+==== type3_count 0x536e2 ====
+  000536e2  53                       push     ebx
+  000536e3  51                       push     ecx
+  000536e4  56                       push     esi
+  000536e5  57                       push     edi
+  000536e6  55                       push     ebp
+  000536e7  89c7                     mov      edi, eax
+  000536e9  89d5                     mov      ebp, edx
+  000536eb  31f6                     xor      esi, esi
+  000536ed  e9af000000               jmp      0x537a1
+  000536f2  bb3f000000               mov      ebx, 0x3f
+  000536f7  ba50000000               mov      edx, 0x50
+  000536fc  89f8                     mov      eax, edi
+  000536fe  e8ea000000               call     0x537ed
+  00053703  8b15b47b1100             mov      edx, dword ptr [0x117bb4]
+  00053709  89d0                     mov      eax, edx
+  0005370b  c1e002                   shl      eax, 2
+  0005370e  01d0                     add      eax, edx
+  00053710  c1e004                   shl      eax, 4
+  00053713  8b15b07b1100             mov      edx, dword ptr [0x117bb0]
+  00053719  01c2                     add      edx, eax
+  0005371b  89d0                     mov      eax, edx
+  0005371d  c1e002                   shl      eax, 2
+  00053720  01d0                     add      eax, edx
+  00053722  c1e002                   shl      eax, 2
+  00053725  a3a87b1100               mov      dword ptr [0x117ba8], eax
+  0005372a  8a80bd2f0e00             mov      al, byte ptr [eax + 0xe2fbd]
+  00053730  24e7                     and      al, 0xe7
+  00053732  25ff000000               and      eax, 0xff
+  00053737  7414                     je       0x5374d
+  00053739  8b15b47b1100             mov      edx, dword ptr [0x117bb4]
+  0005373f  a1b07b1100               mov      eax, dword ptr [0x117bb0]
+  00053744  89d1                     mov      ecx, edx
+  00053746  89c3                     mov      ebx, eax
+  00053748  e8b4540100               call     0x68c01
+  0005374d  8b1db47b1100             mov      ebx, dword ptr [0x117bb4]
+  00053753  8b15b07b1100             mov      edx, dword ptr [0x117bb0]
+  00053759  31c9                     xor      ecx, ecx
+  0005375b  b803000000               mov      eax, 3
+  00053760  e88a70fdff               call     0x2a7ef
+  00053765  85c0                     test     eax, eax
+
+==== edge pick head 0x537ed ====
+  000537ed  51                       push     ecx
+  000537ee  56                       push     esi
+  000537ef  57                       push     edi
+  000537f0  55                       push     ebp
+  000537f1  89c6                     mov      esi, eax
+  000537f3  89d7                     mov      edi, edx
+  000537f5  89d9                     mov      ecx, ebx
+  000537f7  8b15ac7b1100             mov      edx, dword ptr [0x117bac]
+  000537fd  42                       inc      edx
+  000537fe  8915ac7b1100             mov      dword ptr [0x117bac], edx
+  00053804  8b2d70200c00             mov      ebp, dword ptr [0xc2070]
+  0005380a  01d5                     add      ebp, edx
+  0005380c  21dd                     and      ebp, ebx
+  0005380e  89fa                     mov      edx, edi
+  00053810  29da                     sub      edx, ebx
+  00053812  89d0                     mov      eax, edx
+  00053814  c1fa1f                   sar      edx, 0x1f
+  00053817  2bc2                     sub      eax, edx
+  00053819  d1f8                     sar      eax, 1
+  0005381b  89c3                     mov      ebx, eax
+  0005381d  85c0                     test     eax, eax
+  0005381f  7d02                     jge      0x53823
+  00053821  31c3                     xor      ebx, eax
+  00053823  89c8                     mov      eax, ecx
+  00053825  89ca                     mov      edx, ecx
+  00053827  c1fa1f                   sar      edx, 0x1f
+  0005382a  c1e202                   shl      edx, 2
+  0005382d  1bc2                     sbb      eax, edx
+
+==== spawn pad-0 0x54 reject 0x2a867 ====
+  0002a867  88c4                     mov      ah, al
+  0002a869  80e48b                   and      ah, 0x8b
+  0002a86c  0fb6f4                   movzx    esi, ah
+  0002a86f  85f6                     test     esi, esi
+  0002a871  0f8583010000             jne      0x2a9fa
+  0002a877  84c9                     test     cl, cl
+  0002a879  740e                     je       0x2a889
+  0002a87b  2420                     and      al, 0x20
+  0002a87d  25ff000000               and      eax, 0xff
+  0002a882  7512                     jne      0x2a896
+  0002a884  e973010000               jmp      0x2a9fc
+  0002a889  2454                     and      al, 0x54
+  0002a88b  25ff000000               and      eax, 0xff
+  0002a890  0f8564010000             jne      0x2a9fa
+  0002a896  66c705f25611000100       mov      word ptr [0x1156f2], 1
+  0002a89f  e944010000               jmp      0x2a9e8
