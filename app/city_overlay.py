@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from PIL import Image, ImageDraw, ImageFont
 
 from app.city_map import (
+    FLAG_RIVER,
     ID_TERRAIN_MAX,
     MAP_H,
     MAP_W,
@@ -40,6 +41,7 @@ from app.city_paint import (
     factory_type_name,
     hospital_cover_percent,
     library_cover_percent,
+    security_enclosure_mask,
     tile_inside_walls,
 )
 
@@ -199,7 +201,13 @@ def i8(b: int) -> int:
     return b - 256 if b >= 128 else b
 
 
-def overlay_pixel(tiles: bytearray | bytes, off: int, overlay_id: int) -> int:
+def overlay_pixel(
+    tiles: bytearray | bytes,
+    off: int,
+    overlay_id: int,
+    *,
+    enclosed: bool | None = None,
+) -> int:
     """One 0xD7BFC byte. Painters at 0x3E656…0x3EA8E."""
     if overlay_id <= 0 or overlay_id > 9:
         return 0
@@ -210,7 +218,10 @@ def overlay_pixel(tiles: bytearray | bytes, off: int, overlay_id: int) -> int:
     if overlay_id == OVERLAY_WATER:
         return _paint_water(tid, flags, tiles[off + 13])
     if overlay_id == OVERLAY_SECURITY:
-        return _paint_security(tid, flags, tiles[off + 10], tiles[off + 17])
+        if enclosed is None:
+            idx = off // TILE_STRIDE
+            enclosed = tile_inside_walls(tiles, idx % MAP_W, idx // MAP_W)
+        return _paint_security(tid, flags, tiles[off + 10], enclosed)
     if overlay_id == OVERLAY_UNREST:
         return _paint_unrest(tiles[off + 11])
     if overlay_id == OVERLAY_TAX:
@@ -277,28 +288,26 @@ def _is_security_road(tid: int) -> bool:
     return 0x7C <= tid <= 0x7E
 
 
-def _paint_security(tid: int, _flags: int, cov10: int, flood17: int) -> int:
-    # 0x3E7DB. Score = (signed +17>=16) + (+10&0x30).
-    # EXE also writes 0x96 for flags&6, river 0x1E–0x51, and both 0xE3/0xE4
-    # — one khaki on the host iso/minimap. Split the two buildings (CITY1.256
-    # 0x96 tan vs 0x8B salmon), keep the 0x8D/0x90/0x93 coverage ramp, and
-    # leave river / open land on plane 0 (dimmed geography).
+def _paint_security(tid: int, _flags: int, cov10: int, enclosed: bool) -> int:
+    # 0x3E7DB. EXE score = (signed +17>=16) + (+10&0x30). Host External is
+    # wall/gate/tower/river enclosure (same C2.ENG Internal/External/Both),
+    # not flood_plus17 — a City Only river would paint +17>=16 everywhere.
+    # Split prefecture/barracks (CITY1.256 0x96 tan vs 0x8B salmon). Leave
+    # river / grass / walls on plane 0 (dimmed geography).
     if tid == 0xE3:
         return 0x96
     if tid == 0xE4:
         return 0x8B
-    score = 0
-    if i8(flood17) >= 0x10:
-        score = 1
-    if cov10 & 0x30:
-        score += 1
+    score = int(bool(enclosed)) + int(bool(cov10 & 0x30))
     if score == 0:
         return 0
     if score == 2:
         return 0x8D
     if cov10 & 0x30:
         return 0x93
-    if score == 1 and _is_security_road(tid):
+    if enclosed and (
+        _is_security_road(tid) or ID_HOUSING_LO <= tid <= ID_HOUSING_HI
+    ):
         return 0x90
     return 0
 
@@ -388,10 +397,14 @@ def apply_overlay_colors(
     """Replace geography pixels where the EXE plane byte is nonzero."""
     if overlay_id <= 0:
         return pixels
+    enclosed_mask = (
+        security_enclosure_mask(tiles) if overlay_id == OVERLAY_SECURITY else None
+    )
     out: list[tuple[int, int, int]] = []
     for i, base in enumerate(pixels):
         off = i * TILE_STRIDE
-        idx = overlay_pixel(tiles, off, overlay_id)
+        enclosed = bool(enclosed_mask[i]) if enclosed_mask is not None else None
+        idx = overlay_pixel(tiles, off, overlay_id, enclosed=enclosed)
         if idx:
             out.append(palette_rgb(idx))
         else:
@@ -445,11 +458,19 @@ def overlay_iso_wash(
     draw = ImageDraw.Draw(overlay)
     tw, th = iso_tile_size(zoom)
     painted = False
+    enclosed_mask = (
+        security_enclosure_mask(tiles) if overlay_id == OVERLAY_SECURITY else None
+    )
     for ty in range(y0, y1 + 1):
         row = ty * MAP_W * TILE_STRIDE
         for tx in range(x0, x1 + 1):
             off = row + tx * TILE_STRIDE
-            idx = overlay_pixel(tiles, off, overlay_id)
+            enclosed = (
+                bool(enclosed_mask[ty * MAP_W + tx])
+                if enclosed_mask is not None
+                else None
+            )
+            idx = overlay_pixel(tiles, off, overlay_id, enclosed=enclosed)
             if not idx:
                 continue
             rgb = palette_rgb(idx)
@@ -971,9 +992,10 @@ def query_place(city: CityMap, x: int, y: int, eng=None) -> PlaceInfo:
     #   [0x117a65]>0 → +8 External; else +9 NO Security.
     # +17 flood 0x430da seeds +1&0x1E (wall 0x02, tower 0x04, river 0x10).
     # Host flood_plus17 fills a City Only river map, so +17>=16 is not a
-    # wall test. External = enclosed by wall/gate/tower (same C2.ENG line).
+    # wall test. External = enclosed by wall/gate/tower/river (edge flood
+    # cannot cross those tiles). Same C2.ENG line as the overlay legend.
     internal = bool(t.coverage & SECURITY_COV_BITS)
-    external = tile_inside_walls(city.tiles, x, y)
+    external = tile_inside_walls(city.tiles, ox, oy)
     if internal and external:
         lines.append(_eng_skip(eng, 60, 0x5C, "Maximum Security"))
     elif internal:
@@ -1568,19 +1590,19 @@ def selftest() -> list[str]:
     else:
         lines.append("ok    security grass +17 -> plane 0")
     off = put(22, 0, tid=0x52, flags=0x20, **{"17": 0x20})
-    if overlay_pixel(tiles, off, OVERLAY_SECURITY) != 0x90:
+    if overlay_pixel(tiles, off, OVERLAY_SECURITY) != 0:
         lines.append(
             f"FAIL  security road {overlay_pixel(tiles, off, OVERLAY_SECURITY):#x}"
         )
     else:
-        lines.append("ok    security road +17 -> 0x90")
+        lines.append("ok    security road +17 open -> plane 0")
     off = put(23, 0, tid=0x52, flags=0x20, **{"10": 0x30, "17": 0x20})
-    if overlay_pixel(tiles, off, OVERLAY_SECURITY) != 0x8D:
+    if overlay_pixel(tiles, off, OVERLAY_SECURITY) != 0x93:
         lines.append(
             f"FAIL  security covered road {overlay_pixel(tiles, off, OVERLAY_SECURITY):#x}"
         )
     else:
-        lines.append("ok    security road +10&0x30 +17 -> 0x8D")
+        lines.append("ok    security road +10&0x30 open -> 0x93 Internal")
     off = put(24, 0, tid=0x82, flags=0, **{"10": 0x30})
     if overlay_pixel(tiles, off, OVERLAY_SECURITY) != 0x93:
         lines.append(
@@ -1830,8 +1852,8 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  query prefecture without walls → max {sec_q.lines}")
     else:
         lines.append("ok    query house next to Praefecture → Internal Security")
-    # Host +17 stand-in is river-wide; EXE External is walls (0x64337 +17
-    # is the same byte, but City Only river must not promote to Maximum).
+    # Host +17 stand-in is river-wide; EXE External is enclosure (0x64337
+    # +17 is the same byte, but City Only river must not promote to Maximum).
     city.tiles[h5 + 17] = 100
     flood_q = query_place(city, 23, 4)
     fjoin = " ".join(flood_q.lines)
@@ -1864,6 +1886,13 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  query walls only {wall_q.lines}")
     else:
         lines.append("ok    query enclosed house → External Security Only")
+    if overlay_pixel(city.tiles, woff, OVERLAY_SECURITY) != 0x90:
+        lines.append(
+            f"FAIL  overlay enclosed house "
+            f"{overlay_pixel(city.tiles, woff, OVERLAY_SECURITY):#x}"
+        )
+    else:
+        lines.append("ok    overlay enclosed house → External 0x90")
     city.tiles[woff + 10] = SECURITY_COV_BITS
     max_q = query_place(city, 42, 42)
     mjoin = " ".join(max_q.lines)
@@ -1871,11 +1900,88 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  query walls+prefect {max_q.lines}")
     else:
         lines.append("ok    query enclosed + prefect → Maximum Security")
+    if overlay_pixel(city.tiles, woff, OVERLAY_SECURITY) != 0x8D:
+        lines.append(
+            f"FAIL  overlay enclosed+prefect "
+            f"{overlay_pixel(city.tiles, woff, OVERLAY_SECURITY):#x}"
+        )
+    else:
+        lines.append("ok    overlay enclosed + prefect → Both 0x8D")
+    if overlay_pixel(city.tiles, h5, OVERLAY_SECURITY) != 0x93:
+        lines.append(
+            f"FAIL  overlay open prefect "
+            f"{overlay_pixel(city.tiles, h5, OVERLAY_SECURITY):#x}"
+        )
+    else:
+        lines.append("ok    overlay open prefect → Internal 0x93")
     open_q = query_place(city, 1, 0)
     if "NO Security" not in " ".join(open_q.lines):
         lines.append(f"FAIL  query open house {open_q.lines}")
     else:
         lines.append("ok    query house with no prefect/walls → NO Security")
+    # U of walls sealed by a river strip — river is a barrier, not a flood seed.
+    rx, ry = 60, 40
+    for i in range(5):
+        city.tiles[city.offset(rx + i, ry)] = ID_WALL_EW
+        city.tiles[city.offset(rx, ry + i)] = ID_WALL_NS
+        city.tiles[city.offset(rx + 4, ry + i)] = ID_WALL_NS
+        roff = city.offset(rx + i, ry + 4)
+        city.tiles[roff] = 0x1E
+        city.tiles[roff + 1] = FLAG_RIVER
+    ioff = city.offset(rx + 2, ry + 2)
+    city.tiles[ioff] = 0x83
+    city.tiles[ioff + 1] = 0x01
+    if not tile_inside_walls(city.tiles, rx + 2, ry + 2):
+        lines.append("FAIL  enclosure wall+river pocket")
+    else:
+        lines.append("ok    wall+river pocket encloses (62,42)")
+    river_q = query_place(city, rx + 2, ry + 2)
+    rjoin = " ".join(river_q.lines)
+    if "External Security Only" not in rjoin or "Maximum Security" in rjoin:
+        lines.append(f"FAIL  query wall+river {river_q.lines}")
+    else:
+        lines.append("ok    query wall+river house → External Security Only")
+    if overlay_pixel(city.tiles, ioff, OVERLAY_SECURITY) != 0x90:
+        lines.append(
+            f"FAIL  overlay wall+river "
+            f"{overlay_pixel(city.tiles, ioff, OVERLAY_SECURITY):#x}"
+        )
+    else:
+        lines.append("ok    overlay wall+river house → External 0x90")
+    city.tiles[ioff + 10] = SECURITY_COV_BITS
+    rmax = query_place(city, rx + 2, ry + 2)
+    if "Maximum Security" not in " ".join(rmax.lines):
+        lines.append(f"FAIL  query wall+river+prefect {rmax.lines}")
+    else:
+        lines.append("ok    query wall+river + prefect → Maximum Security")
+    if overlay_pixel(city.tiles, ioff, OVERLAY_SECURITY) != 0x8D:
+        lines.append(
+            f"FAIL  overlay wall+river+prefect "
+            f"{overlay_pixel(city.tiles, ioff, OVERLAY_SECURITY):#x}"
+        )
+    else:
+        lines.append("ok    overlay wall+river + prefect → Both 0x8D")
+    ooff = city.offset(rx + 2, ry - 2)
+    city.tiles[ooff] = 0x83
+    city.tiles[ooff + 1] = 0x01
+    if tile_inside_walls(city.tiles, rx + 2, ry - 2):
+        lines.append("FAIL  outside wall+river pocket marked enclosed")
+    else:
+        lines.append("ok    north of wall+river pocket is open")
+    out_q = query_place(city, rx + 2, ry - 2)
+    if "NO Security" not in " ".join(out_q.lines):
+        lines.append(f"FAIL  query outside wall+river {out_q.lines}")
+    else:
+        lines.append("ok    query outside wall+river → NO Security")
+    # A lone river next to a house must not enclose the open field.
+    city.tiles[city.offset(10, 50)] = 0x1E
+    city.tiles[city.offset(10, 50) + 1] = FLAG_RIVER
+    city.tiles[city.offset(11, 50)] = 0x83
+    city.tiles[city.offset(11, 50) + 1] = 0x01
+    if tile_inside_walls(city.tiles, 11, 50):
+        lines.append("FAIL  river-adjacent open field enclosed")
+    else:
+        lines.append("ok    river beside open house is not enclosure")
     hosp_off = city.offset(26, 4)
     city.tiles[hosp_off] = 0xFB
     city.tiles[hosp_off + 5] = 0

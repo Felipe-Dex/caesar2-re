@@ -6,7 +6,7 @@ Lane helpers match findings/ghidra_water.md and ghidra_tile.md.
 
 from __future__ import annotations
 
-from app.city_map import FLAG_PAD, MAP_H, MAP_W, ROW_STRIDE, TILE_STRIDE
+from app.city_map import FLAG_PAD, FLAG_RIVER, MAP_H, MAP_W, ROW_STRIDE, TILE_STRIDE
 from app.walker_tick import market_has_goods, tile_or_radius
 
 HOUSE_SIZE: tuple[int, ...] = (1,) * 26 + (2, 2, 2, 2, 3, 3)
@@ -845,19 +845,77 @@ def is_fortification_id(tid: int) -> bool:
     return tid in FORTIFICATION_IDS
 
 
-def tile_inside_walls(tiles: bytearray, x: int, y: int) -> bool:
-    """True when wall/gate/tower blocks every path from the map edge.
+def is_security_barrier(tiles: bytearray | bytes, x: int, y: int) -> bool:
+    """Wall / gate / tower, or river (+1 0x10). Same +1&0x1E family as 0x430da."""
+    if not _in_map(x, y):
+        return False
+    off = _off(x, y)
+    if is_fortification_id(tiles[off]):
+        return True
+    return bool(tiles[off + 1] & FLAG_RIVER)
+
+
+def security_enclosure_mask(tiles: bytearray | bytes) -> bytearray:
+    """1 = External: not reachable from the map edge without crossing a barrier.
+
+    River is a barrier, not a seed. A City Only river must not mark the
+    whole map External (host flood_plus17 +17>=16 would).
+    """
+    n = MAP_W * MAP_H
+    mask = bytearray(n)
+    if len(tiles) < n * TILE_STRIDE:
+        return mask
+    reachable = bytearray(n)
+    stack: list[tuple[int, int]] = []
+    for i in range(MAP_W):
+        stack.append((i, 0))
+        stack.append((i, MAP_H - 1))
+    for j in range(1, MAP_H - 1):
+        stack.append((0, j))
+        stack.append((MAP_W - 1, j))
+    while stack:
+        cx, cy = stack.pop()
+        if not _in_map(cx, cy):
+            continue
+        idx = cy * MAP_W + cx
+        if reachable[idx]:
+            continue
+        if is_security_barrier(tiles, cx, cy):
+            continue
+        reachable[idx] = 1
+        stack.append((cx - 1, cy))
+        stack.append((cx + 1, cy))
+        stack.append((cx, cy - 1))
+        stack.append((cx, cy + 1))
+    for i in range(n):
+        if reachable[i]:
+            continue
+        if is_security_barrier(tiles, i % MAP_W, i // MAP_W):
+            continue
+        mask[i] = 1
+    return mask
+
+
+def tile_inside_walls(
+    tiles: bytearray | bytes,
+    x: int,
+    y: int,
+    mask: bytearray | bytes | None = None,
+) -> bool:
+    """True when wall/gate/tower/river blocks every path from the map edge.
 
     EXE Query External is signed +17>=16 (0x6434a). +17 flood 0x430da seeds
     every +1&0x1E tile (wall 0x02, tower 0x04, river 0x10, bank 0x08). The
     host isotropic stand-in then paints a City Only river map to >=16, so
-    a prefect alone would always read Maximum. Enclosure is the External
-    half (walls); Internal stays +10&0x30.
+    a prefect alone would always read Maximum. External is enclosure
+    (walls + river as barriers). Internal stays +10&0x30.
     """
     if not _in_map(x, y) or len(tiles) < MAP_W * MAP_H * TILE_STRIDE:
         return False
-    if is_fortification_id(tiles[_off(x, y)]):
+    if is_security_barrier(tiles, x, y):
         return False
+    if mask is not None:
+        return bool(mask[y * MAP_W + x])
     seen = bytearray(MAP_W * MAP_H)
     stack = []
     for i in range(MAP_W):
@@ -873,7 +931,7 @@ def tile_inside_walls(tiles: bytearray, x: int, y: int) -> bool:
         idx = cy * MAP_W + cx
         if seen[idx]:
             continue
-        if is_fortification_id(tiles[_off(cx, cy)]):
+        if is_security_barrier(tiles, cx, cy):
             continue
         seen[idx] = 1
         if cx == x and cy == y:
