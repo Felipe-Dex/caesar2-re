@@ -751,6 +751,14 @@ def is_road_occupied(city: CityMap, x: int, y: int) -> bool:
     return city.tiles[city.offset(x, y)] >= ID_ROAD_OCCUPIED
 
 
+def tile_has_walker(city: CityMap, x: int, y: int) -> bool:
+    """Live walker on +7 or +8 — merge_ok_tile 42e25 and stamp refuse."""
+    if not in_map(x, y):
+        return False
+    off = city.offset(x, y)
+    return bool(city.tiles[off + 7] or city.tiles[off + 8])
+
+
 def building_group_cells(city: CityMap, x: int, y: int) -> list[tuple[int, int]]:
     """FUN_00069483: origin from +5 lo-nibble, then size×size east/south.
 
@@ -1388,6 +1396,8 @@ def _civic_kind(
         return "skip"
     if tid >= ID_TERRAIN_MAX:
         return "skip"
+    if tile_has_walker(city, x, y):
+        return "skip"
     return "stamp"
 
 
@@ -1870,6 +1880,8 @@ def try_place(
             return PlaceResult(False, f"rio em ({x},{y}) — +1 & 0x10")
         if is_city_road(city, x, y) or city.tiles[city.offset(x, y)] >= ID_TERRAIN_MAX:
             return PlaceResult(False, f"ocupado em ({x},{y})")
+        if tile_has_walker(city, x, y):
+            return PlaceResult(False, f"ocupado em ({x},{y}) — walker +7/+8")
         err = _debit(sim, COST_TENT)
         if err:
             return PlaceResult(False, err, cost=COST_TENT)
@@ -2359,6 +2371,8 @@ def _tent_stampable(city: CityMap, x: int, y: int) -> bool:
     tid = city.tiles[city.offset(x, y)]
     if tid == ID_TENT or tid >= ID_TERRAIN_MAX:
         return False
+    if tile_has_walker(city, x, y):
+        return False
     return True
 
 
@@ -2748,6 +2762,16 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  tent should refuse treasury {sim.treasury}")
     else:
         lines.append("ok    tent refuse if treasury < 6")
+
+    sim.treasury = 20
+    city.tiles[city.offset(10, 11)] = 0x14
+    city.tiles[city.offset(10, 11) + 7] = 1
+    r = try_place(city, 10, 11, TOOL_TENT, sim)
+    if r.ok or city.tiles[city.offset(10, 11)] != 0x14:
+        lines.append(f"FAIL  tent on walker {r.message}")
+    else:
+        lines.append("ok    tent refuse live walker +7")
+    city.tiles[city.offset(10, 11) + 7] = 0
 
     off = city.offset(20, 20)
     city.tiles[off] = 0x36
