@@ -66,6 +66,17 @@ _VIEW_SPRITE_ACTIONS: dict[int, str] = {
     12: "view_province",
 }
 
+# MISC.PL8 — not INT_CITY. gfx_blit 0x27BFA (EAX=0xD1A2C).
+# Corner N: view_frame 0x3D065 / city_enter 0x5ACF0. Index = [0x102BE0] >> 1
+# (signed). [0x102BE0] is walker camera 0/2/4/6 = walker_camera(facing).
+# Dest EBX=0x1C4 ECX=0x1A. Faster ([0xC45A0]>=2) skips the view_frame blit;
+# city enter always draws it. Host always blits.
+NORTH_ARROW_XY = (0x1C4, 0x1A)
+# Minimap N-up: FUN_0003ed7c tail. EDX=4, dest ([0x102B5C]+2, [0x102B60]+2).
+# Boot writes B5C=0x1E0 B60=0x30 (0x10715).
+MINIMAP_NORTH_XY = (0x1E0 + 2, 0x30 + 2)
+MINIMAP_NORTH_SPRITE = 4
+
 _LABEL = {
     "zoom_in": "zoom +",
     "zoom_out": "zoom −",
@@ -115,6 +126,7 @@ class CityChrome:
     frames: list[Image.Image] = field(default_factory=list)
     dests: list[tuple[int, int]] = field(default_factory=list)
     hits: list[ChromeHit] = field(default_factory=list)
+    misc_frames: list[Image.Image] = field(default_factory=list)
     source: str = "stub"
 
     @classmethod
@@ -124,24 +136,37 @@ class CityChrome:
         try:
             packed = assets.load_pl8_sprites_xy(game, "INT_CITY.PL8")
         except (OSError, ValueError, FileNotFoundError):
-            return cls._fallback()
+            return cls._fallback(misc_frames=_load_misc(game))
         frames = [img for img, _x, _y in packed]
         dests = [(x, y) for _img, x, y in packed]
         hits = _hits_from_records(packed)
+        misc = _load_misc(game)
         if not hits:
-            return cls._fallback(frames=frames, dests=dests, source="int_city+fallback-hits")
+            return cls._fallback(
+                frames=frames,
+                dests=dests,
+                misc_frames=misc,
+                source="int_city+fallback-hits",
+            )
         hits = _expand_grid_hits(hits)
         hits = _with_rotate_hits(hits, packed)
         hits = _with_speed_hits(hits, packed)
         hits = _with_view_hits(hits, packed)
         hits = _with_overlay_well(hits)
-        return cls(frames=frames, dests=dests, hits=hits, source="int_city.pl8")
+        return cls(
+            frames=frames,
+            dests=dests,
+            hits=hits,
+            misc_frames=misc,
+            source="int_city.pl8",
+        )
 
     @classmethod
     def _fallback(
         cls,
         frames: list[Image.Image] | None = None,
         dests: list[tuple[int, int]] | None = None,
+        misc_frames: list[Image.Image] | None = None,
         source: str = "stub",
     ) -> CityChrome:
         hits: list[ChromeHit] = []
@@ -159,7 +184,13 @@ class CityChrome:
         hits = _with_speed_fallback(hits)
         hits = _with_view_fallback(hits)
         hits = _with_overlay_well(hits)
-        return cls(frames=frames or [], dests=dests or [], hits=hits, source=source)
+        return cls(
+            frames=frames or [],
+            dests=dests or [],
+            hits=hits,
+            misc_frames=misc_frames or [],
+            source=source,
+        )
 
     def covers(self, x: int, y: int, ox: int = 0) -> bool:
         """Window pixels. Chrome is the top bar plus the right 162 px strip."""
@@ -185,6 +216,7 @@ class CityChrome:
         speed: str | None = None,
         stub_labels: bool = False,
         ox: int = 0,
+        facing: int = 0,
     ) -> Image.Image:
         """Paste chrome at native 1:1 pixels. ``ox`` slides the 162 px strip right."""
         out = frame.convert("RGBA")
@@ -230,12 +262,53 @@ class CityChrome:
                 rx, ry, rw, rh = hit.rect
                 rx += ox
                 draw.rectangle((rx - 1, ry - 1, rx + rw, ry + rh), outline=(255, 220, 80, 255))
+        _paste_misc_sprite(out, self.misc_frames, north_sprite_index(facing), NORTH_ARROW_XY, ox)
         return out.convert("RGB")
+
+    def blit_minimap_north(self, frame: Image.Image, *, ox: int = 0) -> Image.Image:
+        """MISC[4] N-up after the minimap / legend fill (3ed7c would cover it first)."""
+        out = frame.convert("RGBA")
+        _paste_misc_sprite(
+            out, self.misc_frames, MINIMAP_NORTH_SPRITE, MINIMAP_NORTH_XY, ox
+        )
+        return out.convert(frame.mode) if frame.mode != "RGBA" else out
 
 
 def chrome_ox(win_w: int) -> int:
     """Shift INT_CITY / minimap so the 162 px strip stays on the right."""
     return max(0, int(win_w) - SCREEN_W)
+
+
+def north_sprite_index(facing: int) -> int:
+    """MISC 0–3. ``[0x102BE0] >> 1`` with BE0 = walker camera 0/2/4/6.
+
+    Same as ``walker_camera(facing) >> 1`` / ``(-facing) & 3``.
+    """
+    return (-int(facing)) & 3
+
+
+def _load_misc(game: Path) -> list[Image.Image]:
+    from app import assets
+
+    try:
+        packed = assets.load_pl8_sprites_xy(game, "MISC.PL8")
+    except (OSError, ValueError, FileNotFoundError):
+        return []
+    return [img for img, _x, _y in packed]
+
+
+def _paste_misc_sprite(
+    frame: Image.Image,
+    misc: list[Image.Image],
+    index: int,
+    dest: tuple[int, int],
+    ox: int,
+) -> None:
+    if index < 0 or index >= len(misc):
+        return
+    spr = misc[index]
+    x, y = dest
+    frame.paste(spr, (x + ox, y), spr if spr.mode == "RGBA" else None)
 
 
 def _hits_from_records(
@@ -407,3 +480,60 @@ def action_for_tool(tool: str | None) -> str | None:
 def grid_action_at(index: int) -> str:
     """INT_CITY 3×5 cell. 8 = Industry (sprite 21 bottles), 9 = Sanitation (sprite 22)."""
     return _GRID_ACTIONS[index]
+
+
+def selftest() -> list[str]:
+    """MISC north gadget: facing → sprite, dests, blit on a dummy frame."""
+    lines: list[str] = []
+    if north_sprite_index(0) != 0 or north_sprite_index(1) != 3:
+        lines.append(
+            f"FAIL  north sprite facing 0/1 = "
+            f"{north_sprite_index(0)}/{north_sprite_index(1)} want 0/3"
+        )
+    elif north_sprite_index(2) != 2 or north_sprite_index(3) != 1:
+        lines.append(
+            f"FAIL  north sprite facing 2/3 = "
+            f"{north_sprite_index(2)}/{north_sprite_index(3)} want 2/1"
+        )
+    else:
+        lines.append("ok    MISC north sprite (-facing)&3 via walker_camera>>1")
+    if NORTH_ARROW_XY != (452, 26) or MINIMAP_NORTH_XY != (482, 50):
+        lines.append(f"FAIL  north dest {NORTH_ARROW_XY} {MINIMAP_NORTH_XY}")
+    else:
+        lines.append("ok    MISC dest (452,26) + minimap N (482,50)")
+    ch = CityChrome._fallback()
+    frame = Image.new("RGB", (SCREEN_W, SCREEN_H), (0, 0, 0))
+    painted = ch.blit(frame, facing=1)
+    if painted.size != (SCREEN_W, SCREEN_H):
+        lines.append(f"FAIL  chrome blit size {painted.size}")
+    else:
+        lines.append("ok    chrome blit keeps 640×480 with facing")
+    try:
+        from app.config import resolve_game_dir
+
+        game, _why = resolve_game_dir()
+        loaded = CityChrome.load(game)
+    except (OSError, ValueError, FileNotFoundError):
+        lines.append("ok    MISC north skip (no install)")
+        return lines
+    if len(loaded.misc_frames) < 5:
+        lines.append(f"FAIL  MISC frames {len(loaded.misc_frames)}")
+        return lines
+    blank = Image.new("RGB", (SCREEN_W, SCREEN_H), (0, 0, 0))
+    corner = loaded.blit(blank, facing=0)
+    nx, ny = NORTH_ARROW_XY
+    spr0 = loaded.misc_frames[0]
+    crop = corner.crop((nx, ny, nx + spr0.width, ny + spr0.height))
+    if crop.getextrema()[0][1] < 80:
+        lines.append(f"FAIL  MISC[0] not blitted at {NORTH_ARROW_XY}")
+    else:
+        lines.append("ok    MISC[0] north arrow at (452,26)")
+    radar = loaded.blit_minimap_north(Image.new("RGB", (SCREEN_W, SCREEN_H), (0, 0, 0)))
+    mx, my = MINIMAP_NORTH_XY
+    spr4 = loaded.misc_frames[MINIMAP_NORTH_SPRITE]
+    rcrop = radar.crop((mx, my, mx + spr4.width, my + spr4.height))
+    if rcrop.getextrema()[0][1] < 80:
+        lines.append(f"FAIL  MISC[4] not blitted at {MINIMAP_NORTH_XY}")
+    else:
+        lines.append("ok    MISC[4] N-up on minimap (482,50)")
+    return lines

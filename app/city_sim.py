@@ -227,6 +227,7 @@ class SimState:
     rioters_spawned: int = 0  # type-7 count this 0x9E–0xA1 pass
     event_x: int = -1  # last disaster tile for 58c87 Go to Area
     event_y: int = -1
+    event_tick: int = 0  # Disasters menu: increment so picks walk the city
     # Forum / PLEBS — chunks 52 / 54 / 55 / 56 @ 0x102A68 / 0x102A98 /
     # 0x102AC4 / 0xD2E6C. Tax 29/30 @ 0x102A7C / 0x102AA8. Oracle 286–289
     # + avg 46. New City Only seeds via init_city_only_labor (0x563E2);
@@ -841,6 +842,21 @@ def tile_ignite_building(tiles: bytearray, x: int, y: int) -> int:
     return n
 
 
+def pick_event_cell(
+    cells: list[tuple[int, int, int]], state: SimState | None = None
+) -> tuple[int, int, int] | None:
+    """Disasters menu: walk candidates via event_tick, not scan-order first."""
+    if not cells:
+        return None
+    tick = 0
+    rng = 0
+    if state is not None:
+        tick = int(getattr(state, "event_tick", 0))
+        rng = int(getattr(state, "unrest_rng", 0))
+        state.event_tick = tick + 1
+    return cells[(rng + tick) % len(cells)]
+
+
 def debug_ignite_house(
     tiles: bytearray, state: SimState | None = None
 ) -> tuple[int, int, int]:
@@ -849,8 +865,8 @@ def debug_ignite_house(
     Same paint as uncovered risk ignite (timer 10, +3 bit7). Skips an
     already-burning leftover. Returns (x, y, n_tiles) or (-1, -1, 0).
     """
-    uncovered: tuple[int, int, int] | None = None
-    covered: tuple[int, int, int] | None = None
+    uncovered: list[tuple[int, int, int]] = []
+    covered: list[tuple[int, int, int]] = []
     for y in range(MAP_H):
         for x in range(MAP_W):
             off = _off(x, y)
@@ -863,14 +879,10 @@ def debug_ignite_house(
                 continue
             cell = (x, y, off)
             if tiles[off + 10] & 0x30:
-                if covered is None:
-                    covered = cell
+                covered.append(cell)
             else:
-                uncovered = cell
-                break
-        if uncovered is not None:
-            break
-    pick = uncovered or covered
+                uncovered.append(cell)
+    pick = pick_event_cell(uncovered, state) or pick_event_cell(covered, state)
     if pick is None:
         return -1, -1, 0
     x, y, off = pick
@@ -895,7 +907,7 @@ def debug_infect_house(
     0x448e2 / 0x44933: +11&0x30==0x30 latches [0x102900] then 58c87
     EAX=0x51 [80] Disease!. CITYTOP[8] skull. Returns (x, y, 1) or (-1,-1,0).
     """
-    pick: tuple[int, int, int] | None = None
+    cells: list[tuple[int, int, int]] = []
     for y in range(MAP_H):
         for x in range(MAP_W):
             off = _off(x, y)
@@ -906,10 +918,8 @@ def debug_infect_house(
                 continue
             if (tiles[off + 3] & DRAW_FIRE) and tiles[off + 16] != 0:
                 continue
-            pick = (x, y, off)
-            break
-        if pick is not None:
-            break
+            cells.append((x, y, off))
+    pick = pick_event_cell(cells, state)
     if pick is None:
         return -1, -1, 0
     x, y, off = pick
@@ -2792,6 +2802,27 @@ def selftest() -> list[str]:
     lines.append(
         f"Disasters Disease sets +11 0x30 not fire: {'ok' if ok else 'FAIL'} "
         f"xy=({dx},{dy}) +11={tiles[ioff + 11]:#x} ign={st.fire_ignited}"
+    )
+
+    tiles = _blank_tiles()
+    a = _off(8, 8)
+    b = _off(20, 8)
+    tiles[a] = 0x82
+    tiles[a + 1] = 0x01
+    tiles[b] = 0x83
+    tiles[b + 1] = 0x01
+    st0 = SimState(city_only=1, event_tick=0)
+    st1 = SimState(city_only=1, event_tick=1)
+    x0, y0, _n0 = debug_ignite_house(tiles, st0)
+    tiles[a + 3] = 0
+    tiles[a + 16] = 0
+    tiles[b + 3] = 0
+    tiles[b + 16] = 0
+    x1, y1, _n1 = debug_ignite_house(tiles, st1)
+    ok = (x0, y0) != (x1, y1)
+    lines.append(
+        f"Disasters Fire rng walks houses: {'ok' if ok else 'FAIL'} "
+        f"a=({x0},{y0}) b=({x1},{y1})"
     )
 
     tiles = _blank_tiles()

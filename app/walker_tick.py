@@ -7,6 +7,9 @@ walker_anim_path 0x48084 → walker_step 0x488DC (tile[+7]/[+8]).
 
 city_sim_phase 0x3F60C lives in app/city_sim.py (called before this).
 Type 7 rioter spawn is unrest_spawn_rows (41DD4, next_state 0x0B).
+State 12 anim_path(1) smash-walks: dest_ok param_2==1 → 691C4 / 68C01
+housing along the dest (trail). Life cap 20 on the 64-tick clock.
+Soldiers (state 6 anim_path 2) walk flags==0 / rubble, do not smash.
 Path-fail 0x2B54A / 0x2BA63: greedy sidestep toward dest (not rotate-in-place).
 State 8→9 fire seek is 0x4A397 / 0x4A57F / 0x4A716 / 0x4A76D — housing
 or id<8 with +3 bit7 and +16≠0 (tile_is_burning). Disease +11 0x30 is not fire.
@@ -120,8 +123,10 @@ ID_FORUM_LO = 0xAE
 ID_FORUM_HI = 0xB9
 TYPE_CLERK = 1
 TYPE_ENEMY = 3
+TYPE_SOLDIER = 4
 TYPE_VIGILE = 5
 TYPE_RIOTER = 7
+ID_RUBBLE = 0x05
 
 # C2MODEL [75:91] / EXE 0x96ECB — skill*4. Skill 4 reads past 16 ints; use Hard.
 # (min years [0x102ac0], rng window, month wait [0x102a78], spawn count)
@@ -330,10 +335,85 @@ def tile_or_radius(
             tiles[_tile_at(tiles, nx, ny) + lane] |= bits
 
 
+def _off_to_xy(dest_off: int) -> tuple[int, int]:
+    linear = dest_off // TILE_BYTES
+    return linear % MAP_W, linear // MAP_W
+
+
+def _dest_collapse(tiles: bytearray, dest_off: int) -> None:
+    """691C4: id ≥ 0x82 → rubble; id < 8 is a no-op."""
+    if dest_off < 0 or dest_off >= len(tiles):
+        return
+    if tiles[dest_off] < 0x82:
+        return
+    x, y = _off_to_xy(dest_off)
+    from app.city_sim import tile_collapse_rubble
+
+    tile_collapse_rubble(tiles, x, y, leave_fire=False)
+
+
+def _walker_clash(
+    pool: bytearray, type_id: int | None, other_slot: int, self_slot: int
+) -> None:
+    """0x48785: soldier/vigile stepping onto type 3/7 sets the target to state 2."""
+    if pool is None or other_slot <= 0 or other_slot == self_slot:
+        return
+    if other_slot * WALKER_STRIDE >= len(pool):
+        return
+    other = _rec(pool, other_slot)
+    if other[_OFF_OCCUPIED] == 0:
+        return
+    dest_type = other[_OFF_TYPE]
+    if type_id in (TYPE_SOLDIER, TYPE_VIGILE) and dest_type in (
+        TYPE_ENEMY,
+        TYPE_RIOTER,
+    ):
+        other[_OFF_STATE] = 2
+        _put(pool, other_slot, other)
+        return
+    if type_id == TYPE_RIOTER and dest_type in (
+        TYPE_ENEMY,
+        TYPE_SOLDIER,
+        TYPE_VIGILE,
+    ):
+        other[_OFF_STATE] = 2
+        _put(pool, other_slot, other)
+
+
+def _dest_ok_smash(tiles: bytearray, dest_off: int, flags: int) -> int:
+    """dest_ok param_2==1 (anim_path EAX=1): rioter / barbarian smash.
+
+    Pad already returned 1. bit2 queue: ++[+18], >12 → 691C4 + 2.
+    flags==0 → 691C4 + 2. Else 68C01 1×1 (housing 0x01) then 0 — step next pulse.
+    """
+    if flags & 0x04:
+        return 0
+    if flags & 0x18:
+        return 0
+    if flags & 0x02:
+        q = (tiles[dest_off + _TILE_QUEUE] + 1) & 0xFF
+        tiles[dest_off + _TILE_QUEUE] = q
+        if q > 12:
+            _dest_collapse(tiles, dest_off)
+            return 2
+        return 0
+    if flags == 0:
+        _dest_collapse(tiles, dest_off)
+        return 2
+    _dest_collapse(tiles, dest_off)
+    return 0
+
+
 def walker_dest_ok(
-    tiles: bytearray, dest_off: int, type_id: int | None = None
+    tiles: bytearray,
+    dest_off: int,
+    type_id: int | None = None,
+    *,
+    smash: bool = False,
+    pool: bytearray | None = None,
+    self_slot: int = 0,
 ) -> int:
-    """walker_dest_ok 0x48606 (param_2 != 1 walk path). 999 / 1 pad / 2 empty / 0."""
+    """walker_dest_ok 0x48606. smash=param_2==1 (anim_path 1). 999 / 1 / 2 / 0."""
     if dest_off < 0 or dest_off + TILE_BYTES > len(tiles):
         return 0
     slot0 = tiles[dest_off + _TILE_SLOT0]
@@ -342,16 +422,37 @@ def walker_dest_ok(
     if slot0 and slot1:
         return 999
     if is_walker_road(tiles, dest_off, type_id):
-        return 1
-    if type_id == TYPE_VIGILE and _tile_on_fire(tiles, dest_off):
-        return 2
-    if flags == 0:
-        return 2
-    return 0
+        code = 1
+    elif smash:
+        code = _dest_ok_smash(tiles, dest_off, flags)
+    elif type_id == TYPE_VIGILE and _tile_on_fire(tiles, dest_off):
+        code = 2
+    elif tiles[dest_off] == ID_RUBBLE or 1 <= tiles[dest_off] < 8:
+        # EXE walk path: flags==0 → 2. Rubble 0x05 stays walkable even if
+        # collapse leftover +1 bits (0x08) so soldiers can leave the road.
+        code = 2
+    elif flags == 0:
+        code = 2
+    else:
+        code = 0
+    if pool is not None and code in (1, 2):
+        if slot0:
+            _walker_clash(pool, type_id, slot0, self_slot)
+        if slot1:
+            _walker_clash(pool, type_id, slot1, self_slot)
+    return code
 
 
-def walker_can_step(tiles: bytearray, rec: bytearray, facing: int) -> int:
-    """walker_can_step 0x48470 — bounds then dest_ok."""
+def walker_can_step(
+    tiles: bytearray,
+    rec: bytearray,
+    facing: int,
+    *,
+    smash: bool = False,
+    pool: bytearray | None = None,
+    slot: int = 0,
+) -> int:
+    """walker_can_step 0x48470 — bounds then dest_ok. EDX leaks anim_path mode."""
     if facing < 0 or facing > 7:
         return 0
     x = _i8(rec, _OFF_X)
@@ -371,7 +472,14 @@ def walker_can_step(tiles: bytearray, rec: bytearray, facing: int) -> int:
     nx, ny = x + dx, y + dy
     if not _in_map(nx, ny):
         return 0
-    return walker_dest_ok(tiles, _tile_off(nx, ny), rec[_OFF_TYPE])
+    return walker_dest_ok(
+        tiles,
+        _tile_off(nx, ny),
+        rec[_OFF_TYPE],
+        smash=smash,
+        pool=pool,
+        self_slot=slot,
+    )
 
 
 def _nearest_city_pavement(
@@ -630,6 +738,108 @@ def invasion_row(skill: int) -> tuple[int, int, int, int]:
     return INVASION_BY_SKILL[skill]
 
 
+# walker_spawn pad=0 rejects +1 & 0x8B and +1 & 0x54. 0x54 includes
+# FLAG_RIVER 0x10 — typical map corners are water. &= 0x24 left 0x04
+# (also in 0x54) so the old "clear" still rejected the tile.
+_SPAWN_BLOCK_PAD0 = 0x8B | 0x54
+
+
+def _is_edge_xy(x: int, y: int) -> bool:
+    return x in (0, MAP_W - 1) or y in (0, MAP_H - 1)
+
+
+def _corner_tiles(rng: int = 0) -> list[tuple[int, int]]:
+    last = MAP_W - 1
+    corners = [(0, 0), (last, 0), (last, last), (0, last)]
+    start = int(rng) & 3
+    return corners[start:] + corners[:start]
+
+
+def _edge_ring_xy(*, rng: int = 0):
+    """Corners first (0x537ed sides include NE/SE/SW/NW), then the rim."""
+    last = MAP_W - 1
+    yield from _corner_tiles(rng)
+    for x in range(1, last):
+        yield x, 0
+        yield x, last
+    for y in range(1, last):
+        yield 0, y
+        yield last, y
+
+
+def _edge_tile_ok_for_type3(tiles: bytearray, off: int) -> bool:
+    """Skip housing / stamps — do not smash a building to plant an Enemy."""
+    if off + TILE_BYTES > len(tiles):
+        return False
+    return tiles[off] < 0x78
+
+
+def debug_clear_spawn_flags(tiles: bytearray, off: int) -> None:
+    """Drop 0x8B / 0x54 leftover so pad-0 spawn can land (host only)."""
+    if 0 <= off + _TILE_FLAGS < len(tiles):
+        tiles[off + _TILE_FLAGS] &= (~_SPAWN_BLOCK_PAD0) & 0xFF
+
+
+def _prepare_type3_edge_tile(tiles: bytearray, off: int) -> bool:
+    """0x536E2: +1 & 0xE7 → 0x68c01 1×1 (+3 &= ~0x40). Host drops 0x8B/0x54.
+
+    Does not collapse housing. Returns False if the cell is a building.
+    """
+    if not _edge_tile_ok_for_type3(tiles, off):
+        return False
+    if tiles[off + _TILE_FLAGS] & 0xE7:
+        tiles[off + _TILE_DRAW] &= 0xBF
+    if _spawn_blocked(tiles, off, pad=0):
+        debug_clear_spawn_flags(tiles, off)
+    return True
+
+
+def _finish_type3_spawn(
+    pool: bytearray, slot: int, tiles: bytearray, clock: WalkerClock, rng: int
+) -> None:
+    walker_finish_spawn(pool, slot, next_state=5)
+    rec = _rec(pool, slot)
+    rec[_OFF_DEST_X] = clock.rally_x & 0xFF
+    rec[_OFF_DEST_Y] = clock.rally_y & 0xFF
+    rec[_OFF_LINGER] = 3
+    if _i8(rec, _OFF_DEST_X) == _i8(rec, _OFF_X) and _i8(
+        rec, _OFF_DEST_Y
+    ) == _i8(rec, _OFF_Y):
+        _kick_roam_dest(rec, tiles, rng)
+    _put(pool, slot, rec)
+
+
+def _try_spawn_type3_at(
+    pool: bytearray,
+    tiles: bytearray,
+    x: int,
+    y: int,
+    *,
+    clock: WalkerClock,
+    rng: int,
+) -> int:
+    if not _in_map(x, y):
+        return 0
+    off = _tile_off(x, y)
+    if not _prepare_type3_edge_tile(tiles, off):
+        return 0
+    slot = walker_spawn(pool, tiles, TYPE_ENEMY, x, y, pad=0, rng=rng)
+    if not slot:
+        return 0
+    _finish_type3_spawn(pool, slot, tiles, clock, rng)
+    return slot
+
+
+def _last_spawn_xy(pool: bytearray) -> tuple[int, int]:
+    slot = _LAST_SPAWN_SLOT
+    if slot <= 0:
+        return -1, -1
+    rec = _rec(pool, slot)
+    if rec[_OFF_OCCUPIED] == 0:
+        return -1, -1
+    return _i8(rec, _OFF_X), _i8(rec, _OFF_Y)
+
+
 def edge_pick_type3(side: int, rng127: int, clock: WalkerClock) -> tuple[int, int]:
     """0x537ed — map-edge (x,y). EAX=side 0–7, EDX=80, EBX=63."""
     side &= 7
@@ -699,8 +909,14 @@ def walker_spawn_type3_count(
     *,
     clock: WalkerClock | None = None,
     rng: int = 1,
+    prefer_corner: bool = False,
 ) -> int:
-    """walker_spawn_type3_count 0x536E2. Pad 0, state 1 → 5, dest = rally."""
+    """walker_spawn_type3_count 0x536E2. Pad 0, state 1 → 5, dest = rally.
+
+    ``prefer_corner`` is the Disasters→Barbarian tester: try the four map
+    corners before 0x537ed's 8-side rim pick. Never plants on city-center
+    roads.
+    """
     clk = clock if clock is not None else _CLOCK
     rx, ry = rally_from_plus15(tiles)
     clk.rally_ok = True
@@ -709,32 +925,29 @@ def walker_spawn_type3_count(
     spawned = 0
     rng127 = rng & 0x7F
     want = max(0, count)
+
+    def _one(x: int, y: int) -> bool:
+        nonlocal spawned
+        if spawned >= want:
+            return False
+        if _try_spawn_type3_at(pool, tiles, x, y, clock=clk, rng=rng):
+            spawned += 1
+            return True
+        return False
+
+    if prefer_corner:
+        for x, y in _corner_tiles(rng127):
+            _one(x, y)
     for _attempt in range(max(16, want * 8)):
         if spawned >= want:
             break
         x, y = edge_pick_type3(side, rng127, clk)
-        x = max(0, min(MAP_W - 1, x))
-        y = max(0, min(MAP_H - 1, y))
-        off = _tile_off(x, y)
-        if off + 1 < len(tiles) and (tiles[off + 1] & 0xE7):
-            # EXE 0x68c01 dirties/smashes this cell; host only tries spawn.
-            pass
-        if _spawn_blocked(tiles, off, pad=0):
-            debug_clear_spawn_flags(tiles, off)
-        slot = walker_spawn(pool, tiles, TYPE_ENEMY, x, y, pad=0, rng=rng)
-        if not slot:
-            continue
-        walker_finish_spawn(pool, slot, next_state=5)
-        rec = _rec(pool, slot)
-        rec[_OFF_DEST_X] = clk.rally_x & 0xFF
-        rec[_OFF_DEST_Y] = clk.rally_y & 0xFF
-        rec[_OFF_LINGER] = 3
-        if _i8(rec, _OFF_DEST_X) == _i8(rec, _OFF_X) and _i8(
-            rec, _OFF_DEST_Y
-        ) == _i8(rec, _OFF_Y):
-            _kick_roam_dest(rec, tiles, rng)
-        _put(pool, slot, rec)
-        spawned += 1
+        _one(x, y)
+    if spawned < want:
+        for x, y in _edge_ring_xy(rng=rng127):
+            if spawned >= want:
+                break
+            _one(x, y)
     return spawned
 
 
@@ -787,15 +1000,15 @@ def city_only_try_invasion(
             return 0
     pool = _pool_from(walkers if walkers is not None else bytearray(WALKER_BYTES))
     n = walker_spawn_type3_count(
-        pool, tiles, count, side, clock=clk, rng=clk.rng
+        pool, tiles, count, side, clock=clk, rng=clk.rng, prefer_corner=force
     )
     if walkers is not None:
         _write_back(walkers, pool)
     if n:
         state.attack_spawned = int(getattr(state, "attack_spawned", 0)) + n
-        rec = _rec(pool, 1) if n else bytearray(WALKER_STRIDE)
-        state.event_x = _i8(rec, _OFF_X)
-        state.event_y = _i8(rec, _OFF_Y)
+        sx, sy = _last_spawn_xy(pool)
+        state.event_x = sx
+        state.event_y = sy
     if force and n <= 0:
         sx, sy, got = debug_spawn_enemy(tiles, pool, clock=clk, rng=clk.rng)
         if got and walkers is not None:
@@ -820,12 +1033,6 @@ def _spawn_blocked(tiles: bytearray, off: int, *, pad: int) -> bool:
     if pad:
         return False
     return bool(flags & 0x54)
-
-
-def debug_clear_spawn_flags(tiles: bytearray, off: int) -> None:
-    """Drop 0x8B / 0x54 leftover so pad-0 debug spawn can land (host only)."""
-    if 0 <= off < len(tiles):
-        tiles[off + _TILE_FLAGS] &= 0x24
 
 
 def debug_place_walker(
@@ -885,7 +1092,11 @@ def debug_spawn_enemy(
     clock: WalkerClock | None = None,
     rng: int = 1,
 ) -> tuple[int, int, int]:
-    """Disasters→Barbarian fallback: a visible type-3 Enemy on a road or house."""
+    """Disasters→Barbarian fallback: type-3 Enemy on a map corner / edge.
+
+    Not city-center roads. 0x537ed rim only. Clears leftover 0x8B/0x54
+    on empty terrain; does not smash housing.
+    """
     if walkers is None:
         return -1, -1, 0
     pool = _pool_from(walkers)
@@ -895,61 +1106,13 @@ def debug_spawn_enemy(
         clk.rally_ok = True
         clk.rally_x = rx & 0xFF
         clk.rally_y = ry & 0xFF
-    candidates: list[tuple[int, int]] = []
-    for y in range(MAP_H):
-        for x in range(MAP_W):
-            off = _tile_off(x, y)
-            if off + TILE_BYTES > len(tiles):
-                continue
-            tid = tiles[off]
-            if _is_city_pavement(tid):
-                candidates.append((x, y))
-    if not candidates:
-        for y in range(MAP_H):
-            for x in range(MAP_W):
-                off = _tile_off(x, y)
-                if off + TILE_BYTES > len(tiles):
-                    continue
-                tid = tiles[off]
-                if 0x82 <= tid <= 0xA1 and not (tiles[off + 5] & 0xF):
-                    candidates.append((x, y))
-                    if x + 1 < MAP_W:
-                        candidates.append((x + 1, y))
-                    break
-            if candidates:
-                break
-    if not candidates:
-        candidates.append((40, 40))
-    for cx, cy in candidates:
-        off = _tile_off(cx, cy)
-        if _spawn_blocked(tiles, off, pad=0):
-            debug_clear_spawn_flags(tiles, off)
-        slot = walker_spawn(pool, tiles, TYPE_ENEMY, cx, cy, pad=0, rng=rng)
+    for cx, cy in _edge_ring_xy(rng=int(clk.rng)):
+        slot = _try_spawn_type3_at(pool, tiles, cx, cy, clock=clk, rng=rng)
         if not slot:
             continue
-        walker_finish_spawn(pool, slot, next_state=5)
-        rec = _rec(pool, slot)
-        rec[_OFF_DEST_X] = clk.rally_x & 0xFF
-        rec[_OFF_DEST_Y] = clk.rally_y & 0xFF
-        rec[_OFF_LINGER] = 3
-        if _i8(rec, _OFF_DEST_X) == cx and _i8(rec, _OFF_DEST_Y) == cy:
-            _kick_roam_dest(rec, tiles, rng)
-        _put(pool, slot, rec)
         _write_back(walkers, pool)
         return cx, cy, slot
-    sx, sy, slot = debug_place_walker(
-        pool, tiles, TYPE_ENEMY, 40, 40, next_state=5, rng=rng
-    )
-    if slot:
-        rec = _rec(pool, slot)
-        rec[_OFF_DEST_X] = clk.rally_x & 0xFF
-        rec[_OFF_DEST_Y] = clk.rally_y & 0xFF
-        rec[_OFF_LINGER] = 3
-        if _i8(rec, _OFF_DEST_X) == sx and _i8(rec, _OFF_DEST_Y) == sy:
-            _kick_roam_dest(rec, tiles, rng)
-        _put(pool, slot, rec)
-        _write_back(walkers, pool)
-    return sx, sy, slot
+    return -1, -1, 0
 
 
 def debug_spawn_vigile(
@@ -1116,7 +1279,9 @@ def debug_force_riot(
     to 15 and adds +11 mood so score > 15 even with prefect / market
     penalties. Returns (x, y, spawned).
     """
-    pick: tuple[int, int, int] | None = None
+    from app.city_sim import pick_event_cell
+
+    cells: list[tuple[int, int, int]] = []
     for y in range(MAP_H):
         for x in range(MAP_W):
             off = _tile_off(x, y)
@@ -1129,10 +1294,8 @@ def debug_force_riot(
                 continue
             if tiles[off + 5] & 0x0F:
                 continue
-            pick = (x, y, off)
-            break
-        if pick is not None:
-            break
+            cells.append((x, y, off))
+    pick = pick_event_cell(cells, state)
     if pick is None:
         return -1, -1, 0
     x, y, off = pick
@@ -1749,7 +1912,7 @@ def walker_anim_roam(
         rec[_OFF_ANIM_FLAGS] |= _ANIM_FAIL
         _put(pool, slot, rec)
         return 1
-    code = walker_can_step(tiles, rec, facing)
+    code = walker_can_step(tiles, rec, facing, pool=pool, slot=slot)
     ok = code != 0 and code < 3 and not (pads_only == 0 and code == 2)
     if ok:
         rec[_OFF_ON_ROAD] = 1
@@ -1780,9 +1943,12 @@ def walker_anim_roam(
     return 1
 
 
-def walker_anim_path(pool: bytearray, tiles: bytearray, slot: int) -> int:
-    """walker_anim_path 0x48084. Path-fail helpers 0x2B54A / 0x2BA63 stubbed."""
+def walker_anim_path(
+    pool: bytearray, tiles: bytearray, slot: int, mode: int = 2
+) -> int:
+    """walker_anim_path 0x48084. mode=1 smash (type 3/7); 2 = hunt walk."""
     rec = _rec(pool, slot)
+    smash = mode == 1
     if not _advance_anim(rec):
         _put(pool, slot, rec)
         return 0
@@ -1802,7 +1968,9 @@ def walker_anim_path(pool: bytearray, tiles: bytearray, slot: int) -> int:
         rec[_OFF_ANIM_FLAGS] |= _ANIM_FAIL
         _put(pool, slot, rec)
         return 1
-    code = walker_can_step(tiles, rec, facing)
+    code = walker_can_step(
+        tiles, rec, facing, smash=smash, pool=pool, slot=slot
+    )
     if code == 999 or (code == 0 and rec[_OFF_BUMP] != 0):
         rec[_OFF_FACING] = (rec[_OFF_FACING] + 1) & 7
         if rec[_OFF_BUMP] == 0:
@@ -2196,6 +2364,31 @@ def _kick_roam_dest(rec: bytearray, tiles: bytearray, rng: int = 1) -> bool:
     return False
 
 
+def _nearest_housing(
+    tiles: bytearray, x: int, y: int, *, radius: int = 16
+) -> tuple[int, int] | None:
+    """Closest 0x82–0x9B origin so a type-7 smash path has a house dest."""
+    best: tuple[int, int] | None = None
+    best_d = 10**9
+    for ny in range(max(0, y - radius), min(MAP_H, y + radius + 1)):
+        for nx in range(max(0, x - radius), min(MAP_W, x + radius + 1)):
+            if nx == x and ny == y:
+                continue
+            off = _tile_off(nx, ny)
+            if off + TILE_BYTES > len(tiles):
+                continue
+            tid = tiles[off]
+            if tid < ID_RIOTER_HOUSE_LO or tid > ID_RIOTER_HOUSE_HI:
+                continue
+            if tiles[off + 5] & 0x0F:
+                continue
+            d = abs(nx - x) + abs(ny - y)
+            if d < best_d:
+                best_d = d
+                best = (nx, ny)
+    return best
+
+
 def _assign_march_dest(
     rec: bytearray, tiles: bytearray, clock: WalkerClock
 ) -> bool:
@@ -2215,6 +2408,13 @@ def _assign_march_dest(
         clock.rally_x = rx & 0xFF
         clock.rally_y = ry & 0xFF
         return True
+    if rec[_OFF_TYPE] == TYPE_RIOTER:
+        house = _nearest_housing(tiles, x, y)
+        if house is not None:
+            rec[_OFF_DEST_X] = house[0] & 0xFF
+            rec[_OFF_DEST_Y] = house[1] & 0xFF
+            rec[_OFF_WANT_MOVE] = 1
+            return True
     return _kick_roam_dest(rec, tiles, clock.rng)
 
 
@@ -2429,7 +2629,7 @@ def _state_dispatch(
         rec[_OFF_WANT_MOVE] = 1
         rec[_OFF_NEXT_STATE] = 5
         _put(pool, slot, rec)
-        if walker_anim_path(pool, tiles, slot) == 0:
+        if walker_anim_path(pool, tiles, slot, mode=1) == 0:
             rec = _rec(pool, slot)
             if rec[_OFF_OCCUPIED]:
                 rec[_OFF_WAIT] = 0
@@ -2588,7 +2788,7 @@ def _state_dispatch(
             _assign_march_dest(rec, tiles, clock)
         rec[_OFF_WANT_MOVE] = 1
         _put(pool, slot, rec)
-        if walker_anim_path(pool, tiles, slot) == 0:
+        if walker_anim_path(pool, tiles, slot, mode=1) == 0:
             return
         rec = _rec(pool, slot)
         if rec[_OFF_OCCUPIED] == 0:
@@ -3772,10 +3972,31 @@ def selftest() -> list[str]:
         forced, tiles, pool, years_played=0, force=True
     )
     rec = _rec(pool, 1) if nsp else bytearray(WALKER_STRIDE)
-    ok = nsp == 1 and rec[_OFF_TYPE] == TYPE_ENEMY and rec[_OFF_NEXT_STATE] == 5
+    fxy = (_i8(rec, _OFF_X), _i8(rec, _OFF_Y)) if nsp else (-1, -1)
+    corner = fxy in _corner_tiles(0)
+    ok = (
+        nsp == 1
+        and rec[_OFF_TYPE] == TYPE_ENEMY
+        and rec[_OFF_NEXT_STATE] == 5
+        and corner
+    )
     lines.append(
         f"Disasters Barbarian force skips year gate: {'ok' if ok else 'FAIL'} "
-        f"n={nsp} type={rec[_OFF_TYPE]}"
+        f"n={nsp} type={rec[_OFF_TYPE]} xy={fxy}"
+    )
+
+    busy = bytearray(WALKER_BYTES)
+    walker_spawn(busy, tiles, TYPE_CLERK, 40, 40, pad=0)
+    occupied = _Inv()
+    occupied.invade_months = 0
+    nsp = city_only_try_invasion(
+        occupied, tiles, busy, years_played=0, force=True
+    )
+    ex, ey = int(occupied.event_x), int(occupied.event_y)
+    ok = nsp == 1 and (ex, ey) != (40, 40) and _is_edge_xy(ex, ey)
+    lines.append(
+        f"Barbarian event_xy is edge not slot-1: {'ok' if ok else 'FAIL'} "
+        f"n={nsp} event=({ex},{ey})"
     )
 
     tiles = bytearray(MAP_W * MAP_H * TILE_BYTES)
@@ -3924,14 +4145,73 @@ def selftest() -> list[str]:
         forced, tiles, pool, years_played=0, force=True
     )
     rec = _rec(pool, 1) if nsp else bytearray(WALKER_STRIDE)
+    wxy = (_i8(rec, _OFF_X), _i8(rec, _OFF_Y)) if nsp else (-1, -1)
+    edge = _is_edge_xy(*wxy) if nsp else False
     ok = (
         nsp == 1
         and rec[_OFF_TYPE] == TYPE_ENEMY
         and rec[_OFF_OCCUPIED] == 1
         and rec[_OFF_NEXT_STATE] == 5
+        and edge
+        and wxy != (20, 20)
+        and wxy != (40, 40)
     )
     lines.append(
         f"Disasters Barbarian visible on water-edge map: {'ok' if ok else 'FAIL'} "
-        f"n={nsp} type={rec[_OFF_TYPE]} xy=({_i8(rec, _OFF_X)},{_i8(rec, _OFF_Y)})"
+        f"n={nsp} type={rec[_OFF_TYPE]} xy={wxy}"
+    )
+
+    rubble = _tile_off(30, 30)
+    tiles = bytearray(MAP_W * MAP_H * TILE_BYTES)
+    tiles[rubble] = ID_RUBBLE
+    tiles[rubble + 1] = 0x08
+    house = _tile_off(31, 30)
+    tiles[house] = 0x82
+    tiles[house + 1] = 0x01
+    ok = (
+        walker_dest_ok(tiles, rubble, TYPE_SOLDIER) == 2
+        and walker_dest_ok(tiles, house, TYPE_SOLDIER) == 0
+        and walker_dest_ok(tiles, house, TYPE_RIOTER, smash=True) == 0
+        and tiles[house] == ID_RUBBLE
+        and walker_dest_ok(tiles, house, TYPE_RIOTER, smash=True) == 2
+    )
+    lines.append(
+        f"dest_ok soldier rubble / rioter smash trail: {'ok' if ok else 'FAIL'} "
+        f"sol_r={walker_dest_ok(tiles, rubble, TYPE_SOLDIER)} "
+        f"id={tiles[house]:#x}"
+    )
+
+    reset_clock()
+    tiles = bytearray(MAP_W * MAP_H * TILE_BYTES)
+    for x in range(10, 14):
+        off = _tile_off(x, 10)
+        tiles[off] = 0x82
+        tiles[off + 1] = 0x01
+    pool = bytearray(WALKER_BYTES)
+    st = _St()
+    _rx, _ry, nsp = debug_force_riot(tiles, pool, st)
+    rec = _rec(pool, 1) if nsp else bytearray(WALKER_STRIDE)
+    if nsp:
+        rec[_OFF_STATE] = 12
+        rec[_OFF_WANT_MOVE] = 1
+        rec[_OFF_ANIM_FLAGS] = _ANIM_DONE
+        _set_i8(rec, _OFF_DEST_X, 13)
+        _set_i8(rec, _OFF_DEST_Y, 10)
+        _put(pool, 1, rec)
+        for _ in range(48):
+            walkers_tick(tiles, pool, clock=_CLOCK)
+            rec = _rec(pool, 1)
+            if rec[_OFF_OCCUPIED] == 0:
+                break
+    rubble_n = sum(
+        1
+        for x in range(10, 14)
+        if tiles[_tile_off(x, 10)] == ID_RUBBLE
+    )
+    ok = nsp == 1 and rubble_n >= 2 and rec[_OFF_OCCUPIED] == 1
+    lines.append(
+        f"rioter smash trail keeps walking: {'ok' if ok else 'FAIL'} "
+        f"rubble={rubble_n} live={rec[_OFF_OCCUPIED]} xy="
+        f"({_i8(rec, _OFF_X)},{_i8(rec, _OFF_Y)})"
     )
     return lines

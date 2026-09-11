@@ -626,15 +626,14 @@ def blit_int_city_minimap(
 ) -> tuple[Image.Image, tuple[int, int, int, int] | None]:
     """Scale the 80×80 map to ``MINIMAP_RECT`` (INT_CITY well above the 3×5).
 
-    INT_CITY sprite 3 (478,368) is the stone relief, not this slot. ``chrome``
-    is unused on purpose so a sibling HUD edit cannot pull dests[3] back in.
+    INT_CITY sprite 3 (478,368) is the stone relief, not this slot.
+    After the 80×80 paste, MISC[4] N-up sits at (482,50)+ox (3ed7c).
     """
     from app import city_map
 
     fn = getattr(city_map, "render_minimap", None)
     if fn is None:
         return frame, None
-    _ = chrome
     mini = fn(city, viewport, overlay_id=overlay_id, facing=facing)
     mx, my, mw, mh = city_map.MINIMAP_RECT
     mx += ox
@@ -642,6 +641,7 @@ def blit_int_city_minimap(
         mini = mini.resize((mw, mh), Image.Resampling.NEAREST)
     out = frame.convert("RGB")
     out.paste(mini.convert("RGB"), (mx, my))
+    out = chrome.blit_minimap_north(out, ox=ox)
     return out, (mx, my, mw, mh)
 
 
@@ -1091,12 +1091,14 @@ def show(ctx: BootContext, *, game: Path) -> None:
                 selected=action_for_tool(tool),
                 speed=speed_action(ctx.sim),
                 ox=ox,
+                facing=map_facing,
             )
             vp = (cam_x, cam_y, zoom, ww, wh, win_w, win_h)
             if overlay_has_legend(overlay_id):
                 frame = blit_overlay_legend(
                     frame, overlay_id, eng=ctx.eng, ox=ox
                 )
+                frame = chrome.blit_minimap_north(frame, ox=ox)
                 minimap_rect = None
             else:
                 frame, minimap_rect = blit_int_city_minimap(
@@ -1610,18 +1612,22 @@ def show(ctx: BootContext, *, game: Path) -> None:
                 years_played=99,
                 force=True,
             )
+            xy = _event_xy()
             if n <= 0:
-                blit("Disasters · Barbarian — spawn failed")
+                blit("Disasters · Barbarian — spawn failed (no free edge tile)")
                 return
             scan_city_messages(
                 ctx.sim,
                 tiles,
                 ctx.eng,
                 attack_spawned=n,
-                event_xy=_event_xy(),
+                event_xy=xy,
             )
             ctx.sim.attack_spawned = 0
             extra = f"Disasters · Barbarian — {n} Enemy type 3"
+            if xy is not None:
+                extra += f" at ({xy[0]},{xy[1]})"
+                _pan_to_tile(xy[0], xy[1])
         elif skip == DIS_RIOT:
             x, y, n = debug_force_riot(tiles, ctx.walkers, ctx.sim)
             if n <= 0:
@@ -1648,15 +1654,10 @@ def show(ctx: BootContext, *, game: Path) -> None:
         _pump_advisor()
         blit(f"{extra}  drawn={len(drawable_walkers(ctx.walkers))}")
 
-    def _goto_advisor_area() -> bool:
-        """58d31 Go to Area? — pan city camera. Not Career province."""
+    def _pan_to_tile(tx: int, ty: int) -> bool:
+        """Centre the city well on a map tile (edge Enemy / 58d31)."""
         nonlocal cam_x, cam_y
-        msg = advisor_dlg
-        if msg is None or not getattr(msg, "has_goto", False):
-            return False
-        tx = getattr(msg, "tile_x", None)
-        ty = getattr(msg, "tile_y", None)
-        if tx is None or ty is None or not map_ready:
+        if not map_ready:
             return False
         ww, wh = world_wh()
         cam_x, cam_y = city_map.camera_center_on_tile(
@@ -1673,6 +1674,19 @@ def show(ctx: BootContext, *, game: Path) -> None:
         )
         cam_x = max(0, min(cam_x, max(0, ww - win_w)))
         cam_y = max(0, min(cam_y, max(0, wh - win_h)))
+        return True
+
+    def _goto_advisor_area() -> bool:
+        """58d31 Go to Area? — pan city camera. Not Career province."""
+        msg = advisor_dlg
+        if msg is None or not getattr(msg, "has_goto", False):
+            return False
+        tx = getattr(msg, "tile_x", None)
+        ty = getattr(msg, "tile_y", None)
+        if tx is None or ty is None or not map_ready:
+            return False
+        if not _pan_to_tile(int(tx), int(ty)):
+            return False
         from app.walkers import drawable_walkers
 
         blit(

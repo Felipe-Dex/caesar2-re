@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from PIL import Image, ImageDraw, ImageFont
 
 from app.city_map import (
+    FLAG_RIVER,
     ID_TERRAIN_MAX,
     MAP_H,
     MAP_W,
@@ -40,6 +41,7 @@ from app.city_paint import (
     factory_type_name,
     hospital_cover_percent,
     library_cover_percent,
+    security_enclosure_mask,
     tile_inside_walls,
 )
 
@@ -199,7 +201,13 @@ def i8(b: int) -> int:
     return b - 256 if b >= 128 else b
 
 
-def overlay_pixel(tiles: bytearray | bytes, off: int, overlay_id: int) -> int:
+def overlay_pixel(
+    tiles: bytearray | bytes,
+    off: int,
+    overlay_id: int,
+    *,
+    enclosed: bool | None = None,
+) -> int:
     """One 0xD7BFC byte. Painters at 0x3E656…0x3EA8E."""
     if overlay_id <= 0 or overlay_id > 9:
         return 0
@@ -210,7 +218,10 @@ def overlay_pixel(tiles: bytearray | bytes, off: int, overlay_id: int) -> int:
     if overlay_id == OVERLAY_WATER:
         return _paint_water(tid, flags, tiles[off + 13])
     if overlay_id == OVERLAY_SECURITY:
-        return _paint_security(tid, flags, tiles[off + 10], tiles[off + 17])
+        if enclosed is None:
+            idx = off // TILE_STRIDE
+            enclosed = tile_inside_walls(tiles, idx % MAP_W, idx // MAP_W)
+        return _paint_security(tid, flags, tiles[off + 10], enclosed)
     if overlay_id == OVERLAY_UNREST:
         return _paint_unrest(tiles[off + 11])
     if overlay_id == OVERLAY_TAX:
@@ -277,28 +288,26 @@ def _is_security_road(tid: int) -> bool:
     return 0x7C <= tid <= 0x7E
 
 
-def _paint_security(tid: int, _flags: int, cov10: int, flood17: int) -> int:
-    # 0x3E7DB. Score = (signed +17>=16) + (+10&0x30).
-    # EXE also writes 0x96 for flags&6, river 0x1E–0x51, and both 0xE3/0xE4
-    # — one khaki on the host iso/minimap. Split the two buildings (CITY1.256
-    # 0x96 tan vs 0x8B salmon), keep the 0x8D/0x90/0x93 coverage ramp, and
-    # leave river / open land on plane 0 (dimmed geography).
+def _paint_security(tid: int, _flags: int, cov10: int, enclosed: bool) -> int:
+    # 0x3E7DB. EXE score = (signed +17>=16) + (+10&0x30). Host External is
+    # wall/gate/tower/river enclosure (same C2.ENG Internal/External/Both),
+    # not flood_plus17 — a City Only river would paint +17>=16 everywhere.
+    # Split prefecture/barracks (CITY1.256 0x96 tan vs 0x8B salmon). Leave
+    # river / grass / walls on plane 0 (dimmed geography).
     if tid == 0xE3:
         return 0x96
     if tid == 0xE4:
         return 0x8B
-    score = 0
-    if i8(flood17) >= 0x10:
-        score = 1
-    if cov10 & 0x30:
-        score += 1
+    score = int(bool(enclosed)) + int(bool(cov10 & 0x30))
     if score == 0:
         return 0
     if score == 2:
         return 0x8D
     if cov10 & 0x30:
         return 0x93
-    if score == 1 and _is_security_road(tid):
+    if enclosed and (
+        _is_security_road(tid) or ID_HOUSING_LO <= tid <= ID_HOUSING_HI
+    ):
         return 0x90
     return 0
 
@@ -388,10 +397,14 @@ def apply_overlay_colors(
     """Replace geography pixels where the EXE plane byte is nonzero."""
     if overlay_id <= 0:
         return pixels
+    enclosed_mask = (
+        security_enclosure_mask(tiles) if overlay_id == OVERLAY_SECURITY else None
+    )
     out: list[tuple[int, int, int]] = []
     for i, base in enumerate(pixels):
         off = i * TILE_STRIDE
-        idx = overlay_pixel(tiles, off, overlay_id)
+        enclosed = bool(enclosed_mask[i]) if enclosed_mask is not None else None
+        idx = overlay_pixel(tiles, off, overlay_id, enclosed=enclosed)
         if idx:
             out.append(palette_rgb(idx))
         else:
@@ -445,11 +458,19 @@ def overlay_iso_wash(
     draw = ImageDraw.Draw(overlay)
     tw, th = iso_tile_size(zoom)
     painted = False
+    enclosed_mask = (
+        security_enclosure_mask(tiles) if overlay_id == OVERLAY_SECURITY else None
+    )
     for ty in range(y0, y1 + 1):
         row = ty * MAP_W * TILE_STRIDE
         for tx in range(x0, x1 + 1):
             off = row + tx * TILE_STRIDE
-            idx = overlay_pixel(tiles, off, overlay_id)
+            enclosed = (
+                bool(enclosed_mask[ty * MAP_W + tx])
+                if enclosed_mask is not None
+                else None
+            )
+            idx = overlay_pixel(tiles, off, overlay_id, enclosed=enclosed)
             if not idx:
                 continue
             rgb = palette_rgb(idx)
@@ -583,14 +604,197 @@ def _housing_query_origin(t, x: int, y: int) -> tuple[int, int, int]:
     return x - (piece % size), y - (piece // size), size
 
 
-def _block_or13(city: CityMap, x: int, y: int, size: int) -> int:
+def _block_or_lane(city: CityMap, x: int, y: int, size: int, lane: int) -> int:
     splash = 0
     for dy in range(size):
         for dx in range(size):
             tx, ty = x + dx, y + dy
             if 0 <= tx < MAP_W and 0 <= ty < MAP_H:
-                splash |= city.tiles[city.offset(tx, ty) + 13]
+                splash |= city.tiles[city.offset(tx, ty) + lane]
     return splash
+
+
+def _block_or13(city: CityMap, x: int, y: int, size: int) -> int:
+    return _block_or_lane(city, x, y, size, 13)
+
+
+# FUN_00062a59 / C2.ENG [60] housing status. +15 vs 0x96235 stay,
+# then first failing 40d08-style gate only if +15 equals that cap.
+_QUERY_EVOLVE_FB: dict[int, str] = {
+    35: "This structure does not evolve.",
+    60: "Local land value is too low to encourage this dwelling to grow any further.",
+    61: "Lack of a water supply is preventing this house from growing.",
+    62: "No access to a local forum is stopping this house from growing.",
+    63: "No access to any nearby market limits this dwelling's evolution.",
+    64: "Close proximity to a business is limiting the development of this dwelling.",
+    65: "This house is limited because it draws water from a primitive supply.",
+    66: "Lack of nearby baths prevents this house from growing.",
+    67: (
+        "This dwelling does not have sufficient use of nearby entertainment "
+        "types to grow any further."
+    ),
+    68: "Close proximity to an army barracks limits the development of this dwelling.",
+    69: "Residents feel too insecure in this area for it to grow any further.",
+    70: "Close proximity to a city wall limits the development of this dwelling.",
+    71: "Close proximity to a city gate limits the development of this dwelling.",
+    72: "Lack of any nearby grammaticus prevents this house from growing.",
+    73: "Close proximity to a praefecture limits the development of this dwelling.",
+    74: (
+        "Insufficient city-wide hospital facilities affects "
+        "this dwelling's ability to grow further."
+    ),
+    75: "Lack of a nearby rhetor prevents this house from growing.",
+    76: "Close proximity to a market limits the development of this dwelling.",
+    77: "Residents need more security in this area for it to grow any further.",
+    78: (
+        "Insufficient city-wide library facilities affect "
+        "this dwelling's ability to grow further."
+    ),
+    79: "Growth of this building is hampered by being too near a business.",
+    80: "A business in the vicinity of this building limits its development.",
+    81: "This is prime development land. Land value is at its maximum level.",
+    86: "Land value is too low. This dwelling is shrinking.",
+    87: (
+        "Local land value has been increasing in this vicinity. This dwelling "
+        "is increasing to a higher level of development."
+    ),
+}
+
+
+def _stall_skip(lv: int, cap: int, skip: int) -> int:
+    """EXE 0x62a59: need-X only when +15 is parked on that gate's cap."""
+    return skip if lv == cap else 60
+
+
+def housing_query_stall_skip(
+    lv: int,
+    splash: int,
+    plus10: int,
+    plus14: int,
+    entertainment: int,
+    security: int,
+    hospital: int,
+    library: int,
+) -> int:
+    """First failing Query gate (0x62a59). Improved House 0x8B stay 18..20.
+
+    No entertainment and +15==20 → [60]+67 (the usual 0x8B stall).
+    """
+    fountain = bool(splash & 0x01)
+    primitive = bool(splash & 0x02)
+    forum = bool(plus10 & 0x0C)
+    market = bool(plus10 & 0xC0)
+    if not fountain and not primitive:
+        return _stall_skip(lv, 2, 61)
+    if not forum:
+        return _stall_skip(lv, 6, 62)
+    if splash & 0x80:
+        return _stall_skip(lv, 10, 64)
+    if not market:
+        return _stall_skip(lv, 12, 63)
+    if not fountain:
+        return _stall_skip(lv, 14, 65)
+    if plus14 & 0x10:
+        return _stall_skip(lv, 16, 79)
+    if not (splash & 0x08):
+        return _stall_skip(lv, 18, 66)
+    if entertainment == 0:
+        return _stall_skip(lv, 20, 67)
+    if plus14 & 0x01:
+        return _stall_skip(lv, 24, 68)
+    if security == 0:
+        return _stall_skip(lv, 24, 69)
+    if plus14 & 0x20:
+        return _stall_skip(lv, 26, 80)
+    if entertainment <= 1:
+        return _stall_skip(lv, 26, 67)
+    if plus14 & 0x08:
+        return _stall_skip(lv, 26, 70)
+    if entertainment <= 2:
+        return _stall_skip(lv, 28, 67)
+    if plus14 & 0x04:
+        return _stall_skip(lv, 30, 71)
+    if hospital < 20:
+        return _stall_skip(lv, 30, 74)
+    if entertainment <= 3:
+        return _stall_skip(lv, 32, 67)
+    if not (splash & 0x10):
+        return _stall_skip(lv, 34, 72)
+    if plus14 & 0x02:
+        return _stall_skip(lv, 34, 73)
+    if hospital < 40:
+        return _stall_skip(lv, 36, 74)
+    if entertainment <= 4:
+        return _stall_skip(lv, 38, 67)
+    if splash & 0x40:
+        return _stall_skip(lv, 40, 76)
+    if security <= 1:
+        return _stall_skip(lv, 42, 77)
+    if hospital < 60:
+        return _stall_skip(lv, 44, 74)
+    if entertainment <= 5:
+        return _stall_skip(lv, 44, 67)
+    if not (splash & 0x20):
+        return _stall_skip(lv, 46, 75)
+    if library < 20:
+        return _stall_skip(lv, 46, 78)
+    if entertainment <= 6:
+        return _stall_skip(lv, 48, 67)
+    if hospital < 80:
+        return _stall_skip(lv, 50, 74)
+    if library < 40:
+        return _stall_skip(lv, 50, 78)
+    if hospital < 80:
+        return _stall_skip(lv, 52, 74)
+    if library < 60:
+        return _stall_skip(lv, 54, 78)
+    if entertainment <= 7:
+        return _stall_skip(lv, 56, 67)
+    if hospital < 100:
+        return _stall_skip(lv, 58, 74)
+    if library < 80:
+        return _stall_skip(lv, 58, 78)
+    if entertainment <= 8:
+        return _stall_skip(lv, 60, 67)
+    if library < 100:
+        return _stall_skip(lv, 62, 78)
+    if lv < 64:
+        return 60
+    return 81
+
+
+def query_evolve_lines(
+    *,
+    housing: bool,
+    grade: int,
+    lv: int,
+    splash: int,
+    plus10: int,
+    plus14: int,
+    entertainment: int,
+    security: int,
+    hospital: int,
+    library: int,
+    eng=None,
+) -> list[str]:
+    """C2.ENG [60] evolve / stall / shrink. EXE query_place 0x62a59."""
+    if not housing:
+        return [_eng_skip(eng, 60, 35, _QUERY_EVOLVE_FB[35])]
+    from app.city_sim import EVOLVE_MAX, EVOLVE_MIN
+
+    if grade < 0 or grade >= len(EVOLVE_MIN):
+        return [_eng_skip(eng, 60, 35, _QUERY_EVOLVE_FB[35])]
+    stay_lo, stay_hi = EVOLVE_MIN[grade], EVOLVE_MAX[grade]
+    if lv > stay_hi:
+        skip = 87
+    else:
+        skip = housing_query_stall_skip(
+            lv, splash, plus10, plus14, entertainment, security, hospital, library
+        )
+    out = [_eng_skip(eng, 60, skip, _QUERY_EVOLVE_FB[skip])]
+    if lv < stay_lo:
+        out.append(_eng_skip(eng, 60, 86, _QUERY_EVOLVE_FB[86]))
+    return out
 
 
 def query_water_line(splash: int, eng=None) -> str:
@@ -788,9 +992,10 @@ def query_place(city: CityMap, x: int, y: int, eng=None) -> PlaceInfo:
     #   [0x117a65]>0 → +8 External; else +9 NO Security.
     # +17 flood 0x430da seeds +1&0x1E (wall 0x02, tower 0x04, river 0x10).
     # Host flood_plus17 fills a City Only river map, so +17>=16 is not a
-    # wall test. External = enclosed by wall/gate/tower (same C2.ENG line).
+    # wall test. External = enclosed by wall/gate/tower/river (edge flood
+    # cannot cross those tiles). Same C2.ENG line as the overlay legend.
     internal = bool(t.coverage & SECURITY_COV_BITS)
-    external = tile_inside_walls(city.tiles, x, y)
+    external = tile_inside_walls(city.tiles, ox, oy)
     if internal and external:
         lines.append(_eng_skip(eng, 60, 0x5C, "Maximum Security"))
     elif internal:
@@ -874,6 +1079,36 @@ def query_place(city: CityMap, x: int, y: int, eng=None) -> PlaceInfo:
                         "this dwelling's ability to grow further.",
                     )
                 )
+    # FUN_00062a59: one C2.ENG [60] status sentence. 0x8B +15==20 with
+    # no entertainment is a normal stay (18..20 vs 0x96235), not a sim bug.
+    plus10 = t.coverage
+    plus14 = t.unknown14
+    evolve_lv = land
+    evolve_tid = tid
+    if t.is_housing:
+        plus10 = _block_or_lane(city, ox, oy, ent_size, 10)
+        plus14 = _block_or_lane(city, ox, oy, ent_size, 14)
+        ot = city.tile(ox, oy)
+        evolve_lv = i8(ot.industry)
+        evolve_tid = ot.terrain_id
+    sec_n = int(bool(plus10 & SECURITY_COV_BITS)) + int(
+        tile_inside_walls(city.tiles, ox, oy)
+    )
+    lines.extend(
+        query_evolve_lines(
+            housing=t.is_housing,
+            grade=evolve_tid - ID_HOUSING_LO,
+            lv=evolve_lv,
+            splash=splash,
+            plus10=plus10,
+            plus14=plus14,
+            entertainment=amenity12,
+            security=sec_n,
+            hospital=hosp,
+            library=lib,
+            eng=eng,
+        )
+    )
     if tile_is_burning(tid, t.draw, t.unknown16):
         lines.append(f"on fire  timer +16={t.unknown16}")
     elif ID_HOUSING_LO <= tid <= ID_HOUSING_HI:
@@ -1355,19 +1590,19 @@ def selftest() -> list[str]:
     else:
         lines.append("ok    security grass +17 -> plane 0")
     off = put(22, 0, tid=0x52, flags=0x20, **{"17": 0x20})
-    if overlay_pixel(tiles, off, OVERLAY_SECURITY) != 0x90:
+    if overlay_pixel(tiles, off, OVERLAY_SECURITY) != 0:
         lines.append(
             f"FAIL  security road {overlay_pixel(tiles, off, OVERLAY_SECURITY):#x}"
         )
     else:
-        lines.append("ok    security road +17 -> 0x90")
+        lines.append("ok    security road +17 open -> plane 0")
     off = put(23, 0, tid=0x52, flags=0x20, **{"10": 0x30, "17": 0x20})
-    if overlay_pixel(tiles, off, OVERLAY_SECURITY) != 0x8D:
+    if overlay_pixel(tiles, off, OVERLAY_SECURITY) != 0x93:
         lines.append(
             f"FAIL  security covered road {overlay_pixel(tiles, off, OVERLAY_SECURITY):#x}"
         )
     else:
-        lines.append("ok    security road +10&0x30 +17 -> 0x8D")
+        lines.append("ok    security road +10&0x30 open -> 0x93 Internal")
     off = put(24, 0, tid=0x82, flags=0, **{"10": 0x30})
     if overlay_pixel(tiles, off, OVERLAY_SECURITY) != 0x93:
         lines.append(
@@ -1617,8 +1852,8 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  query prefecture without walls → max {sec_q.lines}")
     else:
         lines.append("ok    query house next to Praefecture → Internal Security")
-    # Host +17 stand-in is river-wide; EXE External is walls (0x64337 +17
-    # is the same byte, but City Only river must not promote to Maximum).
+    # Host +17 stand-in is river-wide; EXE External is enclosure (0x64337
+    # +17 is the same byte, but City Only river must not promote to Maximum).
     city.tiles[h5 + 17] = 100
     flood_q = query_place(city, 23, 4)
     fjoin = " ".join(flood_q.lines)
@@ -1651,6 +1886,13 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  query walls only {wall_q.lines}")
     else:
         lines.append("ok    query enclosed house → External Security Only")
+    if overlay_pixel(city.tiles, woff, OVERLAY_SECURITY) != 0x90:
+        lines.append(
+            f"FAIL  overlay enclosed house "
+            f"{overlay_pixel(city.tiles, woff, OVERLAY_SECURITY):#x}"
+        )
+    else:
+        lines.append("ok    overlay enclosed house → External 0x90")
     city.tiles[woff + 10] = SECURITY_COV_BITS
     max_q = query_place(city, 42, 42)
     mjoin = " ".join(max_q.lines)
@@ -1658,11 +1900,88 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  query walls+prefect {max_q.lines}")
     else:
         lines.append("ok    query enclosed + prefect → Maximum Security")
+    if overlay_pixel(city.tiles, woff, OVERLAY_SECURITY) != 0x8D:
+        lines.append(
+            f"FAIL  overlay enclosed+prefect "
+            f"{overlay_pixel(city.tiles, woff, OVERLAY_SECURITY):#x}"
+        )
+    else:
+        lines.append("ok    overlay enclosed + prefect → Both 0x8D")
+    if overlay_pixel(city.tiles, h5, OVERLAY_SECURITY) != 0x93:
+        lines.append(
+            f"FAIL  overlay open prefect "
+            f"{overlay_pixel(city.tiles, h5, OVERLAY_SECURITY):#x}"
+        )
+    else:
+        lines.append("ok    overlay open prefect → Internal 0x93")
     open_q = query_place(city, 1, 0)
     if "NO Security" not in " ".join(open_q.lines):
         lines.append(f"FAIL  query open house {open_q.lines}")
     else:
         lines.append("ok    query house with no prefect/walls → NO Security")
+    # U of walls sealed by a river strip — river is a barrier, not a flood seed.
+    rx, ry = 60, 40
+    for i in range(5):
+        city.tiles[city.offset(rx + i, ry)] = ID_WALL_EW
+        city.tiles[city.offset(rx, ry + i)] = ID_WALL_NS
+        city.tiles[city.offset(rx + 4, ry + i)] = ID_WALL_NS
+        roff = city.offset(rx + i, ry + 4)
+        city.tiles[roff] = 0x1E
+        city.tiles[roff + 1] = FLAG_RIVER
+    ioff = city.offset(rx + 2, ry + 2)
+    city.tiles[ioff] = 0x83
+    city.tiles[ioff + 1] = 0x01
+    if not tile_inside_walls(city.tiles, rx + 2, ry + 2):
+        lines.append("FAIL  enclosure wall+river pocket")
+    else:
+        lines.append("ok    wall+river pocket encloses (62,42)")
+    river_q = query_place(city, rx + 2, ry + 2)
+    rjoin = " ".join(river_q.lines)
+    if "External Security Only" not in rjoin or "Maximum Security" in rjoin:
+        lines.append(f"FAIL  query wall+river {river_q.lines}")
+    else:
+        lines.append("ok    query wall+river house → External Security Only")
+    if overlay_pixel(city.tiles, ioff, OVERLAY_SECURITY) != 0x90:
+        lines.append(
+            f"FAIL  overlay wall+river "
+            f"{overlay_pixel(city.tiles, ioff, OVERLAY_SECURITY):#x}"
+        )
+    else:
+        lines.append("ok    overlay wall+river house → External 0x90")
+    city.tiles[ioff + 10] = SECURITY_COV_BITS
+    rmax = query_place(city, rx + 2, ry + 2)
+    if "Maximum Security" not in " ".join(rmax.lines):
+        lines.append(f"FAIL  query wall+river+prefect {rmax.lines}")
+    else:
+        lines.append("ok    query wall+river + prefect → Maximum Security")
+    if overlay_pixel(city.tiles, ioff, OVERLAY_SECURITY) != 0x8D:
+        lines.append(
+            f"FAIL  overlay wall+river+prefect "
+            f"{overlay_pixel(city.tiles, ioff, OVERLAY_SECURITY):#x}"
+        )
+    else:
+        lines.append("ok    overlay wall+river + prefect → Both 0x8D")
+    ooff = city.offset(rx + 2, ry - 2)
+    city.tiles[ooff] = 0x83
+    city.tiles[ooff + 1] = 0x01
+    if tile_inside_walls(city.tiles, rx + 2, ry - 2):
+        lines.append("FAIL  outside wall+river pocket marked enclosed")
+    else:
+        lines.append("ok    north of wall+river pocket is open")
+    out_q = query_place(city, rx + 2, ry - 2)
+    if "NO Security" not in " ".join(out_q.lines):
+        lines.append(f"FAIL  query outside wall+river {out_q.lines}")
+    else:
+        lines.append("ok    query outside wall+river → NO Security")
+    # A lone river next to a house must not enclose the open field.
+    city.tiles[city.offset(10, 50)] = 0x1E
+    city.tiles[city.offset(10, 50) + 1] = FLAG_RIVER
+    city.tiles[city.offset(11, 50)] = 0x83
+    city.tiles[city.offset(11, 50) + 1] = 0x01
+    if tile_inside_walls(city.tiles, 11, 50):
+        lines.append("FAIL  river-adjacent open field enclosed")
+    else:
+        lines.append("ok    river beside open house is not enclosure")
     hosp_off = city.offset(26, 4)
     city.tiles[hosp_off] = 0xFB
     city.tiles[hosp_off + 5] = 0
@@ -1731,6 +2050,70 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  query pop-short {qbig}")
     else:
         lines.append("ok    cover n×1000×100/pop and n×1200×100/pop")
+    ev = CityMap()
+    eoff = ev.offset(4, 4)
+    ev.tiles[eoff] = 0x8B
+    ev.tiles[eoff + 10] = 0x0C | 0xC0
+    ev.tiles[eoff + 13] = 0x01 | 0x08
+    ev.tiles[eoff + 15] = 20
+    ejoin = " ".join(query_place(ev, 4, 4).lines)
+    want_ent = _QUERY_EVOLVE_FB[67]
+    if want_ent not in ejoin:
+        lines.append(f"FAIL  query 0x8B stall entertainment {query_place(ev, 4, 4).lines}")
+    elif "Entertainment Level 0" not in ejoin:
+        lines.append(f"FAIL  query 0x8B still prints packed +12 {ejoin}")
+    else:
+        lines.append("ok    Improved House 0x8B +15=20 no entertainment → [60]+67")
+    ev.tiles[eoff + 13] = 0
+    ev.tiles[eoff + 15] = 2
+    wjoin = " ".join(query_place(ev, 4, 4).lines)
+    if _QUERY_EVOLVE_FB[61] not in wjoin:
+        lines.append(f"FAIL  query 0x8B no water {query_place(ev, 4, 4).lines}")
+    else:
+        lines.append("ok    house +15=2 no water → [60]+61")
+    ev.tiles[eoff + 10] = 0xC0
+    ev.tiles[eoff + 13] = 0x01
+    ev.tiles[eoff + 15] = 6
+    fjoin = " ".join(query_place(ev, 4, 4).lines)
+    if _QUERY_EVOLVE_FB[62] not in fjoin:
+        lines.append(f"FAIL  query no forum {query_place(ev, 4, 4).lines}")
+    else:
+        lines.append("ok    house +15=6 no forum → [60]+62")
+    ev.tiles[eoff + 10] = 0x0C
+    ev.tiles[eoff + 13] = 0x01
+    ev.tiles[eoff + 15] = 12
+    mjoin = " ".join(query_place(ev, 4, 4).lines)
+    if _QUERY_EVOLVE_FB[63] not in mjoin:
+        lines.append(f"FAIL  query no market {query_place(ev, 4, 4).lines}")
+    else:
+        lines.append("ok    house +15=12 no market → [60]+63")
+    ev.tiles[eoff + 10] = 0x0C | 0xC0
+    ev.tiles[eoff + 13] = 0x01 | 0x08
+    ev.tiles[eoff + 12] = 51
+    ev.tiles[eoff + 15] = 21
+    upjoin = " ".join(query_place(ev, 4, 4).lines)
+    if _QUERY_EVOLVE_FB[87] not in upjoin:
+        lines.append(f"FAIL  query evolving {query_place(ev, 4, 4).lines}")
+    elif "Entertainment Level 6" not in upjoin:
+        lines.append(f"FAIL  query evolving packed +12 {upjoin}")
+    else:
+        lines.append("ok    Improved House +15>20 → [60]+87 evolving")
+    ev.tiles[eoff] = 0xBE
+    ev.tiles[eoff + 1] = 0x80
+    njoin = " ".join(query_place(ev, 4, 4).lines)
+    if _QUERY_EVOLVE_FB[35] not in njoin:
+        lines.append(f"FAIL  query does not evolve {query_place(ev, 4, 4).lines}")
+    else:
+        lines.append("ok    Reservoir → [60]+35 does not evolve")
+    if housing_query_stall_skip(34, 0x09, 0xFC, 0, 6, 2, 100, 100) != 72:
+        lines.append(
+            f"FAIL  stall skip grammaticus "
+            f"{housing_query_stall_skip(34, 0x09, 0xFC, 0, 6, 2, 100, 100)}"
+        )
+    elif housing_query_stall_skip(46, 0x19, 0xFC, 0, 6, 2, 100, 0) != 75:
+        lines.append("FAIL  stall skip rhetor")
+    else:
+        lines.append("ok    0x62a59 education stalls → [60]+72 / +75")
     if overlay_name(2) != "Water" or overlay_name(10) != "Cancel":
         lines.append("FAIL  names")
     else:
