@@ -73,8 +73,12 @@ ID_TOWER = 0xBF
 ID_GATE = 0xC0
 ID_WALL_NS = 0xC1
 ID_WALL_EW = 0xC2
+ID_WALL_LO, ID_WALL_HI = 0xC1, 0xCA
 # +1 bits 0x02/0x04 (wall / tower). Gate 0x24 includes 0x04.
-FORTIFICATION_IDS = frozenset({ID_TOWER, ID_GATE, ID_WALL_NS, ID_WALL_EW})
+# Autotile pieces 0xC3–0xCA (corners / ends) are the same barrier family.
+FORTIFICATION_IDS = frozenset(
+    {ID_TOWER, ID_GATE} | set(range(ID_WALL_LO, ID_WALL_HI + 1))
+)
 
 # FUN_0004034b / tile_or_radius 0x6CD7E. extra grows +x/+y for the N×N origin.
 GRAMMATICUS_SPLASH_R = 6

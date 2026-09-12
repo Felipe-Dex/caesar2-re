@@ -116,6 +116,7 @@ from app.palette import PaletteState, action_for_tool
 from app.place import (
     DRAW_AQUEDUCT,
     DRAW_GARDEN,
+    DRAW_WALL,
     ID_RUBBLE,
     SPAN_TOOLS,
     STAMP_TOOLS,
@@ -137,6 +138,7 @@ from app.place import (
     aqueduct_preview_cells,
     canvas_to_view,
     garden_preview_cells,
+    wall_preview_cells,
     in_map,
     preview_span,
     screen_to_tile,
@@ -411,6 +413,9 @@ def overlay_span_preview(
     elif preview.tool == TOOL_AQUEDUCT and sheets and city is not None:
         piece_rows = aqueduct_preview_cells(city, preview.ok, preview.stamp)
         piece_draw = DRAW_AQUEDUCT
+    elif preview.tool == TOOL_WALL and sheets and city is not None:
+        piece_rows = wall_preview_cells(city, preview.ok, preview.stamp)
+        piece_draw = DRAW_WALL
     if piece_rows:
         from app.city_map import building_sprite_image, iso_sprite_dest, iso_tile_size, tile_iso_xy
 

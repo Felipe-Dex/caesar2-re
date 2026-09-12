@@ -277,7 +277,7 @@ def labor_need_from_city(tiles: bytearray, *, city_only: bool) -> list[int]:
             if tid == 0xC0:
                 roads += 1
                 continue
-            if tid in (0xC1, 0xC2):
+            if 0xC1 <= tid <= 0xCA:
                 walls += 1
                 continue
             origin = (tiles[off + 5] & 0xF) == 0

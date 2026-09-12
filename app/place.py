@@ -38,8 +38,18 @@ charge (F4) so ``+10`` / wet ``+4`` survive a round-trip.
 Clear wipes grass ``0xCB–0xD6`` to rubble ``0x05``; road-combo
 (``+3&0x80``) restores the road. Reservoir ``+9`` from LUT ``0x94E7F``
 (inlet on the tank wall when a pipe is cardinal).
-Tower ``0xBF`` autotile: standalone sprite when no Wall ``0xC1``/``0xC2``
+Tower ``0xBF`` autotile: standalone sprite when no Wall ``0xC1``–``0xCA``
 / Gate ``0xC0`` neighbour; Achea ``+4`` when a wall joins.
+Wall autotile is ``0x67201`` LUT ``0x94BAF`` ×14 (same matcher ``0x6C826``
+as road/aqueduct). Gather ``0x6B0D1`` mask ``6`` = ``+1`` wall ``0x02`` /
+tower ``0x04`` (Gate ``0x24`` counts; river ``0x10`` does not). Pieces
+``0xC1``/``0xC2`` NS/EW, ``0xC3``–``0xC6`` corners, ``0xC7``–``0xCA``
+ends; isolated → ``0xC8``. ``+4`` from ``0x94CEB[id*4]`` (``0x00``/``0x04``
+straights, ``0x08``–``0x0B`` corners, ``0x01``/``0x02``/``0x05``/``0x06``
+ends). T/cross are not in the 14-row table — keep the through axis
+(``0xC1`` if N+S else ``0xC2``). BUILD1B LUT columns already swap NS↔EW
+on odd facing — do not also remap ids in ``orient_terrain_id``. Gate
+``+4`` LUT ``0x94D17`` (NS ``0x92`` / EW ``0x93``).
 Does **not** write road ``0x52–0x5C`` and must **not** run road retile —
 that was turning neighbour grass+``FLAG_PAD`` into a fake road. River
 refused except the documented road→bridge case. Drag-rect for 1×1 civics
@@ -59,7 +69,8 @@ barracks / …) is stamp-follow; Circus 6×3 EW (0xEB+0xEC) / 3×6 NS
 swaps the long axis. Paint remaps +4 along that W×H at facing 1–3
 (leftover pair at odd facing) so extra_rows still meet after rotate.
 Plaza is 1×1 rect on/next to a road. Wall is a road-style
-line (gate when the line hits a road).
+line (gate when the line hits a road) and retires ``0xC1``–``0xCA``
+from neighbours (wall / gate / tower).
 
 Not the full EXE stamp. Tent 6 is observed (sav_c), not C2MODEL. City
 road / aqueduct / Palatine have no pinned city-cost slot — do not invent;
@@ -176,6 +187,17 @@ ID_PALATINE = 0xB7
 ID_GATE = 0xC0
 ID_WALL_NS = 0xC1
 ID_WALL_EW = 0xC2
+ID_WALL_LO = 0xC1
+ID_WALL_HI = 0xCA
+ID_WALL_NE = 0xC3
+ID_WALL_SE = 0xC4
+ID_WALL_SW = 0xC5
+ID_WALL_NW = 0xC6
+ID_WALL_END_S = 0xC7
+ID_WALL_END_N = 0xC8
+ID_WALL_END_E = 0xC9
+ID_WALL_END_W = 0xCA
+DRAW_WALL = 0x08
 ID_PREFECTURE = 0xE3
 ID_BARRACKS = 0xE4
 ID_THEATER = 0xE5
@@ -1313,12 +1335,111 @@ def is_plaza_id(tid: int) -> bool:
     return ID_PLAZA <= tid <= ID_PLAZA_STATUE
 
 
+def is_wall_run_id(tid: int) -> bool:
+    return ID_WALL_LO <= tid <= ID_WALL_HI
+
+
 def is_wall_id(tid: int) -> bool:
-    return tid in (ID_WALL_NS, ID_WALL_EW, ID_GATE)
+    return tid == ID_GATE or is_wall_run_id(tid)
+
+
+# FUN_00067201 / LUT 0x94BAF ×14. Isolated is not in the table (province 0xC8).
+# T/cross fall through to the through-axis (matcher returns 0).
+_WALL_FROM_MASK: dict[int, int] = {
+    0x0: ID_WALL_END_N,
+    0x1: ID_WALL_END_N,
+    0x2: ID_WALL_END_E,
+    0x4: ID_WALL_END_S,
+    0x8: ID_WALL_END_W,
+    0x5: ID_WALL_NS,
+    0xA: ID_WALL_EW,
+    0x3: ID_WALL_NE,
+    0x6: ID_WALL_SE,
+    0xC: ID_WALL_SW,
+    0x9: ID_WALL_NW,
+}
+# 0x94CEB[id*4] city +4 (Achea 0xC1=0x00 / 0xC2=0x04).
+_WALL_VARIANT: dict[int, int] = {
+    ID_WALL_NS: 0x00,
+    ID_WALL_EW: 0x04,
+    ID_WALL_NE: 0x08,
+    ID_WALL_SE: 0x09,
+    ID_WALL_SW: 0x0A,
+    ID_WALL_NW: 0x0B,
+    ID_WALL_END_S: 0x01,
+    ID_WALL_END_N: 0x02,
+    ID_WALL_END_E: 0x05,
+    ID_WALL_END_W: 0x06,
+}
+# Gate LUT 0x94D17 ×6 → +4. T/cross keep the through opening.
+_GATE_FROM_MASK: dict[int, int] = {
+    0x1: 0x8E,
+    0x2: 0x8F,
+    0x4: 0x90,
+    0x8: 0x91,
+    0x5: 0x92,
+    0xA: 0x93,
+}
+
+
+def wall_id_for(mask: int) -> int:
+    """4-neighbour fort mask → ``0xC1``–``0xCA``."""
+    m = mask & 0x0F
+    hit = _WALL_FROM_MASK.get(m)
+    if hit is not None:
+        return hit
+    if m & 0x05 == 0x05:
+        return ID_WALL_NS
+    return ID_WALL_EW
+
+
+def wall_variant_for(tid: int) -> int:
+    """City ``+4`` from ``0x94CEB[id*4]``."""
+    return _WALL_VARIANT.get(tid, 0x00)
+
+
+def gate_variant_for(mask: int, horizontal: bool | None = None) -> int:
+    """Gate ``+4`` from LUT ``0x94D17`` (NS ``0x92`` / EW ``0x93``)."""
+    hit = _GATE_FROM_MASK.get(mask & 0x0F)
+    if hit is not None:
+        return hit
+    ns = mask & 0x05
+    ew = mask & 0x0A
+    if ns == 0x05 and ew != 0x0A:
+        return 0x92
+    if ew:
+        return 0x93
+    if horizontal is False:
+        return 0x92
+    return 0x93
+
+
+def _is_fort_join(city: CityMap, x: int, y: int) -> bool:
+    """Wall / gate / tower. Gather mask 6 = +1 0x02|0x04; not river."""
+    if not in_map(x, y):
+        return False
+    tid = city.tiles[city.offset(x, y)]
+    return tid == ID_TOWER or is_wall_id(tid)
+
+
+def _fort_join_mask(
+    city: CityMap, x: int, y: int, pending: set[tuple[int, int]] | None = None
+) -> int:
+    """N=1 E=2 S=4 W=8 — same bits as road / aqueduct."""
+    mask = 0
+    bit = 1
+    for dx, dy in _CARDINALS:
+        nx, ny = x + dx, y + dy
+        if pending is not None and (nx, ny) in pending:
+            mask |= bit
+        elif _is_fort_join(city, nx, ny):
+            mask |= bit
+        bit <<= 1
+    return mask
 
 
 def _wall_neighbor_mask(city: CityMap, x: int, y: int) -> int:
-    """Cardinal Wall 0xC1/0xC2 / Gate 0xC0. N=1 E=2 S=4 W=8."""
+    """Cardinal Wall 0xC1–0xCA / Gate 0xC0. N=1 E=2 S=4 W=8."""
     mask = 0
     bit = 1
     for dx, dy in _CARDINALS:
@@ -1773,15 +1894,71 @@ def _wall_kind(city: CityMap, x: int, y: int) -> str:
     return "stamp"
 
 
-def _write_wall_cell(city: CityMap, x: int, y: int, horizontal: bool) -> int:
+def _write_wall_cell(
+    city: CityMap,
+    x: int,
+    y: int,
+    pending: set[tuple[int, int]] | None = None,
+    *,
+    horizontal: bool | None = None,
+) -> int:
+    mask = _fort_join_mask(city, x, y, pending)
     if is_city_road(city, x, y) and not is_bridge(city, x, y):
-        var = 0x93 if horizontal else 0x92
+        var = gate_variant_for(mask, horizontal=horizontal)
         _write_building(city, x, y, ID_GATE, 0x24, 0x88, var)
         return ID_GATE
-    tid = ID_WALL_EW if horizontal else ID_WALL_NS
-    var = 0x04 if horizontal else 0x00
-    _write_building(city, x, y, tid, 0x02, 0x08, var)
+    tid = wall_id_for(mask)
+    _write_building(city, x, y, tid, 0x02, DRAW_WALL, wall_variant_for(tid))
     return tid
+
+
+def wall_preview_cells(
+    city: CityMap,
+    ok: list[tuple[int, int]],
+    stamp: list[tuple[int, int]],
+) -> list[tuple[int, int, int, int]]:
+    """``(x, y, id, +4)`` for the rubber-band line, same autotile as commit."""
+    pending = set(stamp)
+    out: list[tuple[int, int, int, int]] = []
+    for x, y in ok:
+        mask = _fort_join_mask(city, x, y, pending)
+        existing = city.tiles[city.offset(x, y)]
+        on_road = is_city_road(city, x, y) and not is_bridge(city, x, y)
+        if existing == ID_GATE or ((x, y) in pending and on_road):
+            out.append((x, y, ID_GATE, gate_variant_for(mask)))
+            continue
+        tid = wall_id_for(mask)
+        out.append((x, y, tid, wall_variant_for(tid)))
+    return out
+
+
+def _retile_walls(city: CityMap, cells: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    dirty: list[tuple[int, int]] = []
+    seen: set[tuple[int, int]] = set()
+    for x, y in cells:
+        if (x, y) in seen or not in_map(x, y):
+            continue
+        seen.add((x, y))
+        off = city.offset(x, y)
+        tid = city.tiles[off]
+        mask = _fort_join_mask(city, x, y)
+        if tid == ID_GATE:
+            var = gate_variant_for(mask)
+            if city.tiles[off + 4] == var:
+                continue
+            city.tiles[off + 4] = var
+            dirty.append((x, y))
+            continue
+        if not is_wall_run_id(tid):
+            continue
+        new_id = wall_id_for(mask)
+        new_var = wall_variant_for(new_id)
+        if tid == new_id and city.tiles[off + 4] == new_var:
+            continue
+        city.tiles[off] = new_id
+        city.tiles[off + 4] = new_var
+        dirty.append((x, y))
+    return dirty
 
 
 def _aqueduct_kind(
@@ -1976,6 +2153,7 @@ def try_place(
         road_ring = [(x, y), *_neighbor_ring(x, y)] if was_combo else _neighbor_ring(x, y)
         dirty.extend(_retile_roads(city, road_ring))
         dirty.extend(_retile_towers(city, _neighbor_ring(x, y)))
+        dirty.extend(_retile_walls(city, _neighbor_ring(x, y)))
         if was_pipe or was_aqueduct:
             ring = _neighbor_ring(x, y)
             dirty.extend(_retile_aqueducts(city, ring))
@@ -1998,10 +2176,12 @@ def try_place(
         err = _debit(sim, cost)
         if err:
             return PlaceResult(False, err, cost=cost)
-        tid = _write_wall_cell(city, x, y, horizontal=True)
+        tid = _write_wall_cell(city, x, y)
         dirty = [(x, y)]
-        dirty.extend(_retile_roads(city, _neighbor_ring(x, y)))
-        dirty.extend(_retile_towers(city, [(x, y), *_neighbor_ring(x, y)]))
+        ring = _neighbor_ring(x, y)
+        dirty.extend(_retile_walls(city, [(x, y), *ring]))
+        dirty.extend(_retile_roads(city, ring))
+        dirty.extend(_retile_towers(city, [(x, y), *ring]))
         name = "Gate" if tid == ID_GATE else "Wall"
         return PlaceResult(
             True,
@@ -2100,7 +2280,9 @@ def try_place(
         msg = _write_civic_1x1(city, x, y, tool)
         dirty = [(x, y)]
         if tool == TOOL_TOWER:
-            dirty.extend(_retile_towers(city, [(x, y), *_neighbor_ring(x, y)]))
+            ring = [(x, y), *_neighbor_ring(x, y)]
+            dirty.extend(_retile_towers(city, ring))
+            dirty.extend(_retile_walls(city, ring))
         if tool == TOOL_AQUEDUCT:
             dirty.extend(_retile_aqueducts(city, [(x, y), *_neighbor_ring(x, y)]))
         if tool in (TOOL_AQUEDUCT, TOOL_RESERVOIR):
@@ -2180,7 +2362,7 @@ def query_tile(city: CityMap, x: int, y: int) -> str:
         bits.append("Palatine")
     if t.terrain_id == ID_GATE:
         bits.append("Gate")
-    if t.terrain_id in (ID_WALL_NS, ID_WALL_EW):
+    if is_wall_run_id(t.terrain_id):
         bits.append("Wall")
     if t.terrain_id == ID_THEATER:
         bits.append("Theater")
@@ -2648,6 +2830,7 @@ def try_place_span(
             ring.extend(_neighbor_ring(x, y))
         if tool == TOOL_TOWER:
             dirty.extend(_retile_towers(city, list(preview.stamp) + ring))
+            dirty.extend(_retile_walls(city, list(preview.stamp) + ring))
         if tool == TOOL_AQUEDUCT:
             dirty.extend(_retile_aqueducts(city, list(preview.stamp) + ring))
         if tool in (TOOL_AQUEDUCT, TOOL_RESERVOIR):
@@ -2680,16 +2863,17 @@ def try_place_span(
         err = _debit(sim, preview.cost)
         if err:
             return PlaceResult(False, err, cost=preview.cost)
-        horizontal = preview.width >= preview.height
+        pending = set(preview.stamp)
         dirty = []
         ring: list[tuple[int, int]] = []
         n_gate = 0
         for x, y in preview.stamp:
-            tid = _write_wall_cell(city, x, y, horizontal)
+            tid = _write_wall_cell(city, x, y, pending)
             if tid == ID_GATE:
                 n_gate += 1
             dirty.append((x, y))
             ring.extend(_neighbor_ring(x, y))
+        dirty.extend(_retile_walls(city, list(preview.stamp) + ring))
         dirty.extend(_retile_roads(city, ring))
         dirty.extend(_retile_towers(city, list(preview.stamp) + ring))
         extra = f"  {n_gate} gate" if n_gate else ""
@@ -4077,14 +4261,94 @@ def selftest() -> list[str]:
     try_place(city, 4, 8, TOOL_ROAD, None)
     sim.treasury = 100
     r = try_place_span(city, 2, 8, 6, 8, TOOL_WALL, sim)
-    wall_id = city.tiles[city.offset(2, 8)]
+    wall_w = city.tiles[city.offset(2, 8)]
+    wall_mid = city.tiles[city.offset(3, 8)]
+    wall_e = city.tiles[city.offset(6, 8)]
     gate_id = city.tiles[city.offset(4, 8)]
-    if not r.ok or wall_id != ID_WALL_EW or gate_id != ID_GATE or sim.treasury != 15:
+    gate_var = city.tiles[city.offset(4, 8) + 4]
+    if (
+        not r.ok
+        or wall_w != ID_WALL_END_E
+        or wall_mid != ID_WALL_EW
+        or wall_e != ID_WALL_END_W
+        or gate_id != ID_GATE
+        or gate_var != 0x93
+        or sim.treasury != 15
+    ):
         lines.append(
-            f"FAIL  wall {r.message} {wall_id:#x} {gate_id:#x} treas={sim.treasury}"
+            f"FAIL  wall {r.message} {wall_w:#x}/{wall_mid:#x}/{wall_e:#x} "
+            f"gate={gate_id:#x}+4={gate_var:#x} treas={sim.treasury}"
         )
     else:
-        lines.append("ok    Wall linha EW + Gate 0xC0 na estrada")
+        lines.append("ok    Wall linha EW 0xC9/0xC2/0xCA + Gate 0xC0 +4=0x93")
+
+    if (
+        wall_id_for(0) != ID_WALL_END_N
+        or wall_id_for(0x0A) != ID_WALL_EW
+        or wall_id_for(0x05) != ID_WALL_NS
+        or wall_id_for(0x03) != ID_WALL_NE
+        or wall_id_for(0x06) != ID_WALL_SE
+        or wall_id_for(0x0C) != ID_WALL_SW
+        or wall_id_for(0x09) != ID_WALL_NW
+        or wall_id_for(0x07) != ID_WALL_NS
+        or wall_id_for(0x0B) != ID_WALL_EW
+        or wall_variant_for(ID_WALL_EW) != 0x04
+        or wall_variant_for(ID_WALL_NE) != 0x08
+        or wall_variant_for(ID_WALL_END_E) != 0x05
+        or gate_variant_for(0x05) != 0x92
+        or gate_variant_for(0x0A) != 0x93
+    ):
+        lines.append("FAIL  wall LUT 0x94BAF / +4 0x94CEB")
+    else:
+        lines.append("ok    Wall LUT 0x94BAF (cap/NS/EW/canto) +4 0x94CEB")
+
+    _grass_block(20, 20, 3, 3)
+    sim.treasury = 200
+    r1 = try_place_span(city, 20, 20, 22, 20, TOOL_WALL, sim)
+    r2 = try_place_span(city, 20, 20, 20, 22, TOOL_WALL, sim)
+    corner = city.tiles[city.offset(20, 20)]
+    stub = city.tiles[city.offset(20, 22)]
+    if (
+        not r1.ok
+        or not r2.ok
+        or corner != ID_WALL_SE
+        or city.tiles[city.offset(20, 20) + 4] != 0x09
+        or stub != ID_WALL_END_N
+    ):
+        lines.append(
+            f"FAIL  wall corner {r1.message}/{r2.message} "
+            f"{corner:#x} stub={stub:#x}"
+        )
+    else:
+        lines.append("ok    Wall canto SE 0xC4 +4=0x09; stub 0xC8")
+
+    from app.city_paint import tile_inside_walls as _inside_walls
+
+    _grass_block(50, 50, 5, 5)
+    sim.treasury = 2000
+    box = (
+        try_place_span(city, 50, 50, 54, 50, TOOL_WALL, sim),
+        try_place_span(city, 50, 54, 54, 54, TOOL_WALL, sim),
+        try_place_span(city, 50, 50, 50, 54, TOOL_WALL, sim),
+        try_place_span(city, 54, 50, 54, 54, TOOL_WALL, sim),
+    )
+    corner_ids = [
+        city.tiles[city.offset(50, 50)],
+        city.tiles[city.offset(54, 50)],
+        city.tiles[city.offset(50, 54)],
+        city.tiles[city.offset(54, 54)],
+    ]
+    if (
+        not all(r.ok for r in box)
+        or not _inside_walls(city.tiles, 52, 52)
+        or _inside_walls(city.tiles, 48, 52)
+        or not all(ID_WALL_LO <= tid <= ID_WALL_HI for tid in corner_ids)
+    ):
+        lines.append(
+            f"FAIL  wall box enclosure corners={[hex(t) for t in corner_ids]}"
+        )
+    else:
+        lines.append("ok    Wall 5×5 autotile box still encloses (corners 0xC3–0xC6)")
 
     _grass_block(10, 8, 3, 1)
     sim.treasury = 175

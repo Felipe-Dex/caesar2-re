@@ -108,7 +108,7 @@ _TOOL_HINT = {
     TOOL_PREFECTURE: "Praefecture 0xE3 +3=0x80 +4=0x50 (custo 100)",
     TOOL_TOWER: "Tower 0xBF (rect 1×1; custo 75)",
     TOOL_BARRACKS: "Barracks 0xE4 3×3 (custo 400; um stamp, fantasma segue o rato)",
-    TOOL_WALL: "Wall 0xC1/0xC2 linha (custo 20; Gate 0xC0 na estrada, custo 5)",
+    TOOL_WALL: "Wall 0xC1–0xCA linha (custo 20; Gate 0xC0 na estrada, custo 5)",
     TOOL_AVENTINE: "Aventine 0xAF 2×2 (custo 100; stamp-follow)",
     TOOL_JANICULAN: "Janiculan 0xB2 3×3 (custo 400; stamp-follow)",
     TOOL_PALATINE: "Palatine 0xB7 4×4 (sem débito C2MODEL; stamp-follow)",
