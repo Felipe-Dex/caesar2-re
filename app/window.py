@@ -1157,7 +1157,9 @@ def show(ctx: BootContext, *, game: Path) -> None:
                 frame = palette.blit(frame, selected=tool, ox=ox)
             if place_dlg is not None:
                 frame = blit_place_dialog(frame, place_dlg)
-            if advisor_dlg is not None:
+            # Query stays in front. Non-disaster banners wait; disasters
+            # close Query in _pump_advisor before this blit.
+            if advisor_dlg is not None and place_dlg is None:
                 vid = advisor_clip.snapshot() if advisor_clip is not None else None
                 frame = blit_advisor_dialog(
                     frame,
@@ -1527,13 +1529,30 @@ def show(ctx: BootContext, *, game: Path) -> None:
         _start_advisor_video(msg)
 
     def _pump_advisor() -> None:
+        nonlocal place_dlg
         if advisor_dlg is not None:
             return
-        from app.messages import pop_message
+        from app.messages import advisor_show_policy, peek_message, pop_message
 
-        nxt = pop_message(ctx.sim)
-        if nxt is not None:
-            _set_advisor(nxt)
+        nxt = peek_message(ctx.sim)
+        if nxt is None:
+            return
+        policy = advisor_show_policy(nxt, query_open=place_dlg is not None)
+        if policy == "wait":
+            return
+        if policy == "dismiss_query":
+            place_dlg = None
+        pop_message(ctx.sim)
+        _set_advisor(nxt)
+
+    def _close_query() -> bool:
+        """OK / Esc / click-outside. Then show any queued advisor."""
+        nonlocal place_dlg
+        if place_dlg is None:
+            return False
+        place_dlg = None
+        _pump_advisor()
+        return True
 
     def _dismiss_advisor() -> bool:
         if advisor_dlg is None:
@@ -2275,7 +2294,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
         if not aborted and not building:
             return False
         tool = None
-        place_dlg = None
+        _close_query()
         _sfx("click")
         blit(
             ("arrasto cancelado" if aborted else "ferramenta cancelada")
@@ -2304,11 +2323,10 @@ def show(ctx: BootContext, *, game: Path) -> None:
             overlay_flyout = False
             blit(f"Overlay: {overlay_name(overlay_id, ctx.eng)}")
             return True
-        if _dismiss_advisor():
+        if _close_query():
             blit(last_extra)
             return True
-        if place_dlg is not None:
-            place_dlg = None
+        if _dismiss_advisor():
             blit(last_extra)
             return True
         if palette.open is not None:
@@ -2491,7 +2509,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
         if result.query:
             open_place(cell[0], cell[1])
             return
-        place_dlg = None
+        _close_query()
         if result.ok and (result.dirty or result.flush_iso):
             invalidate_iso(result.dirty, flush=result.flush_iso)
         if result.ok:
@@ -2541,7 +2559,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
         if action == "overlay_menu":
             overlay_flyout = not overlay_flyout
             palette.close()
-            place_dlg = None
+            _close_query()
             # Overlay well (city_chrome overlay_menu): a09.wav, not unused.wav.
             _sfx("overlay")
             blit(f"Overlay: {overlay_name(overlay_id, ctx.eng)}")
@@ -2560,7 +2578,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
         picked = palette.click_grid(action, hit.rect)
         if picked.tool is not None:
             tool = picked.tool
-            place_dlg = None
+            _close_query()
         _sfx("click")
         blit(f"{picked.message}  tesouro {ctx.sim.treasury}")
 
@@ -2570,7 +2588,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
         if idx == OVERLAY_CANCEL:
             # EXE 0x329EF: cancel build tool slots. Does not reset overlay.
             tool = None
-            place_dlg = None
+            _close_query()
             _sfx("click")
             blit(f"ferramenta cancelada  tesouro {ctx.sim.treasury}")
             return
@@ -2920,7 +2938,18 @@ def show(ctx: BootContext, *, game: Path) -> None:
             return
         if _menu_click(event.x, event.y):
             return
-        if advisor_contains(
+        if place_dlg is not None and place_dialog_close_contains(
+            event.x, event.y, place_dlg, frame_size=(win_w, win_h)
+        ):
+            _close_query()
+            _sfx("click")
+            blit(last_extra)
+            return
+        if place_dlg is not None and place_dialog_contains(
+            event.x, event.y, place_dlg, frame_size=(win_w, win_h)
+        ):
+            return
+        if place_dlg is None and advisor_contains(
             event.x, event.y, advisor_dlg, has_video=_advisor_has_video()
         ):
             _sfx("click")
@@ -2972,17 +3001,6 @@ def show(ctx: BootContext, *, game: Path) -> None:
             _sfx("click")
             blit(f"{picked.message}  tesouro {ctx.sim.treasury}")
             return
-        if place_dlg is not None and place_dialog_close_contains(
-            event.x, event.y, place_dlg, frame_size=(win_w, win_h)
-        ):
-            place_dlg = None
-            _sfx("click")
-            blit(last_extra)
-            return
-        if place_dlg is not None and place_dialog_contains(
-            event.x, event.y, place_dlg, frame_size=(win_w, win_h)
-        ):
-            return
         hit = chrome.hit_test(event.x, event.y, ox=ox)
         if hit is not None:
             # Zoom lives on the sidebar 3×5. A map-well click must never
@@ -3006,8 +3024,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
                 if is_forum_building(tid):
                     _enter_forum()
                     return
-        if place_dlg is not None:
-            place_dlg = None
+        if _close_query():
             blit(last_extra)
 
     def on_right(event: tk.Event) -> None:  # type: ignore[type-arg]
@@ -3017,7 +3034,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
         if forum_state is not None:
             _forum_back()
             return
-        if advisor_dlg is not None:
+        if advisor_dlg is not None and place_dlg is None:
             _sfx("click")
             _dismiss_advisor()
             blit(last_extra)
@@ -3041,14 +3058,14 @@ def show(ctx: BootContext, *, game: Path) -> None:
         # Query / no tool: inspect the tile (same as Query left-click).
         if aborted:
             tool = None
-            place_dlg = None
+            _close_query()
             _sfx("click")
             blit(f"arrasto cancelado  tesouro {ctx.sim.treasury}")
             return
         building = tool is not None and tool != TOOL_QUERY
         if building:
             tool = None
-            place_dlg = None
+            _close_query()
             _sfx("click")
             blit(f"ferramenta cancelada  tesouro {ctx.sim.treasury}")
             return
@@ -3057,13 +3074,13 @@ def show(ctx: BootContext, *, game: Path) -> None:
             event.x, event.y, ox
         ):
             tool = None
-            place_dlg = None
+            _close_query()
             blit(f"ferramenta cancelada  tesouro {ctx.sim.treasury}")
             return
         hit = tile_at(event.x, event.y)
         if hit is None:
             tool = None
-            place_dlg = None
+            _close_query()
             blit(f"ferramenta cancelada  tesouro {ctx.sim.treasury}")
             return
         open_place(hit[0], hit[1])

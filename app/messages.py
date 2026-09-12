@@ -17,6 +17,12 @@ City Only only. Career banners (Emperor letters [115]+, provincial
 invasion [90–95], cohorts, Empire Expands, Stern Warning) stay skipped.
 C2.ENG [60] is the Query structure pack (title “NO Land Value”);
 [60]+4 “NO Water Supply” is overlay text, not a 58c87 city-map banner.
+
+Query is a modal inspect: Hail / pop / unlock / Need-style banners stay
+queued until Query closes (OK / Esc / click-outside). Map disasters
+dismiss Query (walker quote uses the same stack) so the talking-head
+can show. Stolen [88] is not on the host Disasters menu but it has a
+clip the player must see, so it also pre-empts Query.
 """
 
 from __future__ import annotations
@@ -33,6 +39,9 @@ ID_HOUSING_LO = 0x82
 ID_HOUSING_HI = 0xA1
 # Confirm-pack / labor allocate — status bar, not 58c87 (slots < 79).
 STATUS_BAR_KEYS = frozenset({"need_plebs", "idle"})
+# Fire / Disease / Attack / Riot + Stolen. Close Query so the clip shows.
+DISASTER_SLOTS = frozenset({80, 81, 82, 85, 86, 88})
+DISASTER_KEYS = frozenset({"disease", "fire", "attack", "riot", "theft"})
 # User-verified HUD + unused.wav cue. C2.ENG [7]+14 is the confirm title.
 NEED_PLEBS_HUD = "Plebs are needed!"
 # Shrine / Temple / Basilica origins — Hail / Stolen copy.
@@ -232,6 +241,40 @@ def pop_message(sim) -> AdvisorMessage | None:
     if not watch.pending:
         return None
     return watch.pending.pop(0)
+
+
+def peek_message(sim) -> AdvisorMessage | None:
+    """Next 58c87 banner without consuming the queue."""
+    watch = ensure_watch(sim)
+    if not watch.pending:
+        return None
+    return watch.pending[0]
+
+
+def advisor_is_disaster(msg) -> bool:
+    """True for Fire / Disease / Attack / Riot / Stolen talking-heads."""
+    if msg is None:
+        return False
+    slot = int(getattr(msg, "slot", -1))
+    if slot in DISASTER_SLOTS:
+        return True
+    key = str(getattr(msg, "key", "") or "")
+    return key in DISASTER_KEYS
+
+
+def advisor_show_policy(msg, *, query_open: bool) -> str:
+    """How a queued banner meets an open Query.
+
+    ``show`` — paint now. ``wait`` — leave it queued. ``dismiss_query`` —
+    close Query (and walker quote) then show immediately.
+    """
+    if msg is None:
+        return "wait"
+    if not query_open:
+        return "show"
+    if advisor_is_disaster(msg):
+        return "dismiss_query"
+    return "wait"
 
 
 def pending_count(sim) -> int:
@@ -1023,6 +1066,41 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  pop_message {msg}")
     else:
         lines.append("ok    queue pop + click-dismiss fields")
+
+    hail = AdvisorMessage(key="hail", title="Hail", body="x", slot=79, dismiss="R")
+    pop = AdvisorMessage(key="pop:200", title="Good Going!", body="x", slot=103, dismiss="R")
+    unlock = AdvisorMessage(key="unlock", title="New Structure", body="x", slot=114, dismiss="R")
+    fire = AdvisorMessage(key="fire", title="Fire Alert!", body="x", slot=81, dismiss="R")
+    sick = AdvisorMessage(key="disease", title="Disease!", body="x", slot=80, dismiss="R")
+    riot = AdvisorMessage(key="riot", title="Rioting!", body="x", slot=86, dismiss="R")
+    atk = AdvisorMessage(key="attack", title="Attacked!", body="x", slot=82, dismiss="R")
+    theft = AdvisorMessage(key="theft", title="Stolen!", body="x", slot=88, dismiss="R")
+    qsim = SimState(city_only=1, population=8, treasury=100)
+    init_city_only_labor(qsim)
+    enqueue(qsim, hail)
+    peeked = peek_message(qsim)
+    if peeked is None or peeked.key != "hail" or pending_count(qsim) != 1:
+        lines.append(f"FAIL  peek consumed queue {peeked} n={pending_count(qsim)}")
+    elif advisor_show_policy(hail, query_open=True) != "wait":
+        lines.append("FAIL  Hail must wait for Query")
+    elif advisor_show_policy(pop, query_open=True) != "wait":
+        lines.append("FAIL  pop must wait for Query")
+    elif advisor_show_policy(unlock, query_open=True) != "wait":
+        lines.append("FAIL  unlock must wait for Query")
+    elif advisor_show_policy(fire, query_open=True) != "dismiss_query":
+        lines.append("FAIL  Fire must dismiss Query")
+    elif advisor_show_policy(sick, query_open=True) != "dismiss_query":
+        lines.append("FAIL  Disease must dismiss Query")
+    elif advisor_show_policy(riot, query_open=True) != "dismiss_query":
+        lines.append("FAIL  Riot must dismiss Query")
+    elif advisor_show_policy(atk, query_open=True) != "dismiss_query":
+        lines.append("FAIL  Attack must dismiss Query")
+    elif advisor_show_policy(theft, query_open=True) != "dismiss_query":
+        lines.append("FAIL  Stolen must dismiss Query")
+    elif advisor_show_policy(hail, query_open=False) != "show":
+        lines.append("FAIL  Hail shows when Query is closed")
+    else:
+        lines.append("ok    Query open: non-disaster waits, disaster dismisses Query")
 
     if "janiculan" not in POP_UNLOCK:
         lines.append("FAIL  unlocks table")

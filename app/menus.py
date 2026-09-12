@@ -63,6 +63,8 @@ _REPORT_X, _REPORT_Y = 16, 40
 _REPORT_W, _REPORT_H = 320, 200
 # Advisor banner — offset from Query (16,40) / Census so we do not share
 # the Query OK gadget. Click-to-dismiss; EXE [78] is right-click.
+# Query stays in front: window.py queues Hail/pop until Query closes, and
+# dismisses Query for Fire / Disease / Riot / Attack / Stolen.
 _ADV_X, _ADV_Y = 72, 88
 _ADV_W = 360
 _ADV_LINE = 44
@@ -434,7 +436,11 @@ def blit_advisor_dialog(
     video: Image.Image | None = None,
     has_video: bool = False,
 ) -> Image.Image:
-    """C2.ENG banner + optional 320×152 talker. Dismiss is not Query OK."""
+    """C2.ENG banner + optional 320×152 talker. Dismiss is not Query OK.
+
+    Do not blit over an open Query — the host holds the banner until
+    Query closes, unless the slot is a disaster (Query is already gone).
+    """
     from app.advisor_video import SMK_H, SMK_W, SMK_X, SMK_Y
 
     has_video = has_video or video is not None
@@ -708,6 +714,15 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  advisor video not centered x={x0} w={w}")
     else:
         lines.append("ok    advisor video+text hitbox")
+    from app.messages import advisor_show_policy
+
+    hail = AdvisorMessage(key="hail", title="Hail", body="x", slot=79, dismiss="R")
+    if advisor_show_policy(demo, query_open=True) != "dismiss_query":
+        lines.append("FAIL  Fire Alert must dismiss Query")
+    elif advisor_show_policy(hail, query_open=True) != "wait":
+        lines.append("FAIL  Hail must wait for Query")
+    else:
+        lines.append("ok    Query open: Fire dismisses, Hail waits")
     excerpt = help_topic_excerpt(None, HELP_TOPIC_HINTS, "Hints and Tips")
     if excerpt.title != "Hints and Tips":
         lines.append("FAIL  help fallback")
