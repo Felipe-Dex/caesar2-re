@@ -947,6 +947,36 @@ def tile_inside_walls(
     return True
 
 
+def security_score(cov10: int, enclosed: bool) -> int:
+    """0 none / 1 Internal or External / 2 Maximum. Query 0x638a7."""
+    return int(bool(enclosed)) + int(bool(cov10 & SECURITY_COV_BITS))
+
+
+def security_overlay_index(tid: int, cov10: int, enclosed: bool) -> int:
+    """0x3E7DB plane byte. Same Internal/External/Both as Query.
+
+    EXE score = (signed +17>=16) + (+10&0x30); score 1 with no prefect
+    writes 0x90 on **any** tile (grass/empty included). Host External is
+    wall/gate/tower/river enclosure — not flood_plus17, which would paint
+    a City Only river map. Skip the EXE 0x96 flood on +1&6 and river
+    0x1E–0x51. Barracks stays 0x8B (EXE used 0x96 for both buildings).
+    """
+    if tid == ID_PREFECTURE:
+        return 0x96
+    if tid == ID_BARRACKS:
+        return 0x8B
+    if is_fortification_id(tid) or ID_RIVER_LO <= tid <= ID_RIVER_HI:
+        return 0
+    score = security_score(cov10, enclosed)
+    if score == 2:
+        return 0x8D
+    if cov10 & SECURITY_COV_BITS:
+        return 0x93
+    if enclosed:
+        return 0x90
+    return 0
+
+
 def paint_security_emitter(tiles: bytearray, x: int, y: int) -> int:
     """Place-time / 0x5E prefecture + barracks onto +14 and +10&0x30.
 

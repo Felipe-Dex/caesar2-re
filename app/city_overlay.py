@@ -42,6 +42,8 @@ from app.city_paint import (
     hospital_cover_percent,
     library_cover_percent,
     security_enclosure_mask,
+    security_overlay_index,
+    security_score,
     tile_inside_walls,
 )
 
@@ -224,7 +226,7 @@ def overlay_pixel(
         if enclosed is None:
             idx = off // TILE_STRIDE
             enclosed = tile_inside_walls(tiles, idx % MAP_W, idx // MAP_W)
-        return _paint_security(tid, flags, tiles[off + 10], enclosed)
+        return security_overlay_index(tid, tiles[off + 10], enclosed)
     if overlay_id == OVERLAY_UNREST:
         return _paint_unrest(tiles[off + 11])
     if overlay_id == OVERLAY_TAX:
@@ -279,39 +281,6 @@ def _paint_water(tid: int, flags: int, splash: int) -> int:
         return 0x96
     if (flags & 0x10) or tid < 8 or (0x1E <= tid <= 0x51):
         return 0x84
-    return 0
-
-
-def _is_security_road(tid: int) -> bool:
-    """Pavement the overlay should mark — not river 0x1E–0x51."""
-    if 0x52 <= tid <= 0x5C:
-        return True
-    if 0x4E <= tid <= 0x51:
-        return True
-    return 0x7C <= tid <= 0x7E
-
-
-def _paint_security(tid: int, _flags: int, cov10: int, enclosed: bool) -> int:
-    # 0x3E7DB. EXE score = (signed +17>=16) + (+10&0x30). Host External is
-    # wall/gate/tower/river enclosure (same C2.ENG Internal/External/Both),
-    # not flood_plus17 — a City Only river would paint +17>=16 everywhere.
-    # Split prefecture/barracks (CITY1.256 0x96 tan vs 0x8B salmon). Leave
-    # river / grass / walls on plane 0 (dimmed geography).
-    if tid == 0xE3:
-        return 0x96
-    if tid == 0xE4:
-        return 0x8B
-    score = int(bool(enclosed)) + int(bool(cov10 & 0x30))
-    if score == 0:
-        return 0
-    if score == 2:
-        return 0x8D
-    if cov10 & 0x30:
-        return 0x93
-    if enclosed and (
-        _is_security_road(tid) or ID_HOUSING_LO <= tid <= ID_HOUSING_HI
-    ):
-        return 0x90
     return 0
 
 
@@ -1015,7 +984,8 @@ def query_place(city: CityMap, x: int, y: int, eng=None) -> PlaceInfo:
     # cannot cross those tiles). Same C2.ENG line as the overlay legend.
     internal = bool(t.coverage & SECURITY_COV_BITS)
     external = tile_inside_walls(city.tiles, ox, oy)
-    if internal and external:
+    score = security_score(t.coverage, external)
+    if score == 2:
         lines.append(_eng_skip(eng, 60, 0x5C, "Maximum Security"))
     elif internal:
         lines.append(_eng_skip(eng, 60, 7, "Internal Security Only"))
@@ -1110,9 +1080,7 @@ def query_place(city: CityMap, x: int, y: int, eng=None) -> PlaceInfo:
         ot = city.tile(ox, oy)
         evolve_lv = i8(ot.industry)
         evolve_tid = ot.terrain_id
-    sec_n = int(bool(plus10 & SECURITY_COV_BITS)) + int(
-        tile_inside_walls(city.tiles, ox, oy)
-    )
+    sec_n = security_score(plus10, tile_inside_walls(city.tiles, ox, oy))
     lines.extend(
         query_evolve_lines(
             housing=t.is_housing,
@@ -1747,6 +1715,14 @@ def selftest() -> list[str]:
         )
     else:
         lines.append("ok    security grass +17 -> plane 0")
+    off = put(27, 0, tid=0x14, flags=0, **{"10": 0x30})
+    if overlay_pixel(tiles, off, OVERLAY_SECURITY) != 0x93:
+        lines.append(
+            f"FAIL  security open grass prefect "
+            f"{overlay_pixel(tiles, off, OVERLAY_SECURITY):#x}"
+        )
+    else:
+        lines.append("ok    security open grass +10&0x30 -> 0x93 Internal")
     off = put(22, 0, tid=0x52, flags=0x20, **{"17": 0x20})
     if overlay_pixel(tiles, off, OVERLAY_SECURITY) != 0:
         lines.append(
@@ -2051,6 +2027,38 @@ def selftest() -> list[str]:
         )
     else:
         lines.append("ok    overlay enclosed house → External 0x90")
+    goff = city.offset(41, 41)
+    city.tiles[goff] = 0x14
+    eoff = city.offset(43, 41)
+    city.tiles[eoff] = 0x1C
+    if overlay_pixel(city.tiles, goff, OVERLAY_SECURITY) != 0x90:
+        lines.append(
+            f"FAIL  overlay enclosed grass "
+            f"{overlay_pixel(city.tiles, goff, OVERLAY_SECURITY):#x}"
+        )
+    else:
+        lines.append("ok    overlay enclosed grass → External 0x90")
+    if overlay_pixel(city.tiles, eoff, OVERLAY_SECURITY) != 0x90:
+        lines.append(
+            f"FAIL  overlay enclosed empty "
+            f"{overlay_pixel(city.tiles, eoff, OVERLAY_SECURITY):#x}"
+        )
+    else:
+        lines.append("ok    overlay enclosed empty 0x1C → External 0x90")
+    grass_q = query_place(city, 41, 41)
+    if "External Security Only" not in " ".join(grass_q.lines):
+        lines.append(f"FAIL  query enclosed grass {grass_q.lines}")
+    else:
+        lines.append("ok    query enclosed grass → External Security Only")
+    city.tiles[goff + 10] = SECURITY_COV_BITS
+    if overlay_pixel(city.tiles, goff, OVERLAY_SECURITY) != 0x8D:
+        lines.append(
+            f"FAIL  overlay enclosed grass+prefect "
+            f"{overlay_pixel(city.tiles, goff, OVERLAY_SECURITY):#x}"
+        )
+    else:
+        lines.append("ok    overlay enclosed grass + prefect → Both 0x8D")
+    city.tiles[goff + 10] = 0
     city.tiles[woff + 10] = SECURITY_COV_BITS
     max_q = query_place(city, 42, 42)
     mjoin = " ".join(max_q.lines)
@@ -2106,6 +2114,19 @@ def selftest() -> list[str]:
         )
     else:
         lines.append("ok    overlay wall+river house → External 0x90")
+    g2 = city.offset(rx + 1, ry + 1)
+    city.tiles[g2] = 0x14
+    if overlay_pixel(city.tiles, g2, OVERLAY_SECURITY) != 0x90:
+        lines.append(
+            f"FAIL  overlay wall+river grass "
+            f"{overlay_pixel(city.tiles, g2, OVERLAY_SECURITY):#x}"
+        )
+    else:
+        lines.append("ok    overlay wall+river grass → External 0x90")
+    if "External Security Only" not in " ".join(query_place(city, rx + 1, ry + 1).lines):
+        lines.append(f"FAIL  query wall+river grass {query_place(city, rx + 1, ry + 1).lines}")
+    else:
+        lines.append("ok    query wall+river grass → External Security Only")
     city.tiles[ioff + 10] = SECURITY_COV_BITS
     rmax = query_place(city, rx + 2, ry + 2)
     if "Maximum Security" not in " ".join(rmax.lines):
