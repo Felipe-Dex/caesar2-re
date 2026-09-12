@@ -145,6 +145,9 @@ _FLYOUT_ITEM_H = 14
 _DLG_X, _DLG_Y = 16, 40
 _DLG_W, _DLG_H = 420, 280
 _DLG_LINE = 52
+# EXE 0x63845: left ebx=0x38, right ebx=0xF8 (delta 192). One column ~24 glyphs.
+_DLG_COL = 24
+_DLG_COL_X = 192
 _DLG_OK_W, _DLG_OK_H = 56, 18
 _DLG_OK_PAD = 8
 
@@ -1334,6 +1337,135 @@ def _wrap_query_line(text: str, width: int = _DLG_LINE) -> list[str]:
     return out
 
 
+# C2.ENG [60] amenity / proximity tags drawn by 0x63845. Host extras
+# (fire timer) sit with them. Long [60]+35…+87 evolve lines are not tags.
+_QUERY_TAG_PREFIXES: tuple[str, ...] = (
+    "Water Supply",
+    "Primitive Water Supply",
+    "NO Water Supply",
+    "Forum Access",
+    "NO Forum Access",
+    "Internal Security",
+    "External Security",
+    "NO Security",
+    "Maximum Security",
+    "Market Access",
+    "NO Market Access",
+    "Grammaticus Access",
+    "NO Grammaticus Access",
+    "Rhetor Access",
+    "NO Rhetor Access",
+    "Entertainment Level",
+    "Near Baths",
+    "Not Near Baths",
+    "Complete Hospital",
+    "Hospital Cover is",
+    "No Hospital Cover",
+    "Complete Library",
+    "Library Cover is",
+    "No Library Cover",
+    "Road Access",
+    "No Road Access",
+    "Close to ",
+    "Not Close to ",
+    "fire risk",
+    "on fire",
+    "fire timer",
+)
+
+_QUERY_PARA_PREFIXES: tuple[str, ...] = (
+    "This ",
+    "Local land value",
+    "Land value is too low.",
+    "Lack of ",
+    "No access ",
+    "Close proximity ",
+    "Residents ",
+    "Insufficient ",
+    "Growth of ",
+    "A business ",
+    "Create statues",
+    "Increase the stature",
+    "Output ",
+    "Industry ",
+    "The business ",
+    "There are no people",
+    "Producing",
+)
+
+
+def _query_is_tag(line: str) -> bool:
+    s = line.strip()
+    if not s:
+        return False
+    if s.startswith("fire "):
+        return True
+    return any(s.startswith(prefix) for prefix in _QUERY_TAG_PREFIXES)
+
+
+def _query_is_para(line: str) -> bool:
+    s = line.strip()
+    if not s or _query_is_tag(s):
+        return False
+    if any(s.startswith(prefix) for prefix in _QUERY_PARA_PREFIXES):
+        return True
+    return len(s) > 40
+
+
+def _place_dialog_rows(
+    info: PlaceInfo | None,
+) -> list[tuple[str, str | None]]:
+    """Header, then amenity tags in two columns, blank, then evolve wrap.
+
+    EXE 0x63845 is two columns: left [60]+2…+22 / +84…+89 at x=0x38,
+    right Close to… / Not Close to… (+23…+34) at x=0xF8. The host box is
+    420×280 and does not yet emit those proximity lines, so the amenity
+    tags we already print pair left-to-right in that same 192 px delta.
+    """
+    rows: list[tuple[str, str | None]] = []
+    if info is None:
+        return rows
+    header: list[str] = []
+    tags: list[str] = []
+    paras: list[str] = []
+    seen_body = False
+    for line in info.lines:
+        if _query_is_para(line):
+            paras.append(line)
+            seen_body = True
+        elif _query_is_tag(line):
+            tags.append(line)
+            seen_body = True
+        elif not seen_body:
+            header.append(line)
+        elif len(line) > 40:
+            paras.append(line)
+        else:
+            tags.append(line)
+    for line in header:
+        for wrapped in _wrap_query_line(line):
+            rows.append((wrapped, None))
+    i = 0
+    while i < len(tags):
+        left = tags[i]
+        right = tags[i + 1] if i + 1 < len(tags) else None
+        if right is not None and (
+            len(left) > _DLG_COL or len(right) > _DLG_COL
+        ):
+            for wrapped in _wrap_query_line(left):
+                rows.append((wrapped, None))
+            i += 1
+            continue
+        rows.append((left, right))
+        i += 2 if right is not None else 1
+    if paras:
+        rows.append(("", None))
+        for line in paras:
+            for wrapped in _wrap_query_line(line):
+                rows.append((wrapped, None))
+    return rows
+
+
 def _query_layout(win_w: int, win_h: int) -> tuple[int, int, int]:
     """Same integer scale as Forum — Query blit is native 420×280."""
     from app.forum import forum_layout
@@ -1352,17 +1484,21 @@ def _query_to_native(
 
 
 def _place_dialog_wrapped(info: PlaceInfo | None) -> list[str]:
+    """Flattened rows (left then right) for height / tests."""
     wrapped: list[str] = []
-    if info is None:
-        return wrapped
-    for line in info.lines:
-        wrapped.extend(_wrap_query_line(line))
+    for left, right in _place_dialog_rows(info):
+        if left or right:
+            wrapped.append(left)
+            if right:
+                wrapped.append(right)
+        else:
+            wrapped.append("")
     return wrapped
 
 
 def place_dialog_rect(info: PlaceInfo | None = None) -> tuple[int, int, int, int]:
-    """Native 640×480 rect (x, y, w, h). Grows with wrapped Query lines."""
-    n = len(_place_dialog_wrapped(info))
+    """Native 640×480 rect (x, y, w, h). Grows with Query layout rows."""
+    n = len(_place_dialog_rows(info))
     body = 22 + 13 * n + 10
     h = max(_DLG_H, body + _DLG_OK_H + _DLG_OK_PAD + 4)
     return (_DLG_X, _DLG_Y, _DLG_W, h)
@@ -1410,7 +1546,7 @@ def place_dialog_close_contains(
 def blit_place_dialog(frame: Image.Image, info: PlaceInfo) -> Image.Image:
     """Structure / walker-quote box. Native coords, Forum integer-upscale."""
     font = ImageFont.load_default()
-    wrapped = _place_dialog_wrapped(info)
+    rows = _place_dialog_rows(info)
     x0, y0, w, h = place_dialog_rect(info)
     bx, by, bw, bh = place_dialog_ok_rect(info)
     overlay = Image.new("RGBA", (x0 + w, y0 + h), (0, 0, 0, 0))
@@ -1420,10 +1556,16 @@ def blit_place_dialog(frame: Image.Image, info: PlaceInfo) -> Image.Image:
     draw.text((x0 + 8, y0 + 6), "Query", fill=(255, 228, 160, 255), font=font)  # C2.ENG [73]
     y = y0 + 22
     text_bottom = by - 4
-    for line in wrapped:
+    left_x = x0 + 8
+    right_x = x0 + 8 + _DLG_COL_X
+    ink = (220, 230, 210, 255)
+    for left, right in rows:
         if y > text_bottom - 12:
             break
-        draw.text((x0 + 8, y), line, fill=(220, 230, 210, 255), font=font)
+        if left:
+            draw.text((left_x, y), left, fill=ink, font=font)
+        if right:
+            draw.text((right_x, y), right, fill=ink, font=font)
         y += 13
     # EXE Query is click-outside (no X). Host OK so dismiss is obvious.
     ok = "OK"
@@ -2170,6 +2312,67 @@ def selftest() -> list[str]:
         lines.append("FAIL  query OK not painted")
     else:
         lines.append("ok    query OK painted")
+    lay = PlaceInfo(
+        0,
+        0,
+        "Hut",
+        0x85,
+        1,
+        (
+            "Communal Hut",
+            "tile (43,59)  id 0x85  +1 0x01",
+            "Land Value is 20",
+            "workers 8",
+            "Water Supply (fountain)",
+            "Forum Access",
+            "Internal Security Only",
+            "Market Access",
+            "NO Grammaticus Access",
+            "NO Rhetor Access",
+            "Entertainment Level 3",
+            "Near Baths",
+            "Complete Hospital Cover",
+            "No Library Cover",
+            _QUERY_EVOLVE_FB[87],
+            "fire risk none",
+        ),
+    )
+    qrows = _place_dialog_rows(lay)
+    if ("Water Supply (fountain)", "Forum Access") not in qrows:
+        lines.append(f"FAIL  query 2-col water/forum {qrows}")
+    elif ("Internal Security Only", "Market Access") not in qrows:
+        lines.append(f"FAIL  query 2-col security/market {qrows}")
+    else:
+        lines.append("ok    Query amenity tags pair into two columns")
+    evo_i = next(
+        (
+            i
+            for i, (left, _right) in enumerate(qrows)
+            if left.startswith("Local land value")
+        ),
+        -1,
+    )
+    fire_i = next(
+        (
+            i
+            for i, (left, right) in enumerate(qrows)
+            if "fire risk" in left or (right and "fire risk" in right)
+        ),
+        -1,
+    )
+    if evo_i < 1 or qrows[evo_i - 1] != ("", None):
+        lines.append(f"FAIL  query blank before evolve {qrows}")
+    elif fire_i < 0 or fire_i > evo_i:
+        lines.append(f"FAIL  query fire tag after evolve {qrows}")
+    else:
+        lines.append("ok    Query blank line before evolve paragraph")
+    two = blit_place_dialog(Image.new("RGB", (640, 480), (0, 0, 0)), lay)
+    rx = _DLG_X + 8 + _DLG_COL_X
+    ry = _DLG_Y + 22 + 13 * 4 + 4
+    if two.getpixel((rx + 2, ry)) == (8, 24, 22):
+        lines.append("FAIL  query right column empty")
+    else:
+        lines.append("ok    Query right column painted")
 
     from app.city_map import iso_canvas_size, iso_tile_size, tile_iso_xy
 
