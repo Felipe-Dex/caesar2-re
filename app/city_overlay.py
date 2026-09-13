@@ -98,6 +98,14 @@ ISO_TINT_OVERLAYS = frozenset(
 # EXE 0x3E6BA never writes a dry colour — plane 0 keeps dimmed geography.
 # Do not invent a full-map red (old host 0xFE). Coverage is +13 rings only.
 _ISO_WASH_ALPHA = 120
+# Security 0x93/0x90/0x8D are near-brown in CITY1.256; City Only remaps
+# those three so grass wash and the minimap key stay readable.
+_SECURITY_WASH_ALPHA = 180
+_SECURITY_WASH_RGB: dict[int, tuple[int, int, int]] = {
+    0x93: (40, 96, 230),  # Internal — blue
+    0x90: (236, 208, 24),  # External — yellow
+    0x8D: (220, 32, 36),  # Both / Maximum — red
+}
 
 # CITY1.256 indices written to 0xD7BFC. Runtime load preferred; this is
 # the measured fallback so the host still paints without the file in git.
@@ -200,6 +208,19 @@ def palette_rgb(index: int) -> tuple[int, int, int]:
     if index <= 0:
         return (0, 0, 0)
     return _overlay_rgb.get(index, (index, index // 2, 40))
+
+
+def overlay_plane_rgb(overlay_id: int, index: int) -> tuple[int, int, int]:
+    """CITY1.256 index, with Security 0x93/0x90/0x8D remapped for contrast.
+
+    Water (and Tax / Education / Markets) keep the raw palette so Pipe
+    Access 0x8D stays tan. Plane bytes themselves stay EXE 0x93/0x90/0x8D.
+    """
+    if overlay_id == OVERLAY_SECURITY:
+        remapped = _SECURITY_WASH_RGB.get(index)
+        if remapped is not None:
+            return remapped
+    return palette_rgb(index)
 
 
 def i8(b: int) -> int:
@@ -378,7 +399,7 @@ def apply_overlay_colors(
         enclosed = bool(enclosed_mask[i]) if enclosed_mask is not None else None
         idx = overlay_pixel(tiles, off, overlay_id, enclosed=enclosed)
         if idx:
-            out.append(palette_rgb(idx))
+            out.append(overlay_plane_rgb(overlay_id, idx))
         else:
             out.append(((base[0] * 5) // 8, (base[1] * 5) // 8, (base[2] * 5) // 8))
     return out
@@ -445,7 +466,12 @@ def overlay_iso_wash(
             idx = overlay_pixel(tiles, off, overlay_id, enclosed=enclosed)
             if not idx:
                 continue
-            rgb = palette_rgb(idx)
+            rgb = overlay_plane_rgb(overlay_id, idx)
+            alpha = (
+                _SECURITY_WASH_ALPHA
+                if overlay_id == OVERLAY_SECURITY and idx in _SECURITY_WASH_RGB
+                else _ISO_WASH_ALPHA
+            )
             sx, sy = tile_iso_xy(tx, ty, zoom=zoom)
             pts = (
                 (sx + tw // 2, sy),
@@ -466,7 +492,7 @@ def overlay_iso_wash(
                 )
                 for px, py in pts
             ]
-            draw.polygon(vpts, fill=(*rgb, _ISO_WASH_ALPHA))
+            draw.polygon(vpts, fill=(*rgb, alpha))
             painted = True
     if not painted:
         return view
@@ -1176,7 +1202,8 @@ _LEGEND_SWATCH_WH = 14
 _LEGEND_LABEL_X = 34
 
 # 0x61f24 / 0x61fb9: CITY1.256 index + [52] skip. Security uses 0x61fb9
-# (eax=0x20 → Internal / External / Both = +32,+31,+30).
+# (eax=0x20 → Internal / External / Both = +32,+31,+30). Host remaps
+# those three Security indices in overlay_plane_rgb; Water 0x8D is raw.
 _LEGEND_THREE: dict[int, tuple[tuple[int, int, str], ...]] = {
     OVERLAY_WATER: (
         (0x84, 25, "Water Supply"),
@@ -1290,7 +1317,7 @@ def blit_overlay_legend(
     wh = _LEGEND_SWATCH_WH
     for i, (index, skip, fallback) in enumerate(rows):
         y0 = sy + i * _LEGEND_SWATCH_GAP
-        rgb = palette_rgb(index)
+        rgb = overlay_plane_rgb(overlay_id, index)
         draw.rectangle((sx, y0, sx + wh, y0 + wh), fill=rgb + (255,))
         draw.rectangle(
             (sx, y0, sx + wh, y0 + wh), outline=(200, 180, 90, 255)
@@ -2322,6 +2349,36 @@ def selftest() -> list[str]:
         lines.append("FAIL  water swatch missing")
     else:
         lines.append("ok    Water/Security legend in minimap well")
+    water_pipe = overlay_plane_rgb(OVERLAY_WATER, 0x8D)
+    sec_int = overlay_plane_rgb(OVERLAY_SECURITY, 0x93)
+    sec_ext = overlay_plane_rgb(OVERLAY_SECURITY, 0x90)
+    sec_both = overlay_plane_rgb(OVERLAY_SECURITY, 0x8D)
+    if water_pipe != palette_rgb(0x8D):
+        lines.append("FAIL  Water 0x8D Pipe Access remapped")
+    elif sec_int == palette_rgb(0x93) or sec_ext == palette_rgb(0x90):
+        lines.append("FAIL  Security wash still CITY1.256 brown")
+    elif not (sec_ext[0] > 180 and sec_ext[1] > 160 and sec_ext[2] < 80):
+        lines.append(f"FAIL  Security External not yellow {sec_ext}")
+    elif not (sec_int[2] > sec_int[0] + 80 and sec_int[2] > sec_int[1]):
+        lines.append(f"FAIL  Security Internal not blue {sec_int}")
+    elif not (sec_both[0] > 180 and sec_both[0] > sec_both[1] + 80):
+        lines.append(f"FAIL  Security Both not red {sec_both}")
+    else:
+        lines.append("ok    Security wash yellow/blue/red; Water 0x8D untouched")
+    sx = wx + _LEGEND_SWATCH[0] + _LEGEND_SWATCH_WH // 2
+    sy0 = wy + _LEGEND_SWATCH[1] + _LEGEND_SWATCH_WH // 2
+    painted_int = sec_key.getpixel((sx, sy0))
+    painted_ext = sec_key.getpixel((sx, sy0 + _LEGEND_SWATCH_GAP))
+    painted_both = sec_key.getpixel((sx, sy0 + 2 * _LEGEND_SWATCH_GAP))
+    painted_pipe = water_key.getpixel((sx, sy0 + _LEGEND_SWATCH_GAP))
+    if painted_int != sec_int or painted_ext != sec_ext or painted_both != sec_both:
+        lines.append(
+            f"FAIL  Security legend swatches {painted_int} {painted_ext} {painted_both}"
+        )
+    elif painted_pipe != water_pipe:
+        lines.append(f"FAIL  Water Pipe Access swatch remapped {painted_pipe}")
+    else:
+        lines.append("ok    Security/Water legend swatches match plane RGB")
 
     qinfo = PlaceInfo(0, 0, "T", 0, 0, ("a",))
     ox, oy, ow, oh = place_dialog_ok_rect(qinfo)

@@ -303,7 +303,8 @@ def peek_status(sim) -> str:
 def take_status_sfx(sim) -> str:
     """Pop the pending labor SFX (``need_plebs`` → unused.wav), or ``""``.
 
-    Window plays this after scan / Forum allocate — not from overlay blit.
+    Window plays this after scan / Forum allocate — not from overlay blit
+    or overlay well / flyout pick (those stay ``SfxPlayer overlay`` / a09).
     """
     watch = ensure_watch(sim)
     key = watch.status_sfx
@@ -823,6 +824,11 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  re-fired every scan {got2}")
     else:
         lines.append("ok    labor toast is a rising edge, not every tick")
+    peek_status(sim)
+    if take_status_sfx(sim) != "need_plebs":
+        lines.append("FAIL  overlay blit peek consumed labor SFX")
+    else:
+        lines.append("ok    peek_status (overlay blit) leaves status_sfx armed")
     sim.labor_assigned = [20, 8, 0, 0, 0, 0, 0]
     got3 = scan_city_messages(sim, tiles)
     if got3 or peek_status(sim) or ensure_watch(sim).status_alert:

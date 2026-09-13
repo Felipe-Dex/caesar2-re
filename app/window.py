@@ -888,7 +888,14 @@ def show(ctx: BootContext, *, game: Path) -> None:
         sfx.play(event)
 
     def _play_labor_sfx() -> None:
-        """Play unused.wav only when scan / Forum allocate just posted."""
+        """Play unused.wav only when scan / Forum allocate just posted.
+
+        Overlay well / flyout blit must not consume ``status_sfx`` — PhotoImage
+        during that blit can pump ``clock_step`` (Query layout / advisor pump
+        made the frame heavier). Nested take would replay unused.wav as a09.
+        """
+        if _in_blit:
+            return
         from app.messages import take_status_sfx
 
         if take_status_sfx(ctx.sim) in ("need_plebs", "idle"):
@@ -2146,6 +2153,9 @@ def show(ctx: BootContext, *, game: Path) -> None:
         Display paints visible diamonds into the well; no world bitmap.
         """
         nonlocal sim_after, last_clock_mono
+        if _in_blit:
+            sim_after = root.after(TICK_MS, clock_step)
+            return
         now = time.monotonic()
         dt = int((now - last_clock_mono) * 1000)
         last_clock_mono = now
@@ -2559,7 +2569,9 @@ def show(ctx: BootContext, *, game: Path) -> None:
         if action == "overlay_menu":
             overlay_flyout = not overlay_flyout
             palette.close()
-            _close_query()
+            # Drop Query without _pump_advisor. 1891448 routed this through
+            # _close_query; the nested pump + overlay blit replayed unused.wav.
+            place_dlg = None
             # Overlay well (city_chrome overlay_menu): a09.wav, not unused.wav.
             _sfx("overlay")
             blit(f"Overlay: {overlay_name(overlay_id, ctx.eng)}")
