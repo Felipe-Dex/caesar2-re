@@ -64,7 +64,9 @@ the cursor; ghost overlay; release places once. Place uses dirty iso (no
 full-map flush — that thumbnailed the canvas and looked like a zoom pop).
 Clear of a tall building still sets ``flush_iso``. Tent / civic-rect drag
 is **atomic** if treasury < cost×N. N×N>1×1 (forum / temple / theater /
-barracks / …) is stamp-follow; Circus 6×3 EW (0xEB+0xEC) / 3×6 NS
+barracks / …) is stamp-follow and refuses the whole footprint if any
+cell is occupied (EXE ``69cfc`` / ``69f26``: ``+1&0xE7`` / river /
+walker — same-id 0xE4 is occupied, not a join). Circus 6×3 EW (0xEB+0xEC) / 3×6 NS
 (0xE9+0xEA) and C.Maximus 4×8 / 8×4 are one paired ghost — odd facing
 swaps the long axis. Paint remaps +4 along that W×H at facing 1–3
 (leftover pair at odd facing) so extra_rows still meet after rotate.
@@ -102,6 +104,7 @@ from app.city_paint import (
     factory_type_name,
     paint_baths_emitter,
     paint_education_emitter,
+    sync_all_water_building_graphics,
     sync_water_building_graphic,
     paint_entertainment_emitter,
     paint_factory_emitter,
@@ -1771,6 +1774,31 @@ def _stamp_family(tool: str) -> frozenset[int]:
     return frozenset({already} if already else ())
 
 
+def _classify_stamp_cells(
+    city: CityMap, cells: list[tuple[int, int]], tool: str
+) -> tuple[list[tuple[int, int]], list[tuple[int, int]], list[tuple[int, int]]]:
+    """Split an N×N footprint into skip / keep / stamp.
+
+    EXE ``FUN_00069cfc`` / ``FUN_00069f26`` walk every cell and refuse the
+    whole stamp if any tile is occupied: river ``+1&0x10``, ``+1&0xE7``
+    (any flag except river/bank — barracks ``+1=0x01`` hits this), or a
+    walker on +7/+8. Host ``keep`` (same-id) used to mix with grass
+    ``stamp`` and overwrite an existing 0xE4 3×3. Same-id is occupied.
+    """
+    skip: list[tuple[int, int]] = []
+    keep: list[tuple[int, int]] = []
+    stamp: list[tuple[int, int]] = []
+    for cx, cy in cells:
+        kind = _kind_for_tool(city, cx, cy, tool)
+        if kind == "skip":
+            skip.append((cx, cy))
+        elif kind == "keep":
+            keep.append((cx, cy))
+        else:
+            stamp.append((cx, cy))
+    return skip, keep, stamp
+
+
 def _kind_for_tool(
     city: CityMap,
     x: int,
@@ -2213,10 +2241,9 @@ def try_place(
         spec = _STAMPS[tool]
         w, h = stamp_wh(tool, facing)
         cells = footprint_rect(x, y, w, h)
-        skip = [c for c in cells if _kind_for_tool(city, c[0], c[1], tool) == "skip"]
-        if skip:
+        skip, keep, stamp = _classify_stamp_cells(city, cells, tool)
+        if skip or keep:
             return PlaceResult(False, f"{spec.label} {w}×{h} recusado em ({x},{y})")
-        stamp = [c for c in cells if _kind_for_tool(city, c[0], c[1], tool) == "stamp"]
         if not stamp:
             return PlaceResult(False, f"já {spec.label} em ({x},{y})")
         err = _debit(sim, spec.cost)
@@ -2306,6 +2333,8 @@ def try_place(
             paint_water_emitter(city.tiles, x, y)
         if tool == TOOL_FOUNTAIN:
             sync_water_building_graphic(city.tiles, x, y)
+        if tool in (TOOL_RESERVOIR, TOOL_AQUEDUCT):
+            sync_all_water_building_graphics(city.tiles)
         if tool == TOOL_PREFECTURE:
             paint_security_emitter(city.tiles, x, y)
         # Aqueduct must not trigger road retile — that wrote the fake 0x52.
@@ -2720,17 +2749,12 @@ def preview_span(
     if tool in STAMP_TOOLS:
         w, h = stamp_wh(tool, facing)
         width, height = w, h
-        for cx, cy in cells:
-            kind = _kind_for_tool(city, cx, cy, tool)
-            if kind == "skip":
-                skip.append((cx, cy))
-            elif kind == "keep":
-                ok.append((cx, cy))
-            else:
-                ok.append((cx, cy))
-                stamp.append((cx, cy))
+        skip, keep, stamp = _classify_stamp_cells(city, cells, tool)
+        if keep:
+            skip = list(dict.fromkeys([*skip, *keep]))
+        ok = [c for c in cells if c not in skip]
         unit = _civic_unit_cost(tool)
-        cost = unit if stamp else 0
+        cost = unit if stamp and not skip else 0
         label = _tool_label(tool)
         refuse = None
         if skip:
@@ -2858,6 +2882,8 @@ def try_place_span(
         if tool == TOOL_FOUNTAIN:
             for x, y in preview.stamp:
                 sync_water_building_graphic(city.tiles, x, y)
+        if tool in (TOOL_RESERVOIR, TOOL_AQUEDUCT):
+            sync_all_water_building_graphics(city.tiles)
         if tool == TOOL_PREFECTURE:
             for x, y in preview.stamp:
                 paint_security_emitter(city.tiles, x, y)
@@ -4674,6 +4700,49 @@ def selftest() -> list[str]:
         )
     else:
         lines.append("ok    Baths off-pipe +4=0x63 dry overlay plane 0")
+
+    # Baths first, then a river-fed 0xBE on the east face (screenshot order).
+    _grass_block(8, 12, 4, 3)
+    city.tiles[city.offset(11, 12)] = 0x20
+    city.tiles[city.offset(11, 12) + 1] = 0x10
+    sim.treasury = 30
+    r_bath = try_place(city, 8, 12, TOOL_BATHS, sim)
+    pre4 = city.tiles[city.offset(8, 12) + 4]
+    sim.treasury = 51
+    r_be = try_place(city, 10, 12, TOOL_RESERVOIR, sim)
+    post4 = city.tiles[city.offset(8, 12) + 4]
+    be_ch = city.tiles[city.offset(10, 12) + 10] & 3
+    if (
+        not r_bath.ok
+        or pre4 != 0x63
+        or not r_be.ok
+        or be_ch != 3
+        or post4 != 0x20
+    ):
+        lines.append(
+            f"FAIL  baths then reservoir {r_bath.message} {r_be.message} "
+            f"pre4={pre4:#x} post4={post4:#x} ch={be_ch}"
+        )
+    else:
+        lines.append("ok    Baths 2x2 molha apos 0xBE adjacente (carga 3, +4=0x20)")
+
+    _grass_block(14, 50, 7, 3)
+    sim.treasury = 800
+    r1 = try_place(city, 14, 50, TOOL_BARRACKS, sim)
+    r_over = try_place(city, 15, 50, TOOL_BARRACKS, sim)
+    over_id = city.tiles[city.offset(17, 50)]
+    prev_over = preview_span(city, TOOL_BARRACKS, 0, 0, 15, 50, 400)
+    r_adj = try_place(city, 17, 50, TOOL_BARRACKS, sim)
+    adj_id = city.tiles[city.offset(17, 50)]
+    if not r1.ok or r_over.ok or over_id == ID_BARRACKS or not prev_over.refuse:
+        lines.append(
+            f"FAIL  barracks overlap {r1.message} {r_over.message} "
+            f"id={over_id:#x} refuse={prev_over.refuse}"
+        )
+    elif not r_adj.ok or adj_id != ID_BARRACKS:
+        lines.append(f"FAIL  barracks adjacent {r_adj.message} id={adj_id:#x}")
+    else:
+        lines.append("ok    Barracks 0xE4 3x3: overlap recusado, adjacente ok")
 
     _grass_block(28, 2, 4, 3)
     city.tiles[city.offset(30, 2)] = ID_TENT

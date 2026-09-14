@@ -110,7 +110,9 @@ Charge **0** → skip (A/B origin `+13` stays 0).
 | **Well `0xD7–0xDA`** | — | +13 **`0x02`** | **2** |
 | **`0xBE`** | `+10 & 3` ∈ {1,2,3} | +13 **`0x01`** | **charge 1/2/3** |
 | `0xDB–0xDE` | `+13 & 4` | +13 `0x01` | 6 |
-| `0xDF–0xE2` origin | `FUN_0006dba2` +13 `0x04` on a 2×2 | +13 **`0x08`** | 6, EAX extra 1 |
+| `0xDF–0xE2` origin | `6dba2` +13 `0x04` on a 2×2 | +13 **`0x08`** + wet `+4` | r=`id−0xDA` extra 1 |
+
+Baths wet (pool `+4` 0x20, not the empty 0x63) is **only** that reservoir ring. `0x40099`: origin (`+5&0xF==0`), `6dba2(EAX=tile, EDX=2, BL=4)` OR-test, then `6a368` wet `(id−0xDF)<<2+0x20` @ `0x4018D` / dry `+0x63` @ `0x401C0`. `[0x102724]==0` forces dry. Place `0x42ADF` / `0x302F5` is the same `+13&4` gate. Not aqueduct-into-bath, not road, not a fountain-only splash. Adjacent charged `0xBE` (r=4/5/6) is enough. Host must restamp baths after a later `0xBE` paints the ring.
 
 The A/B river band (`+13=0x02` on 429 tiles) is the **`0x1E–0x51` r=3** painter, not the (0,0) reservoir.
 

@@ -845,6 +845,30 @@ def sync_water_building_graphic(
     return False
 
 
+def sync_all_water_building_graphics(
+    tiles: bytearray, *, water_staffed: bool = True
+) -> int:
+    """Restamp fountain/bath +4 after a reservoir ring / charge change.
+
+    EXE place ``0x42ADF`` / ``0x302F5`` and ``FUN_0003fef7`` ``0x40099``
+    only rewrite +4 when ``+13&4`` is already on the tile (6dba2 2×2).
+    Host place of a river-fed ``0xBE`` paints that ring; this pass updates
+    baths that were stamped dry before the tank existed.
+    """
+    if len(tiles) < MAP_W * MAP_H * TILE_STRIDE:
+        return 0
+    n = 0
+    for y in range(MAP_H):
+        for x in range(MAP_W):
+            hid = tiles[_off(x, y)]
+            if ID_FOUNTAIN_LO <= hid <= ID_FOUNTAIN_HI or ID_BATH_LO <= hid <= ID_BATH_HI:
+                if sync_water_building_graphic(
+                    tiles, x, y, water_staffed=water_staffed
+                ):
+                    n += 1
+    return n
+
+
 def is_fortification_id(tid: int) -> bool:
     return tid in FORTIFICATION_IDS
 
