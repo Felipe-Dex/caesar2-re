@@ -786,4 +786,15 @@ def selftest(game: Path | None = None) -> list[str]:
         lines.append("ok    resolved " + ", ".join(found[:8]))
     elif game is not None:
         lines.append("ok    no retail WAV (SFX stay silent)")
+    if sys.platform == "win32":
+        live = SfxPlayer(game, enabled=True)
+        backend = live.prepare()
+        winmm_ok = live._winmm not in (None, False) and bool(
+            getattr(live._winmm, "ok", False)
+        )
+        live.close()
+        if backend != "winmm" or not winmm_ok:
+            lines.append(f"FAIL  Windows SFX backend {backend!r} (want winmm)")
+        else:
+            lines.append("ok    Windows SFX backend winmm")
     return lines

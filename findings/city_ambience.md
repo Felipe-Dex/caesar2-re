@@ -2,7 +2,7 @@
 
 **Answer first:** we **did** find them. They are retail ``.WAV`` files on the flat 1.1A tree (`C:\Users\Felip\OneDrive\Games\Caesar2`), named in `PS.EXE`. They were **not** in repo `sound/` (that dump is the A/B/C + PREBATLE RAW bank). Ambience loops were **intentionally not started** until this hook. There is **no** `/audios` folder in the repo.
 
-Do not copy WAVs into git. Resolve from the install (`app.audio.resolve_wav`).
+Do not copy WAVs into git. Resolve `{repo}/wav/` first, then the install (`app.audio.resolve_wav`). Windows plays through WinMM so Tk + missing pygame still hear loops/clicks.
 
 ---
 
