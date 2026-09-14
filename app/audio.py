@@ -30,10 +30,15 @@ Pinned play/bind sites (mapped VA):
 - ``unused.wav`` bind ``0x129B2`` / str ``0x90448`` is the EXE labor
   phrase name. City Only plays ``a09.wav`` (playtest). File may be
   absent on a flat 1.1A tree.
-- City bind ``0x12F2A`` copies ``gardenb.wav``…``temple1.wav`` (25 slots).
-  Host loops only ``gardenb.wav`` (birds) and ``fountn.wav`` (water).
-  No proximity mixer (well / aquadct / reserv / bathhs / temple stay
-  silent). Honor Options Sound / ``--no-audio``.
+- City bind ``0x12F2A`` copies names into 25 slots at ``0xA3FBC``
+  (stride ``0x46``). Mixer tick ``0x12E1E`` (from ``view_frame``
+  ``0x3D3D5``) starts at slot 1. Tile draw ``0x3747E`` → mapper
+  ``0x12A8F`` sets slot[+0] when that building is on-screen.
+  Play is a one-shot via ``0x11B7B`` after slot[+4] reaches ``0xC8``.
+  Housing ``0x82–0xA1`` maps to no slot. Garden ``0x78–0x7B`` → slot 1
+  (``gardenb/c/d``). ``gardenb.wav`` is the dog (loud burst; no
+  ``dog.wav`` in the EXE or retail tree). Do not global-loop anything.
+  Honor Options Sound / ``--no-audio``.
 """
 
 from __future__ import annotations
@@ -68,14 +73,166 @@ EVENT_WAV: dict[str, str] = {
     "need_plebs": "a09.wav",
 }
 
-# City bind 0x12F2A copies many building loops. Host starts these two only.
-AMBIENCE_WAV: dict[str, str] = {
-    "birds": "gardenb.wav",
-    "water": "fountn.wav",
+# City bind 0x12F2A. Slot 0 is unused. Mixer 0x12E1E walks ebx=1..0x18.
+# Retail spelling where EXE 8.3 does not match the 1.1A filename.
+SLOT_WAVS: dict[int, tuple[str, ...]] = {
+    1: ("gardenb.wav", "gardenc.wav", "gardend.wav"),
+    2: ("circus1.wav",),
+    3: ("barrack2.wav",),
+    4: ("bathhs.wav",),
+    5: ("colism5.wav", "colism6.wav"),
+    6: ("fire.wav",),
+    7: ("forum.wav",),
+    8: ("fountn.wav",),
+    9: ("fountnx.wav",),
+    10: ("grammat2.wav",),
+    11: ("rhetor.wav",),
+    12: ("marketh.wav",),
+    13: ("marketl.wav",),
+    14: ("plazab.wav",),
+    15: ("well.wav",),
+    16: ("reserv.wav",),
+    17: ("aquadct.wav",),
+    18: ("temple1.wav",),
+    19: ("theatre.wav",),
+    20: ("hbiz.wav",),
+    21: ("lbiz.wav",),
 }
+DOG_SLOT = 1
+DOG_WAV = "gardenb.wav"
+MIXER_THRESH = 0xC8  # 0x12E63
 _AMBIENCE_RESERVED = 2
 _MIX_RATE = 11025
 _MIX_CHUNK = 2048
+
+
+def sfx_slot_for_tile_id(tid: int, factory_nibble: int = 0) -> int | None:
+    """``0x12A8F`` tile id → slot. Housing ``0x82–0xA1`` is silent."""
+    tid = int(tid) & 0xFF
+    if tid < 0x78:
+        return None
+    if tid < 0x7C:
+        return 1
+    if tid < 0x82:
+        return 0xE
+    if tid < 0xA2:
+        return None
+    if tid < 0xAE:
+        return 0x12
+    if tid < 0xBC:
+        return 7
+    if tid < 0xBE:
+        return 0x11
+    if tid < 0xBF:
+        return 0x10
+    if tid < 0xCB:
+        return None
+    if tid < 0xD7:
+        return 0x11
+    if tid < 0xDB:
+        return 0xF
+    if tid < 0xDF:
+        return 8
+    if tid < 0xE3:
+        return 4
+    if tid < 0xE4:
+        return 0x17
+    if tid < 0xE5:
+        return 3
+    if tid < 0xE7:
+        return 0x13
+    if tid < 0xE9:
+        return 5
+    if tid < 0xF3:
+        return 2
+    if tid < 0xF4:
+        return 0xA
+    if tid < 0xF5:
+        return 0xB
+    if tid < 0xFA:
+        return None
+    if tid < 0xFB:
+        return 0x14 if int(factory_nibble) > 3 else 0x15
+    if tid < 0xFC:
+        return 0x16
+    if tid < 0xFE:
+        return 0xD
+    return 0xC
+
+
+def enabled_sfx_slots(
+    tiles: bytes | bytearray,
+    x0: int,
+    y0: int,
+    x1: int,
+    y1: int,
+    *,
+    width: int = 80,
+    height: int = 80,
+    stride: int = 20,
+) -> set[int]:
+    """Slots whose buildings sit in the inclusive tile AABB (draw-path gate)."""
+    from app.city_map import MAP_H, MAP_W, TILE_STRIDE
+
+    w = width or MAP_W
+    h = height or MAP_H
+    step = stride or TILE_STRIDE
+    slots: set[int] = set()
+    xa = max(0, min(int(x0), w - 1))
+    xb = max(0, min(int(x1), w - 1))
+    ya = max(0, min(int(y0), h - 1))
+    yb = max(0, min(int(y1), h - 1))
+    if xa > xb:
+        xa, xb = xb, xa
+    if ya > yb:
+        ya, yb = yb, ya
+    need = w * h * step
+    if len(tiles) < need:
+        return slots
+    for ty in range(ya, yb + 1):
+        row = ty * w * step
+        for tx in range(xa, xb + 1):
+            off = row + tx * step
+            tid = tiles[off]
+            nibble = (tiles[off + 9] >> 4) & 0xF if off + 9 < len(tiles) else 0
+            slot = sfx_slot_for_tile_id(tid, nibble)
+            if slot is not None:
+                slots.add(slot)
+    return slots
+
+
+def visible_sfx_slots(
+    tiles: bytes | bytearray,
+    cam_x: int,
+    cam_y: int,
+    view_w: int,
+    view_h: int,
+    zoom: int = 0,
+) -> set[int]:
+    """Mapper slots for buildings overlapping the camera well."""
+    from app.city_map import visible_iso_tile_range
+
+    x0, y0, x1, y1 = visible_iso_tile_range(cam_x, cam_y, view_w, view_h, zoom)
+    return enabled_sfx_slots(tiles, x0, y0, x1, y1)
+
+
+def dog_eligible_in_rect(
+    tiles: bytes | bytearray, x0: int, y0: int, x1: int, y1: int
+) -> bool:
+    """True when a garden tile (slot 1) sits in the AABB. Housing does not count."""
+    return DOG_SLOT in enabled_sfx_slots(tiles, x0, y0, x1, y1)
+
+
+def dog_eligible(
+    tiles: bytes | bytearray,
+    cam_x: int,
+    cam_y: int,
+    view_w: int,
+    view_h: int,
+    zoom: int = 0,
+) -> bool:
+    """True when a garden is in the camera well. EXE keys on ``0x78–0x7B``, not houses."""
+    return DOG_SLOT in visible_sfx_slots(tiles, cam_x, cam_y, view_w, view_h, zoom)
 
 
 def destroy_event(n_tiles: int) -> str:
@@ -415,11 +572,19 @@ def _wave_out_close(hwo) -> None:
         pass
 
 
+class _SlotState:
+    __slots__ = ("count", "variant")
+
+    def __init__(self, slot: int) -> None:
+        self.count = slot << 3  # bind 0x12F40
+        self.variant = 0
+
+
 class SfxPlayer:
-    """One-shot city WAV plus two city ambience loops.
+    """One-shot city WAV plus proximity mixer (no global loops).
 
     ``enabled=False`` is Options Sound off / ``--no-audio``.
-    Windows prefers WinMM so Tk + missing pygame still hear birds/clicks.
+    Windows prefers WinMM so Tk + missing pygame still hear clicks / SFX.
     """
 
     def __init__(self, game: Path | None, *, enabled: bool = True) -> None:
@@ -433,6 +598,7 @@ class SfxPlayer:
         self._live: list[subprocess.Popen[bytes]] = []
         self._ambience_live: list[subprocess.Popen[bytes]] = []
         self._ambience_on = False
+        self._slots = {i: _SlotState(i) for i in SLOT_WAVS}
         if self.enabled:
             self.prepare()
 
@@ -465,7 +631,6 @@ class SfxPlayer:
             self.backend = "muted"
         else:
             self.prepare()
-            self.start_ambience()
 
     def play(self, event: str) -> str:
         """Play a mapped one-shot. Empty string if muted / missing. Never loops."""
@@ -474,39 +639,62 @@ class SfxPlayer:
         name = EVENT_WAV.get(event)
         if not name:
             return ""
+        return self.play_name(name)
+
+    def play_name(self, name: str) -> str:
+        """Play a retail WAV stem as a one-shot. Empty if muted / missing."""
+        if not self.enabled or not name:
+            return ""
         path = resolve_wav(self.game, name)
         if path is None:
             return f"skip sfx: {name} not found"
         if self._play_winmm(path, loops=0):
-            return f"sfx {event}={path.name}"
+            return f"sfx {name}"
         if self._play_pygame(path):
-            return f"sfx {event}={path.name}"
+            return f"sfx {name}"
         if self._play_ffplay(path):
-            return f"sfx {event}={path.name}"
+            return f"sfx {name}"
         if self._play_winsound(path, loop=False):
-            return f"sfx {event}={path.name}"
+            return f"sfx {name}"
         return f"skip sfx: no audio device for {path.name}"
 
     def start_ambience(self) -> str:
-        """Loop gardenb + fountn. No-op if muted, already running, or missing."""
-        if not self.enabled or self._ambience_on:
-            return ""
-        started: list[str] = []
-        for index, (event, name) in enumerate(AMBIENCE_WAV.items()):
-            path = resolve_wav(self.game, name)
-            if path is None:
-                continue
-            if self._play_winmm(path, loops=-1):
-                started.append(event)
-            elif self._play_pygame(path, loops=-1, reserved=index):
-                started.append(event)
-            elif self._play_ffplay(path, loop=True):
-                started.append(event)
-        if started:
-            self._ambience_on = True
-            how = self.backend or "ok"
-            return f"ambience {'+'.join(started)} ({how})"
+        """No-op. EXE does not start gardenb/fountn at city enter."""
         return ""
+
+    def tick_ambience(
+        self,
+        tiles: bytes | bytearray,
+        cam_x: int,
+        cam_y: int,
+        view_w: int,
+        view_h: int,
+        zoom: int = 0,
+    ) -> str:
+        """One mixer pulse: increment enabled slots, maybe fire a one-shot.
+
+        ``0x12E1E``: if slot[+0] (building drawn this frame) then ++[+4];
+        play via ``0x11B7B`` when [+4] >= ``0xC8``, then reset and cycle
+        variant. Host uses the camera well as the draw-path gate.
+        """
+        if not self.enabled:
+            return ""
+        slots = visible_sfx_slots(tiles, cam_x, cam_y, view_w, view_h, zoom)
+        played: list[str] = []
+        for slot, wavs in SLOT_WAVS.items():
+            if slot not in slots:
+                continue
+            state = self._slots[slot]
+            state.count += 1
+            if state.count < MIXER_THRESH:
+                continue
+            state.count = 0
+            name = wavs[state.variant % len(wavs)]
+            state.variant = (state.variant + 1) % len(wavs)
+            msg = self.play_name(name)
+            if msg:
+                played.append(name)
+        return " ".join(played)
 
     def stop(self) -> None:
         self._reap(kill=True)
@@ -514,6 +702,7 @@ class SfxPlayer:
             _kill_proc(proc)
         self._ambience_live = []
         self._ambience_on = False
+        self._slots = {i: _SlotState(i) for i in SLOT_WAVS}
         if self._winmm is not None:
             self._winmm.stop()
             self._winmm = None
@@ -723,13 +912,17 @@ def selftest(game: Path | None = None) -> list[str]:
     else:
         lines.append("ok    EVENT_WAV pinned to EXE 8.3 names")
         lines.append("ok    click is poscl.wav; labor toast is a09.wav; overlay pick is silent")
-    amb_want = {"birds": "gardenb.wav", "water": "fountn.wav"}
-    if AMBIENCE_WAV != amb_want:
-        lines.append(f"FAIL  AMBIENCE_WAV {AMBIENCE_WAV}")
-    elif "A01" in " ".join(AMBIENCE_WAV.values()).upper():
-        lines.append("FAIL  A01 must not be ambience")
+    if SLOT_WAVS.get(DOG_SLOT) != ("gardenb.wav", "gardenc.wav", "gardend.wav"):
+        lines.append(f"FAIL  slot 1 {SLOT_WAVS.get(DOG_SLOT)}")
+    elif SLOT_WAVS.get(8) != ("fountn.wav",):
+        lines.append(f"FAIL  slot 8 {SLOT_WAVS.get(8)}")
+    elif DOG_WAV != "gardenb.wav":
+        lines.append("FAIL  dog wav must be gardenb.wav")
+    elif MIXER_THRESH != 0xC8:
+        lines.append(f"FAIL  mixer thresh {MIXER_THRESH:#x}")
     else:
-        lines.append("ok    ambience loops gardenb.wav + fountn.wav")
+        lines.append("ok    dog is gardenb.wav (slot 1); no global gardenb/fountn loop")
+    amb_want = {"dog": "gardenb.wav", "water": "fountn.wav"}
     if "A01" in " ".join(EVENT_WAV.values()).upper() or PREFERRED_RAW.lower() in {
         n.lower() for n in EVENT_WAV.values()
     }:
@@ -750,6 +943,63 @@ def selftest(game: Path | None = None) -> list[str]:
     else:
         lines.append("ok    muted / --no-audio plays nothing")
     player.close()
+    if sfx_slot_for_tile_id(0x20) is not None:
+        lines.append(f"FAIL  grass slot {sfx_slot_for_tile_id(0x20)}")
+    elif sfx_slot_for_tile_id(0x78) != 1 or sfx_slot_for_tile_id(0x7B) != 1:
+        lines.append("FAIL  garden 0x78-0x7B must be slot 1")
+    elif sfx_slot_for_tile_id(0x82) is not None or sfx_slot_for_tile_id(0xA1) is not None:
+        lines.append("FAIL  housing 0x82-0xA1 must be silent")
+    elif sfx_slot_for_tile_id(0x7C) != 0xE:
+        lines.append("FAIL  plaza slot")
+    elif sfx_slot_for_tile_id(0xDD) != 8 or sfx_slot_for_tile_id(0xD7) != 0xF:
+        lines.append("FAIL  fountain/well slots")
+    elif sfx_slot_for_tile_id(0xBE) != 0x10 or sfx_slot_for_tile_id(0xCB) != 0x11:
+        lines.append("FAIL  reserv/aquadct slots")
+    else:
+        lines.append("ok    0x12A8F mapper: garden=1 housing=none fountain=8 well=15")
+    blank = bytearray(80 * 80 * 20)
+    house = bytearray(blank)
+    house[40 * 80 * 20 + 40 * 20] = 0x82
+    garden = bytearray(blank)
+    garden[40 * 80 * 20 + 40 * 20] = 0x78
+    far = bytearray(blank)
+    far[0] = 0x78
+    if dog_eligible_in_rect(blank, 0, 0, 79, 79):
+        lines.append("FAIL  empty map must not be dog-eligible")
+    elif dog_eligible_in_rect(house, 0, 0, 79, 79):
+        lines.append("FAIL  house in view is not dog-eligible (EXE keys gardens)")
+    elif not dog_eligible_in_rect(garden, 30, 30, 50, 50):
+        lines.append("FAIL  garden in view must be dog-eligible")
+    elif dog_eligible_in_rect(garden, 0, 0, 5, 5):
+        lines.append("FAIL  garden off-rect must not be dog-eligible")
+    elif dog_eligible_in_rect(far, 30, 30, 50, 50):
+        lines.append("FAIL  garden off-screen must not be dog-eligible")
+    else:
+        lines.append("ok    dog: empty/house silent; garden in view only")
+    if dog_eligible(blank, 0, 0, 478, 456, 0):
+        lines.append("FAIL  empty camera well is dog-eligible")
+    elif not dog_eligible(garden, 0, 0, 2000, 1200, 0):
+        lines.append("FAIL  garden at (40,40) should be in a wide well")
+    else:
+        from app.city_map import iso_canvas_size, visible_iso_tile_range
+
+        ww, wh = iso_canvas_size(0)
+        cam_x, cam_y = max(0, ww - 400), max(0, wh - 300)
+        x0, y0, x1, y1 = visible_iso_tile_range(cam_x, cam_y, 400, 300, 0)
+        off_screen = 40 < x0 or 40 > x1 or 40 < y0 or 40 > y1
+        far_hit = dog_eligible(garden, cam_x, cam_y, 400, 300, 0)
+        if off_screen and far_hit:
+            lines.append("FAIL  garden at (40,40) eligible when camera AABB excludes it")
+        elif not off_screen:
+            lines.append(f"ok    dog camera gate (far AABB still {x0},{y0}..{x1},{y1})")
+        else:
+            lines.append("ok    dog camera gate: empty silent; garden follows viewport")
+    quiet = SfxPlayer(game, enabled=False)
+    if quiet.tick_ambience(garden, 0, 0, 640, 480, 0) or quiet._ambience_on:
+        lines.append("FAIL  muted tick_ambience played")
+    else:
+        lines.append("ok    muted tick_ambience is silent")
+    quiet.close()
     pcm_ok = 0
     for name in ("gardenb.wav", "fountn.wav", "poscl.wav"):
         path = resolve_wav(game, name)

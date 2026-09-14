@@ -1479,11 +1479,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
         _invalidate_live()
         if getattr(ctx.sim, "city_only", 0):
             _scan_city_events(hail=hail)
-        amb = sfx.start_ambience()
         extra = map_status(n_walkers, None if zoom in pl8_sheets else None)
-        if amb:
-            ctx.audio_status = amb
-            extra = f"{extra}  {amb}"
         blit(extra)
 
     def _advisor_has_video() -> bool:
@@ -2179,6 +2175,14 @@ def show(ctx: BootContext, *, game: Path) -> None:
         )
 
         use_realtime_slides()
+        sfx.tick_ambience(
+            ctx.city.tiles,
+            cam_x,
+            cam_y,
+            max(1, win_w - SIDEBAR_W),
+            max(1, win_h - TOP_BAR_H),
+            zoom,
+        )
         n = sim_tick_due(ctx.sim, dt)
         sim_ran = False
         ph = w = None
