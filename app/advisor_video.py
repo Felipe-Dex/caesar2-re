@@ -12,9 +12,10 @@ slot — do not play a clip for it.
 City Only start Hail [79] is the “build your city” briefing. The EXE
 table names ``congrat.smk`` there (same talking-head as pop milestones
 / New Structure). Play that clip’s mp4 audio when Options Sound is on
-— the user wants the talking-head on map enter. Do **not** play
-``A01.RAW`` (boot sting). New Year [83] stays silent. ``promote.smk``
-is Career kind 5, not this banner.
+— the user wants the talking-head on map enter. New Year [83]
+(Another Year Passes) plays the same ``congrat`` clip with audio.
+Do **not** play ``A01.RAW`` (boot sting). ``promote.smk`` is Career
+kind 5, not this banner.
 
 Search (mp4 only, case-insensitive):
 1. ``{root}/videos_new/{stem}.mp4``
@@ -95,8 +96,8 @@ _STEM_TABLE: tuple[str, ...] = (
 
 _NEW_DIR = "videos_new"
 _OLD_DIRS = ("video", "videos")
-# Congrat audio: Hail briefing + pop / unlock. New Year [83] stays silent.
-_CONGRAT_AUDIO_SLOTS = frozenset({79, *range(103, 112), 114, 115})
+# Congrat audio: Hail + New Year + pop / unlock.
+_CONGRAT_AUDIO_SLOTS = frozenset({79, 83, *range(103, 112), 114, 115})
 
 
 def video_stem_for_slot(slot: int) -> str | None:
@@ -123,6 +124,8 @@ def advisor_plays_audio(msg) -> bool:
     slot = int(getattr(msg, "slot", -1))
     key = str(getattr(msg, "key", "") or "")
     if key == "hail" or slot == 79:
+        return True
+    if key == "year" or slot == 83:
         return True
     stem = video_stem_for_slot(slot)
     if stem == "congrat":
@@ -572,6 +575,7 @@ def hosted_city_stems() -> dict[str, str | None]:
     """City Only banner keys → stem (None = no clip)."""
     return {
         "hail": video_stem_for_slot(79),
+        "year": video_stem_for_slot(83),
         "fire": video_stem_for_slot(81),
         "services_cut": video_stem_for_slot(84),
         "theft": video_stem_for_slot(88),
@@ -596,6 +600,7 @@ def selftest(game: Path | None = None) -> list[str]:
     else:
         lines.append("ok    EXE table [79] congrat.smk")
     hail = type("M", (), {"slot": 79, "key": "hail"})()
+    year = type("M", (), {"slot": 83, "key": "year"})()
     pop200 = type("M", (), {"slot": 103, "key": "pop:200"})()
     unlock = type("M", (), {"slot": 114, "key": "unlock"})()
     if video_stem_for_message(hail) != "congrat":
@@ -604,6 +609,12 @@ def selftest(game: Path | None = None) -> list[str]:
         lines.append("FAIL  Hail [79] should play congrat audio")
     else:
         lines.append("ok    Hail [79] -> congrat, with audio")
+    if video_stem_for_slot(83) != "congrat":
+        lines.append(f"FAIL  EXE table [83] {video_stem_for_slot(83)!r}")
+    elif video_stem_for_message(year) != "congrat" or not advisor_plays_audio(year):
+        lines.append("FAIL  New Year [83] should play congrat audio")
+    else:
+        lines.append("ok    New Year [83] -> congrat, with audio")
     if video_stem_for_message(pop200) != "congrat" or not advisor_plays_audio(pop200):
         lines.append("FAIL  pop [103] should play congrat audio")
     else:

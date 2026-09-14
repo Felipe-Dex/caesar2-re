@@ -1401,6 +1401,7 @@ def city_sim_phase(
             tiles,
             houses_up=up,
             month_wrapped=wrapped,
+            year_wrapped=year_wrapped,
             fire_ignited=ign,
             rioters_spawned=riot,
             attack_spawned=int(getattr(state, "attack_spawned", 0)),
