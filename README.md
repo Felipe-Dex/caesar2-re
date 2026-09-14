@@ -59,7 +59,7 @@ python -m app --new --city-only
 python -m app --new --city-only --no-audio
 ```
 
-`python -m app` (no `--city-only`) opens the original title/menu. Double-click `city-only.bat` at the repo root to skip straight into City Only (`python -m app --new --city-only`).
+`python -m app` (no `--city-only`) opens the original title/menu. Double-click `game.bat` at the repo root for that full host, or `city-only.bat` to skip straight into City Only (`python -m app --new --city-only`).
 
 Set `CAESAR2_PATH`, or copy `app/config.example.json` → `app/config.local.json` (gitignored). Title art is retail `logo1` / `logo2` / `backgrnd.pl8` (not copied into git). **City Only** (`--new --city-only`) opens the iso map (grass + river). Keys / city map: `app/README.md`. Host layers: `findings/app_structure.md`. Roadmap: `findings/city_only.md`.
 

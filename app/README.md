@@ -47,7 +47,7 @@ python -m app --new --city-only --skill 0 --no-audio
 python -m app --new --city-only --check --no-audio
 ```
 
-Or double-click `city-only.bat` at the repo root (same as `python -m app --new --city-only`).
+Or double-click `game.bat` at the repo root for the title/menu (`python -m app`), or `city-only.bat` to skip into City Only (`python -m app --new --city-only`).
 
 Hail on map enter is text + ``congrat`` talking-head **with** audio when Sound is on (EXE table [79] is ``congrat.smk``). Dec→Jan New Year [83] uses the same clip with audio (Annual Summary panel still opens). Pop milestones and New Structure play the same clip with audio. Do **not** play ``A01.RAW`` on City Only start. Other advisor clips play mp4 audio unless Options Sound is off or you pass ``--no-audio``. Do not copy game mp4s into git.
 
