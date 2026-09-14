@@ -108,6 +108,7 @@ from app.city_paint import (
     paint_market_emitter,
     paint_security_emitter,
     paint_water_emitter,
+    refresh_land_value,
     seed_city_only_industry,
 )
 from app.city_sim import SimState
@@ -1335,6 +1336,16 @@ def is_plaza_id(tid: int) -> bool:
     return ID_PLAZA <= tid <= ID_PLAZA_STATUE
 
 
+def is_lv_amenity_id(tid: int) -> bool:
+    return is_garden_id(tid) or is_plaza_id(tid)
+
+
+def _refresh_plaza_garden_lv(city: CityMap, sim: SimState | None) -> None:
+    """Recompute +15 so Query sees plaza/garden splash without waiting a month."""
+    pop = getattr(sim, "population", 0) if sim is not None else 0
+    refresh_land_value(city.tiles, population=pop)
+
+
 def is_wall_run_id(tid: int) -> bool:
     return ID_WALL_LO <= tid <= ID_WALL_HI
 
@@ -2136,6 +2147,7 @@ def try_place(
         was_aqueduct = is_aqueduct(city, x, y)
         was_combo = was_aqueduct and bool(city.tiles[city.offset(x, y) + 3] & 0x80)
         was_tall = tid >= ID_TERRAIN_MAX or was_aqueduct
+        was_lv_amenity = is_lv_amenity_id(tid)
         if tid == ID_RUBBLE:
             _write_terrain(city, x, y, ID_CLEAR, 0, wipe=True)
             msg = f"clear 0x1C em ({x},{y})"
@@ -2161,6 +2173,8 @@ def try_place(
             dirty.extend(rebuild_pipe_charge(city, ring))
         if was_tall:
             dirty = expand_iso_dirty(dirty, [(x, y)])
+        if was_lv_amenity:
+            _refresh_plaza_garden_lv(city, sim)
         return PlaceResult(
             True, msg, dirty=list(dict.fromkeys(dirty)), flush_iso=was_tall
         )
@@ -2299,6 +2313,8 @@ def try_place(
             dirty.extend(_retile_roads(city, _neighbor_ring(x, y)))
         if tool in _TALL_TOOLS:
             dirty = expand_iso_dirty(dirty, [(x, y)])
+        if tool in (TOOL_PLAZA, TOOL_GARDEN):
+            _refresh_plaza_garden_lv(city, sim)
         return PlaceResult(
             True,
             msg,
@@ -2849,6 +2865,8 @@ def try_place_span(
             dirty.extend(_retile_roads(city, ring))
         if tool in _TALL_TOOLS:
             dirty = expand_iso_dirty(dirty, list(preview.stamp))
+        if tool in (TOOL_PLAZA, TOOL_GARDEN):
+            _refresh_plaza_garden_lv(city, sim)
         n = len(preview.stamp)
         paid = f"  -{preview.cost}" if preview.cost else ""
         label = _tool_label(tool)
@@ -4256,6 +4274,26 @@ def selftest() -> list[str]:
         )
     else:
         lines.append("ok    Plaza 0x7C 1×1 custo 12 junto à estrada")
+
+    lv_city = CityMap()
+    lv_city.source = "place-plaza-lv"
+    hoff = lv_city.offset(10, 10)
+    lv_city.tiles[hoff] = 0x8B
+    lv_city.tiles[hoff + 1] = 0x01
+    lv_city.tiles[hoff + 10] = 0x0C | 0xC0
+    lv_city.tiles[hoff + 12] = 1
+    lv_city.tiles[hoff + 13] = 0x01 | 0x08
+    lv_city.tiles[hoff + 15] = 20
+    try_place(lv_city, 11, 10, TOOL_ROAD, None)
+    sim.treasury = 12
+    r = try_place(lv_city, 11, 10, TOOL_PLAZA, sim)
+    got = lv_city.tiles[hoff + 15]
+    if not r.ok or lv_city.tiles[lv_city.offset(11, 10)] != ID_PLAZA:
+        lines.append(f"FAIL  place plaza on road {r.message}")
+    elif got != 24:
+        lines.append(f"FAIL  place plaza +15 lift {got} (want 24)")
+    else:
+        lines.append("ok    place plaza on road rebuilds house +15=24")
 
     _grass_block(2, 8, 5, 1)
     try_place(city, 4, 8, TOOL_ROAD, None)
