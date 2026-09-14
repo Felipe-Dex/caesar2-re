@@ -3,14 +3,16 @@
 Ghidra: miles_init 0x11758, AIL_startup 0x72992, push_22050_raw_rate 0x120A6.
 tools/decode_raw.py: unsigned 8-bit PCM mono @ 22050 Hz (A01 user-verified).
 
-City SFX are retail ``.wav`` names from the EXE (flat 1.1A tree, or
-``sound/`` / ``SOUND/``). Play via pygame if present, else ffplay
+City SFX are retail ``.wav`` names from the EXE. Search order:
+``{repo}/wav/{name}`` (case-insensitive), then the install root, then
+``sound/`` / ``SOUND/``. Play via pygame if present, else ffplay
 (same helper as advisor_video). One-shots never loop. City Only boot
 must not play ``A01.RAW`` (that clip is a promotion-length sting).
 
-Repo ``sound/`` is the A/B/C + PREBATLE RAW bank (advisor / sting),
-not city SFX. There is no ``audios/`` folder. Birds / water / clicks
-are retail WAVs next to ``PS.EXE`` — see ``findings/city_ambience.md``.
+Repo ``wav/`` is a local (gitignored) copy of the retail WAVs. Repo
+``sound/`` is the A/B/C + PREBATLE RAW bank (advisor / sting), not
+city SFX. There is no ``audios/`` folder. Birds / water / clicks
+are those WAVs — see ``findings/city_ambience.md``.
 
 Pinned play/bind sites (mapped VA):
 
@@ -42,7 +44,7 @@ import tempfile
 import wave
 from pathlib import Path
 
-from app.config import find_file
+from app.config import REPO_ROOT, find_file
 
 RAW_RATE = 22050
 PREVIEW_SECONDS = 2
@@ -108,10 +110,17 @@ def _ci_file(folder: Path, name: str) -> Path | None:
 
 
 def resolve_wav(game: Path | None, name: str) -> Path | None:
-    """Retail WAV: install root, then ``sound/`` / ``SOUND/``. Not repo dumps."""
-    if not name or game is None:
+    """Repo ``wav/`` first, then install root, then ``sound/`` / ``SOUND/``."""
+    if not name:
         return None
     fname = name if name.lower().endswith(".wav") else f"{name}.wav"
+    repo_wav = _ci_dir(REPO_ROOT, "wav")
+    if repo_wav is not None:
+        hit = _ci_file(repo_wav, fname)
+        if hit is not None:
+            return hit
+    if game is None:
+        return None
     hit = find_file(game, fname)
     if hit is not None:
         return hit
@@ -381,21 +390,26 @@ def selftest(game: Path | None = None) -> list[str]:
     else:
         lines.append("ok    muted / --no-audio plays nothing")
     player.close()
-    if game is None:
-        lines.append("ok    resolve skip (no install)")
-        return lines
     missing = []
     found = []
+    repo_first = False
     for event, name in {**want, **amb_want}.items():
         path = resolve_wav(game, name)
         if path is None:
             missing.append(name)
         else:
             found.append(f"{event}={path.name}")
+            if path.parent.name.lower() == "wav":
+                repo_first = True
+    if repo_first:
+        lines.append("ok    resolve prefers repo wav/")
+    if game is None and not found:
+        lines.append("ok    resolve skip (no install)")
+        return lines
     if missing:
         lines.append("ok    retail missing " + ", ".join(missing))
     if found:
         lines.append("ok    resolved " + ", ".join(found[:8]))
-    else:
+    elif game is not None:
         lines.append("ok    no retail WAV (SFX stay silent)")
     return lines
