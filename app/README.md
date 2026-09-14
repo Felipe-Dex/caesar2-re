@@ -36,7 +36,9 @@ Or, if that `python` is already on PATH:
 python -m app
 ```
 
-**City Only** (New Game — relva + rio, sem SAV). Abre já no mapa iso. Skill `0…4` (default **2 Normal**, tesouro 12000):
+**Title / menu** (default, no `--city-only`): Sierra `LOGO1.PL8` then Impressions `LOGO2.PL8` if they resolve from the install, then `title_screen` `backgrnd.pl8` + C2.ENG buttons. **Start a New Game** (City Construction Kit) enters the same city as `--new --city-only`. **Load** is the existing `*.sav` / F4 list. **Options** is Music / Sound / Animations. **Quit** asks `Exit to DOS?`. **Campaign?** is listed gray — click shows `[38]+1` (*full campaign game*), it does not start Career.
+
+**City Only** (New Game — relva + rio, sem SAV). Abre já no mapa iso, sem o título. Skill `0…4` (default **2 Normal**, tesouro 12000):
 
 ```text
 python -m app --new --city-only
@@ -82,8 +84,7 @@ A janela nativa é **640×480** (viewport sobre o canvas iso; já não encolhe o
 
 - Console: install path, key-file check, the 14 `gfx_load_boot_assets` names, C2.ENG count, boot notes.
 - A **640×480** window (stand-in for VESA `video_init` @ `0x28341`).
-- **Title art**: decoded `backgrnd.pl8` + `backgrnd.256` via `tools/decode_pl8.py` (not a copy of the format).
-- HUD: path, one `C2.ENG` string (the “Caesar II - Version …” line if present).
+- **Title**: `logo1.pl8` / `logo2.pl8` if present, then decoded `backgrnd.pl8` + `backgrnd.256` via `tools/decode_pl8.py` (not a copy of the format) plus C2.ENG `[38]` menu chrome (`app/title.py`).
 - Optional: **2 seconds** of `A01.RAW` through Windows `winsound` on the title screen only (not Miles, not City Only). City SFX are retail ``.wav`` via pygame/ffplay. Missing audio → skip.
 
 No intro video. `INTRO.SMK` is only verified on disk (`smk_play` @ `0x5AB3D` is a stub; `tools/decode_smk.py` remuxes with ffmpeg, it does not play in-process).
@@ -100,13 +101,13 @@ No intro video. `INTRO.SMK` is only verified on disk (`smk_play` @ `0x5AB3D` is 
 | `video_init` 640×480 | `0x28341` | tkinter window |
 | `miles_init` | `0x11758` | skip / optional RAW |
 | `smk_play` `intro.smk` | `0x5AB3D` | file exists? yes/no |
-| `title_screen` | `0x5D37F` | real PL8 blit |
+| `title_screen` | `0x5D37F` | `app/title.py` — `backgrnd.pl8` + C2.ENG menu |
 | `view_frame` / city tick | `0x3CF9A` | **Space / T** → 1 slot `city_sim_phase` then `walkers_tick` |
 | `start_city_assignment` / `city_map_generate` | `0x1049B` / `0x65809` | `--new --city-only` → `app/new_game.py` (Career ainda não) |
 | city map SavChunk 13 | `0xE2FBC` | `city_map.py`: 80×80×20 from `.SAV` **ou** generate; tecla **3** |
 | walkers SavChunk 8 | `0x1107A4` | `walkers.py`: 201×58; overlay after `render_iso` (tecla **3**) |
 
-`--new --city-only` starts a city (grass + river, year −300, treasury from C2MODEL). Paleta `INT_CITY` + placement v1: Tent `0x82` (custo 6), estrada `0x52–0x5C`, ponte `0x4E–0x51` no rio recto (recusa curva), clear em dois passos (`id≥0x82`→`0x05`, rubble→`0x1C`; garden/plaza `0x78–0x7E` flatten `0x1C`). Flyouts Water/Forums/… ainda stub. Houses / forums / industry / people blit from the original PL8s when a `.SAV` is loaded (tecla **3**).
+`--new --city-only` starts a city (grass + river, year −300, treasury from C2MODEL). Paleta `INT_CITY` + flyouts (Water / Forums / Security / Industry / Sanitation / Entert'ment / Worship / Education / Amenities) — Arena `0xE7` leftover. Tent `0x82` (custo 6), estrada `0x52–0x5C`, ponte `0x4E–0x51` no rio recto (recusa curva), clear em dois passos (`id≥0x82`→`0x05`, rubble→`0x1C`; garden/plaza `0x78–0x7E` flatten `0x1C`). Houses / forums / industry / people blit from the original PL8s.
 
 ---
 

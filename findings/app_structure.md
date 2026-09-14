@@ -74,7 +74,7 @@ Um Space = **um** slot `[0x1026A8]`, não o dump `0xD6`. Wrap `> 0xD6` avança o
 | + − / ] [ / Z / roda | zoom 0/1/2 | PL8 ou scale nearest |
 | Home | recentrar | |
 
-`--new --city-only` abre **já no mapa** (não no título). Load `.SAV` continua a nascer no título; **3** entra no mapa.
+`--new --city-only` abre **já no mapa** (não no título). `python -m app` sem essa flag abre o título (`app/title.py`, `backgrnd.pl8` + C2.ENG). Load `.SAV` é o botão **Load** / F4; **3** ainda entra no mapa (debug).
 
 Não há tecla cidade↔província, Forum, ou “mês inteiro”.
 
