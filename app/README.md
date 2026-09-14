@@ -49,7 +49,7 @@ Or double-click `city-only.bat` at the repo root (same as `python -m app --new -
 
 Hail on map enter is text + ``congrat`` talking-head, **muted** (EXE table [79] is ``congrat.smk``; that file’s audio is the promotion fanfare, so Hail stays silent). Pop milestones and New Structure play the same clip **with** audio when Sound is on. Other advisor clips play mp4 audio unless Options Sound is off or you pass ``--no-audio``. Do not copy game mp4s into git.
 
-City SFX (place / click / fire / destroy / overlay / forum) play from the retail WAV names when Sound is on. Default ``python -m app --new --city-only`` is **not** muted — you should hear ``place.wav`` / ``poscl.wav`` etc. Mute with Options → Sound or ``--no-audio``. Do **not** play ``A01.RAW`` on City Only start. SFX are one-shot (no loop). Do not copy WAVs into git.
+City SFX (place / click / fire / destroy / overlay / forum) play from the retail WAV names when Sound is on. Default ``python -m app --new --city-only`` is **not** muted — you should hear ``place.wav`` / ``poscl.wav`` etc. Click is ``poscl.wav`` (``miles_init`` ``0x117E4``). City view also loops ``gardenb.wav`` (birds) and ``fountn.wav`` (water) from the ``0x12F2A`` bind table — not a full building mixer. Mute with Options → Sound or ``--no-audio``. Do **not** play ``A01.RAW`` on City Only start. One-shots do not loop. Do not copy WAVs into git. Inventory: ``findings/city_ambience.md``.
 
 Plano das fatias seguintes (placement, água, Forum…): `findings/city_only.md`. **Não** há `--career` nesta versão.
 

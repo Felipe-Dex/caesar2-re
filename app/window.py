@@ -1478,6 +1478,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
         if getattr(ctx.sim, "city_only", 0):
             _scan_city_events(hail=hail)
         blit(map_status(n_walkers, None if zoom in pl8_sheets else None))
+        sfx.start_ambience()
 
     def _advisor_has_video() -> bool:
         return advisor_clip is not None

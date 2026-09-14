@@ -5,13 +5,18 @@ tools/decode_raw.py: unsigned 8-bit PCM mono @ 22050 Hz (A01 user-verified).
 
 City SFX are retail ``.wav`` names from the EXE (flat 1.1A tree, or
 ``sound/`` / ``SOUND/``). Play via pygame if present, else ffplay
-(same helper as advisor_video). Never loop. City Only boot must not
-play ``A01.RAW`` (that clip is a promotion-length sting).
+(same helper as advisor_video). One-shots never loop. City Only boot
+must not play ``A01.RAW`` (that clip is a promotion-length sting).
+
+Repo ``sound/`` is the A/B/C + PREBATLE RAW bank (advisor / sting),
+not city SFX. There is no ``audios/`` folder. Birds / water / clicks
+are retail WAVs next to ``PS.EXE`` — see ``findings/city_ambience.md``.
 
 Pinned play/bind sites (mapped VA):
 
 - ``place.wav`` play ``0x2F40F``
 - ``poscl.wav`` / ``negcl2.wav`` bind in ``miles_init`` ``0x117E4`` / ``0x1180A``
+  (UI click / deny). Host click is ``poscl.wav``.
 - ``fire.wav`` play ``FUN_000696e8`` ``0x697AC``
 - ``smrub.wav`` ``0x697CF``; ``medrub.wav`` / ``lrgrub.wav`` ``0x696AC``
   (``cmp edi,2`` / ``jg`` → medium when ``edi<=2``, large when ``edi>2``)
@@ -23,8 +28,10 @@ Pinned play/bind sites (mapped VA):
 - ``unused.wav`` bind ``0x129B2`` / str ``0x90448`` is the EXE labor
   phrase name. City Only plays ``a09.wav`` (playtest). File may be
   absent on a flat 1.1A tree.
-- ``gardenb.wav``…``temple1.wav`` in that bind table are looping
-  building ambience — do not start those loops.
+- City bind ``0x12F2A`` copies ``gardenb.wav``…``temple1.wav`` (25 slots).
+  Host loops only ``gardenb.wav`` (birds) and ``fountn.wav`` (water).
+  No proximity mixer (well / aquadct / reserv / bathhs / temple stay
+  silent). Honor Options Sound / ``--no-audio``.
 """
 
 from __future__ import annotations
@@ -54,6 +61,13 @@ EVENT_WAV: dict[str, str] = {
     "forum": "forum.wav",
     "need_plebs": "a09.wav",
 }
+
+# City bind 0x12F2A copies many building loops. Host starts these two only.
+AMBIENCE_WAV: dict[str, str] = {
+    "birds": "gardenb.wav",
+    "water": "fountn.wav",
+}
+_AMBIENCE_RESERVED = 2
 
 
 def destroy_event(n_tiles: int) -> str:
@@ -143,7 +157,10 @@ def play_raw_preview(game: Path, name: str = PREFERRED_RAW) -> str:
 
 
 class SfxPlayer:
-    """One-shot city WAV. ``enabled=False`` is Options Sound off / ``--no-audio``."""
+    """One-shot city WAV plus two city ambience loops.
+
+    ``enabled=False`` is Options Sound off / ``--no-audio``.
+    """
 
     def __init__(self, game: Path | None, *, enabled: bool = True) -> None:
         self.game = game
@@ -151,14 +168,18 @@ class SfxPlayer:
         self._pygame = None
         self._sounds: dict[str, object] = {}
         self._live: list[subprocess.Popen[bytes]] = []
+        self._ambience_live: list[subprocess.Popen[bytes]] = []
+        self._ambience_on = False
 
     def set_enabled(self, on: bool) -> None:
         self.enabled = bool(on)
         if not self.enabled:
             self.stop()
+        else:
+            self.start_ambience()
 
     def play(self, event: str) -> str:
-        """Play a mapped event. Empty string if muted / missing. Never loops."""
+        """Play a mapped one-shot. Empty string if muted / missing. Never loops."""
         if not self.enabled:
             return ""
         name = EVENT_WAV.get(event)
@@ -173,8 +194,30 @@ class SfxPlayer:
             return f"sfx {event}={path.name}"
         return f"skip sfx: no pygame/ffplay for {path.name}"
 
+    def start_ambience(self) -> str:
+        """Loop gardenb + fountn. No-op if muted, already running, or missing."""
+        if not self.enabled or self._ambience_on:
+            return ""
+        started: list[str] = []
+        for index, (event, name) in enumerate(AMBIENCE_WAV.items()):
+            path = resolve_wav(self.game, name)
+            if path is None:
+                continue
+            if self._play_pygame(path, loops=-1, reserved=index):
+                started.append(event)
+            elif self._play_ffplay(path, loop=True):
+                started.append(event)
+        if started:
+            self._ambience_on = True
+            return "ambience " + "+".join(started)
+        return ""
+
     def stop(self) -> None:
         self._reap(kill=True)
+        for proc in self._ambience_live:
+            _kill_proc(proc)
+        self._ambience_live = []
+        self._ambience_on = False
         if self._pygame is not None:
             try:
                 mixer = getattr(self._pygame, "mixer", None)
@@ -186,7 +229,9 @@ class SfxPlayer:
     def close(self) -> None:
         self.stop()
 
-    def _play_pygame(self, path: Path) -> bool:
+    def _play_pygame(
+        self, path: Path, *, loops: int = 0, reserved: int | None = None
+    ) -> bool:
         mixer = self._pygame_mixer()
         if mixer is None:
             return False
@@ -199,7 +244,10 @@ class SfxPlayer:
                 return False
             self._sounds[key] = snd
         try:
-            snd.play(loops=0)
+            if reserved is not None:
+                mixer.Channel(int(reserved)).play(snd, loops=loops)
+            else:
+                snd.play(loops=loops)
         except RuntimeError:
             return False
         return True
@@ -217,40 +265,50 @@ class SfxPlayer:
         try:
             if not pygame.mixer.get_init():
                 pygame.mixer.init()
+            n = max(16, int(pygame.mixer.get_num_channels()))
+            pygame.mixer.set_num_channels(n)
+            pygame.mixer.set_reserved(_AMBIENCE_RESERVED)
         except (RuntimeError, pygame.error):
             self._pygame = False
             return None
         self._pygame = pygame
         return pygame.mixer
 
-    def _play_ffplay(self, path: Path) -> bool:
+    def _play_ffplay(self, path: Path, *, loop: bool = False) -> bool:
         from app.advisor_video import find_ffplay
 
         ffplay = find_ffplay()
         if ffplay is None:
             return False
-        self._reap(kill=False)
-        while len(self._live) >= _MAX_LIVE:
-            old = self._live.pop(0)
-            _kill_proc(old)
+        if not loop:
+            self._reap(kill=False)
+            while len(self._live) >= _MAX_LIVE:
+                old = self._live.pop(0)
+                _kill_proc(old)
+        cmd = [
+            str(ffplay),
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-nodisp",
+            "-autoexit",
+        ]
+        if loop:
+            cmd.extend(["-loop", "0"])
+        cmd.append(str(path))
         try:
             proc = subprocess.Popen(
-                [
-                    str(ffplay),
-                    "-hide_banner",
-                    "-loglevel",
-                    "error",
-                    "-nodisp",
-                    "-autoexit",
-                    str(path),
-                ],
+                cmd,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 stdin=subprocess.DEVNULL,
             )
         except OSError:
             return False
-        self._live.append(proc)
+        if loop:
+            self._ambience_live.append(proc)
+        else:
+            self._live.append(proc)
         return True
 
     def _reap(self, *, kill: bool) -> None:
@@ -293,9 +351,18 @@ def selftest(game: Path | None = None) -> list[str]:
         lines.append("FAIL  overlay pick must be silent (no WAV)")
     elif EVENT_WAV["need_plebs"] != "a09.wav":
         lines.append("FAIL  labor toast must be a09.wav")
+    elif EVENT_WAV["click"] != "poscl.wav":
+        lines.append("FAIL  click must be poscl.wav")
     else:
         lines.append("ok    EVENT_WAV pinned to EXE 8.3 names")
-        lines.append("ok    labor toast is a09.wav; overlay pick is silent")
+        lines.append("ok    click is poscl.wav; labor toast is a09.wav; overlay pick is silent")
+    amb_want = {"birds": "gardenb.wav", "water": "fountn.wav"}
+    if AMBIENCE_WAV != amb_want:
+        lines.append(f"FAIL  AMBIENCE_WAV {AMBIENCE_WAV}")
+    elif "A01" in " ".join(AMBIENCE_WAV.values()).upper():
+        lines.append("FAIL  A01 must not be ambience")
+    else:
+        lines.append("ok    ambience loops gardenb.wav + fountn.wav")
     if "A01" in " ".join(EVENT_WAV.values()).upper() or PREFERRED_RAW.lower() in {
         n.lower() for n in EVENT_WAV.values()
     }:
@@ -309,7 +376,7 @@ def selftest(game: Path | None = None) -> list[str]:
     else:
         lines.append("ok    destroy edi<=2 medium, edi>2 large")
     player = SfxPlayer(game, enabled=False)
-    if player.play("place") or player._live:
+    if player.play("place") or player._live or player.start_ambience() or player._ambience_live:
         lines.append("FAIL  muted SfxPlayer spawned audio")
     else:
         lines.append("ok    muted / --no-audio plays nothing")
@@ -319,7 +386,7 @@ def selftest(game: Path | None = None) -> list[str]:
         return lines
     missing = []
     found = []
-    for event, name in want.items():
+    for event, name in {**want, **amb_want}.items():
         path = resolve_wav(game, name)
         if path is None:
             missing.append(name)
@@ -328,7 +395,7 @@ def selftest(game: Path | None = None) -> list[str]:
     if missing:
         lines.append("ok    retail missing " + ", ".join(missing))
     if found:
-        lines.append("ok    resolved " + ", ".join(found[:6]))
+        lines.append("ok    resolved " + ", ".join(found[:8]))
     else:
         lines.append("ok    no retail WAV (SFX stay silent)")
     return lines
