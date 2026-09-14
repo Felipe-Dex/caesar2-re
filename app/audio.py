@@ -5,9 +5,9 @@ tools/decode_raw.py: unsigned 8-bit PCM mono @ 22050 Hz (A01 user-verified).
 
 City SFX are retail ``.wav`` names from the EXE. Search order:
 ``{repo}/wav/{name}`` (case-insensitive), then the install root, then
-``sound/`` / ``SOUND/``. Play via pygame if present, else ffplay
-(same helper as advisor_video). One-shots never loop. City Only boot
-must not play ``A01.RAW`` (that clip is a promotion-length sting).
+``sound/`` / ``SOUND/``. On Windows, play through WinMM (mixes with
+Tk). pygame if present, else ffplay, else winsound one-shots. One-shots
+never loop. City Only boot must not play ``A01.RAW`` (promotion sting).
 
 Repo ``wav/`` is a local (gitignored) copy of the retail WAVs. Repo
 ``sound/`` is the A/B/C + PREBATLE RAW bank (advisor / sting), not
@@ -38,10 +38,14 @@ Pinned play/bind sites (mapped VA):
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import wave
+from array import array
 from pathlib import Path
 
 from app.config import REPO_ROOT, find_file
@@ -70,6 +74,8 @@ AMBIENCE_WAV: dict[str, str] = {
     "water": "fountn.wav",
 }
 _AMBIENCE_RESERVED = 2
+_MIX_RATE = 11025
+_MIX_CHUNK = 2048
 
 
 def destroy_event(n_tiles: int) -> str:
@@ -165,26 +171,300 @@ def play_raw_preview(game: Path, name: str = PREFERRED_RAW) -> str:
     return f"playing {path.name} ({len(samples)} B @ {RAW_RATE} Hz, async)"
 
 
+def load_pcm(path: Path) -> array | None:
+    """Retail city WAV → signed 16-bit mono @ 11025 Hz. None if unreadable."""
+    try:
+        with wave.open(str(path), "rb") as wav:
+            channels = wav.getnchannels()
+            width = wav.getsampwidth()
+            rate = wav.getframerate()
+            nframes = wav.getnframes()
+            raw = wav.readframes(nframes)
+            comptype = wav.getcomptype()
+    except (OSError, wave.Error):
+        return None
+    if comptype not in ("NONE", "not compressed") or channels < 1 or width < 1:
+        return None
+    if width == 1:
+        mono = raw[0::channels] if channels > 1 else raw
+        pcm = array("h", ((b - 128) << 8 for b in mono))
+    elif width == 2:
+        samples = array("h")
+        samples.frombytes(raw[: len(raw) - (len(raw) % 2)])
+        if channels > 1:
+            pcm = array("h", samples[::channels])
+        else:
+            pcm = samples
+    else:
+        return None
+    if not pcm:
+        return None
+    if rate != _MIX_RATE and rate > 0:
+        pcm = _resample(pcm, rate, _MIX_RATE)
+    return pcm
+
+
+def _resample(pcm: array, src_rate: int, dst_rate: int) -> array:
+    if src_rate == dst_rate or not pcm:
+        return pcm
+    n = max(1, int(len(pcm) * dst_rate / src_rate))
+    out = array("h", [0]) * n
+    last = len(pcm) - 1
+    for i in range(n):
+        out[i] = pcm[min(last, i * src_rate // dst_rate)]
+    return out
+
+
+class _Voice:
+    __slots__ = ("pcm", "pos", "loops")
+
+    def __init__(self, pcm: array, loops: int) -> None:
+        self.pcm = pcm
+        self.pos = 0
+        self.loops = loops
+
+
+class _WinmmMixer:
+    """In-process 11025 Hz s16 mono mixer. Tk-safe (no SDL / pygame)."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._voices: list[_Voice] = []
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._hwo = None
+        self.ok = False
+
+    def start(self) -> bool:
+        if self.ok:
+            return True
+        if sys.platform != "win32":
+            return False
+        try:
+            handle = _wave_out_open(_MIX_RATE)
+        except OSError:
+            return False
+        if handle is None:
+            return False
+        self._hwo = handle
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+        self.ok = True
+        return True
+
+    def play(self, pcm: array, *, loops: int = 0) -> bool:
+        if not pcm or not self.start():
+            return False
+        with self._lock:
+            self._voices.append(_Voice(pcm, loops))
+        return True
+
+    def stop(self) -> None:
+        with self._lock:
+            self._voices = []
+        self._stop.set()
+        thread = self._thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=0.6)
+        self._thread = None
+        hwo = self._hwo
+        self._hwo = None
+        self.ok = False
+        if hwo is not None:
+            _wave_out_close(hwo)
+
+    def _run(self) -> None:
+        import ctypes
+
+        winmm = ctypes.WinDLL("winmm")
+        hwo = self._hwo
+        if hwo is None:
+            return
+        headers: list[tuple[object, ctypes.Array]] = []
+        try:
+            for _ in range(2):
+                buf = ctypes.create_string_buffer(_MIX_CHUNK * 2)
+                hdr = _WAVEHDR()
+                hdr.lpData = ctypes.cast(buf, ctypes.c_void_p)
+                hdr.dwBufferLength = _MIX_CHUNK * 2
+                if winmm.waveOutPrepareHeader(hwo, ctypes.byref(hdr), ctypes.sizeof(hdr)):
+                    return
+                self._fill(buf)
+                if winmm.waveOutWrite(hwo, ctypes.byref(hdr), ctypes.sizeof(hdr)):
+                    winmm.waveOutUnprepareHeader(hwo, ctypes.byref(hdr), ctypes.sizeof(hdr))
+                    return
+                headers.append((hdr, buf))
+            idx = 0
+            while not self._stop.is_set():
+                hdr, buf = headers[idx]
+                if not _wave_hdr_done(hdr):
+                    self._stop.wait(0.004)
+                    continue
+                winmm.waveOutUnprepareHeader(hwo, ctypes.byref(hdr), ctypes.sizeof(hdr))
+                self._fill(buf)
+                hdr.dwFlags = 0
+                hdr.dwBufferLength = _MIX_CHUNK * 2
+                if winmm.waveOutPrepareHeader(hwo, ctypes.byref(hdr), ctypes.sizeof(hdr)):
+                    break
+                if winmm.waveOutWrite(hwo, ctypes.byref(hdr), ctypes.sizeof(hdr)):
+                    winmm.waveOutUnprepareHeader(hwo, ctypes.byref(hdr), ctypes.sizeof(hdr))
+                    break
+                idx = 1 - idx
+        finally:
+            try:
+                winmm.waveOutReset(hwo)
+            except OSError:
+                pass
+            for hdr, _buf in headers:
+                try:
+                    winmm.waveOutUnprepareHeader(hwo, ctypes.byref(hdr), ctypes.sizeof(hdr))
+                except OSError:
+                    pass
+
+    def _fill(self, buf) -> None:
+        acc = [0] * _MIX_CHUNK
+        with self._lock:
+            keep: list[_Voice] = []
+            for voice in self._voices:
+                pcm = voice.pcm
+                n = len(pcm)
+                if n < 1:
+                    continue
+                pos = voice.pos
+                loops = voice.loops
+                for i in range(_MIX_CHUNK):
+                    acc[i] += pcm[pos]
+                    pos += 1
+                    if pos >= n:
+                        if loops < 0:
+                            pos = 0
+                        elif loops > 0:
+                            loops -= 1
+                            pos = 0
+                        else:
+                            pos = n
+                            break
+                voice.pos = pos
+                voice.loops = loops
+                if pos < n or loops != 0:
+                    keep.append(voice)
+            self._voices = keep
+        raw = array("h", (max(-32767, min(32767, s)) for s in acc))
+        buf.raw = raw.tobytes()
+
+
+class _WAVEHDR:
+    """Filled lazily so non-Windows imports stay cheap."""
+
+    def __new__(cls):
+        import ctypes
+        from ctypes import wintypes
+
+        class WAVEHDR(ctypes.Structure):
+            _fields_ = [
+                ("lpData", ctypes.c_void_p),
+                ("dwBufferLength", wintypes.DWORD),
+                ("dwBytesRecorded", wintypes.DWORD),
+                ("dwUser", ctypes.c_void_p),
+                ("dwFlags", wintypes.DWORD),
+                ("dwLoops", wintypes.DWORD),
+                ("lpNext", ctypes.c_void_p),
+                ("reserved", ctypes.c_void_p),
+            ]
+
+        return WAVEHDR()
+
+
+def _wave_hdr_done(hdr) -> bool:
+    return bool(int(getattr(hdr, "dwFlags", 0)) & 0x00000001)
+
+
+def _wave_out_open(rate: int):
+    import ctypes
+    from ctypes import wintypes
+
+    class WAVEFORMATEX(ctypes.Structure):
+        _fields_ = [
+            ("wFormatTag", wintypes.WORD),
+            ("nChannels", wintypes.WORD),
+            ("nSamplesPerSec", wintypes.DWORD),
+            ("nAvgBytesPerSec", wintypes.DWORD),
+            ("nBlockAlign", wintypes.WORD),
+            ("wBitsPerSample", wintypes.WORD),
+            ("cbSize", wintypes.WORD),
+        ]
+
+    winmm = ctypes.WinDLL("winmm")
+    fmt = WAVEFORMATEX(1, 1, rate, rate * 2, 2, 16, 0)
+    hwo = ctypes.c_void_p()
+    err = winmm.waveOutOpen(ctypes.byref(hwo), 0xFFFFFFFF, ctypes.byref(fmt), 0, 0, 0)
+    if err:
+        return None
+    return hwo
+
+
+def _wave_out_close(hwo) -> None:
+    import ctypes
+
+    winmm = ctypes.WinDLL("winmm")
+    try:
+        winmm.waveOutReset(hwo)
+        winmm.waveOutClose(hwo)
+    except OSError:
+        pass
+
+
 class SfxPlayer:
     """One-shot city WAV plus two city ambience loops.
 
     ``enabled=False`` is Options Sound off / ``--no-audio``.
+    Windows prefers WinMM so Tk + missing pygame still hear birds/clicks.
     """
 
     def __init__(self, game: Path | None, *, enabled: bool = True) -> None:
         self.game = game
         self.enabled = bool(enabled)
+        self.backend = ""
         self._pygame = None
+        self._winmm: _WinmmMixer | None = None
+        self._pcm: dict[str, array] = {}
         self._sounds: dict[str, object] = {}
         self._live: list[subprocess.Popen[bytes]] = []
         self._ambience_live: list[subprocess.Popen[bytes]] = []
         self._ambience_on = False
+        if self.enabled:
+            self.prepare()
+
+    def prepare(self) -> str:
+        """Claim the output device before Tk when possible."""
+        if not self.enabled:
+            self.backend = "muted"
+            return self.backend
+        if self._winmm_mixer() is not None:
+            self.backend = "winmm"
+            return self.backend
+        if self._pygame_mixer() is not None:
+            self.backend = "pygame"
+            return self.backend
+        from app.advisor_video import find_ffplay
+
+        if find_ffplay() is not None:
+            self.backend = "ffplay"
+            return self.backend
+        if sys.platform == "win32":
+            self.backend = "winsound"
+            return self.backend
+        self.backend = "none"
+        return self.backend
 
     def set_enabled(self, on: bool) -> None:
         self.enabled = bool(on)
         if not self.enabled:
             self.stop()
+            self.backend = "muted"
         else:
+            self.prepare()
             self.start_ambience()
 
     def play(self, event: str) -> str:
@@ -197,11 +477,15 @@ class SfxPlayer:
         path = resolve_wav(self.game, name)
         if path is None:
             return f"skip sfx: {name} not found"
+        if self._play_winmm(path, loops=0):
+            return f"sfx {event}={path.name}"
         if self._play_pygame(path):
             return f"sfx {event}={path.name}"
         if self._play_ffplay(path):
             return f"sfx {event}={path.name}"
-        return f"skip sfx: no pygame/ffplay for {path.name}"
+        if self._play_winsound(path, loop=False):
+            return f"sfx {event}={path.name}"
+        return f"skip sfx: no audio device for {path.name}"
 
     def start_ambience(self) -> str:
         """Loop gardenb + fountn. No-op if muted, already running, or missing."""
@@ -212,13 +496,16 @@ class SfxPlayer:
             path = resolve_wav(self.game, name)
             if path is None:
                 continue
-            if self._play_pygame(path, loops=-1, reserved=index):
+            if self._play_winmm(path, loops=-1):
+                started.append(event)
+            elif self._play_pygame(path, loops=-1, reserved=index):
                 started.append(event)
             elif self._play_ffplay(path, loop=True):
                 started.append(event)
         if started:
             self._ambience_on = True
-            return "ambience " + "+".join(started)
+            how = self.backend or "ok"
+            return f"ambience {'+'.join(started)} ({how})"
         return ""
 
     def stop(self) -> None:
@@ -227,16 +514,59 @@ class SfxPlayer:
             _kill_proc(proc)
         self._ambience_live = []
         self._ambience_on = False
-        if self._pygame is not None:
+        if self._winmm is not None:
+            self._winmm.stop()
+            self._winmm = None
+        if self._pygame:
             try:
                 mixer = getattr(self._pygame, "mixer", None)
                 if mixer is not None:
                     mixer.stop()
             except (AttributeError, RuntimeError):
                 pass
+        if sys.platform == "win32":
+            try:
+                import winsound
+
+                winsound.PlaySound(None, winsound.SND_PURGE)
+            except (ImportError, RuntimeError):
+                pass
 
     def close(self) -> None:
         self.stop()
+
+    def _pcm_for(self, path: Path) -> array | None:
+        key = str(path).upper()
+        hit = self._pcm.get(key)
+        if hit is not None:
+            return hit
+        pcm = load_pcm(path)
+        if pcm is None:
+            return None
+        self._pcm[key] = pcm
+        return pcm
+
+    def _play_winmm(self, path: Path, *, loops: int) -> bool:
+        mixer = self._winmm_mixer()
+        if mixer is None:
+            return False
+        pcm = self._pcm_for(path)
+        if pcm is None:
+            return False
+        return mixer.play(pcm, loops=loops)
+
+    def _winmm_mixer(self) -> _WinmmMixer | None:
+        if self._winmm is False:
+            return None
+        if self._winmm is not None:
+            return self._winmm
+        mix = _WinmmMixer()
+        if not mix.start():
+            self._winmm = False
+            return None
+        self._winmm = mix
+        self.backend = "winmm"
+        return mix
 
     def _play_pygame(
         self, path: Path, *, loops: int = 0, reserved: int | None = None
@@ -249,7 +579,7 @@ class SfxPlayer:
         if snd is None:
             try:
                 snd = mixer.Sound(str(path))
-            except (OSError, RuntimeError):
+            except Exception:
                 return False
             self._sounds[key] = snd
         try:
@@ -257,7 +587,7 @@ class SfxPlayer:
                 mixer.Channel(int(reserved)).play(snd, loops=loops)
             else:
                 snd.play(loops=loops)
-        except RuntimeError:
+        except Exception:
             return False
         return True
 
@@ -273,11 +603,12 @@ class SfxPlayer:
             return None
         try:
             if not pygame.mixer.get_init():
-                pygame.mixer.init()
+                pygame.mixer.pre_init(_MIX_RATE, -16, 1, 512)
+                pygame.mixer.init(frequency=_MIX_RATE, size=-16, channels=1, buffer=512)
             n = max(16, int(pygame.mixer.get_num_channels()))
             pygame.mixer.set_num_channels(n)
             pygame.mixer.set_reserved(_AMBIENCE_RESERVED)
-        except (RuntimeError, pygame.error):
+        except Exception:
             self._pygame = False
             return None
         self._pygame = pygame
@@ -300,24 +631,51 @@ class SfxPlayer:
             "-loglevel",
             "error",
             "-nodisp",
+            "-vn",
             "-autoexit",
         ]
         if loop:
             cmd.extend(["-loop", "0"])
         cmd.append(str(path))
+        env = os.environ.copy()
+        env.setdefault("SDL_AUDIODRIVER", "directsound")
+        popen_kw: dict = {
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL,
+            "stdin": subprocess.DEVNULL,
+            "env": env,
+        }
+        if sys.platform == "win32":
+            popen_kw["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         try:
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                stdin=subprocess.DEVNULL,
-            )
+            proc = subprocess.Popen(cmd, **popen_kw)
         except OSError:
             return False
         if loop:
+            time.sleep(0.05)
+            if proc.poll() is not None:
+                return False
             self._ambience_live.append(proc)
         else:
             self._live.append(proc)
+        self.backend = self.backend or "ffplay"
+        return True
+
+    def _play_winsound(self, path: Path, *, loop: bool) -> bool:
+        if sys.platform != "win32":
+            return False
+        try:
+            import winsound
+        except ImportError:
+            return False
+        flags = winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT
+        if loop:
+            flags |= winsound.SND_LOOP
+        try:
+            winsound.PlaySound(str(path), flags)
+        except RuntimeError:
+            return False
+        self.backend = self.backend or "winsound"
         return True
 
     def _reap(self, *, kill: bool) -> None:
@@ -387,9 +745,25 @@ def selftest(game: Path | None = None) -> list[str]:
     player = SfxPlayer(game, enabled=False)
     if player.play("place") or player._live or player.start_ambience() or player._ambience_live:
         lines.append("FAIL  muted SfxPlayer spawned audio")
+    elif player._winmm:
+        lines.append("FAIL  muted SfxPlayer opened WinMM")
     else:
         lines.append("ok    muted / --no-audio plays nothing")
     player.close()
+    pcm_ok = 0
+    for name in ("gardenb.wav", "fountn.wav", "poscl.wav"):
+        path = resolve_wav(game, name)
+        if path is None:
+            continue
+        pcm = load_pcm(path)
+        if pcm is None or len(pcm) < 8:
+            lines.append(f"FAIL  load_pcm {name}")
+        else:
+            pcm_ok += 1
+    if pcm_ok >= 3:
+        lines.append("ok    load_pcm gardenb/fountn/poscl")
+    elif pcm_ok:
+        lines.append(f"ok    load_pcm {pcm_ok} clips")
     missing = []
     found = []
     repo_first = False

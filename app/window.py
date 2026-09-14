@@ -806,6 +806,10 @@ def show(ctx: BootContext, *, game: Path) -> None:
     from app import assets, audio, city_map
 
     load_overlay_palette(game)
+    # WinMM / pygame must claim the device before Tk, or City Only stays silent.
+    options = HostOptions(sound=bool(getattr(ctx, "play_audio", True)))
+    sfx = audio.SfxPlayer(game, enabled=options.sound)
+    sfx.prepare()
     root = tk.Tk()
     root.title("Caesar II — v0")
     root.geometry(f"{SCREEN_W}x{SCREEN_H}")
@@ -880,8 +884,6 @@ def show(ctx: BootContext, *, game: Path) -> None:
     save_typing = False
     save_picked_this_session = False
     save_slot_name: str | None = None
-    options = HostOptions(sound=bool(getattr(ctx, "play_audio", True)))
-    sfx = audio.SfxPlayer(game, enabled=options.sound)
     city_skill = int(ctx.sim.skill) if getattr(ctx.sim, "city_only", 0) else 2
 
     def _sfx(event: str) -> None:
@@ -1477,8 +1479,12 @@ def show(ctx: BootContext, *, game: Path) -> None:
         _invalidate_live()
         if getattr(ctx.sim, "city_only", 0):
             _scan_city_events(hail=hail)
-        blit(map_status(n_walkers, None if zoom in pl8_sheets else None))
-        sfx.start_ambience()
+        amb = sfx.start_ambience()
+        extra = map_status(n_walkers, None if zoom in pl8_sheets else None)
+        if amb:
+            ctx.audio_status = amb
+            extra = f"{extra}  {amb}"
+        blit(extra)
 
     def _advisor_has_video() -> bool:
         return advisor_clip is not None
