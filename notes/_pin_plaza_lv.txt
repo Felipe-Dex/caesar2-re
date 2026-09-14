@@ -1,0 +1,23 @@
+FUN_00040695 plaza vs road land-value (c2_x.bin)
+
+Plaza id 0x7C–0x7E (join 0x7D, statue 0x7E). Stamp +1 = FLAG_PAD 0x20
+(same as road). Garden 0x78–0x7B uses +1 = 0x01.
+
+Road branch (+1 & 0x20) only radiates:
+  +1 & 4     → +2 r=1
+  +1 & 0x10  → +1 r=2 size=1
+  id 0x5C    → +2 r=1
+  id 0x58–5B → +1 r=1
+  else (incl. plaza 0x7C) → no road splash, jmp 0x40bcd
+
+0x40bcd tail (every tile, after flag radiation):
+  id < 8          → water/rock tables
+  id 0x7C–0x7E    → LUT 0x9658d bonus=4 radius=1 size=1
+  id 0x78–0x7B    → LUT 0x96595 bonus=2 radius=2 size=1
+
+FUN_00040d08 0x41157 only clips +15 down (if cap < acc: write cap).
+Host service_target_lv still lifts cap<=20 so watered huts can climb;
+above 20 it keeps 40695 acc (floor 20) and clips to cap. Entertainment
+Level 8 is not the [60]+67 stall — +15==20 vs stay 18..20 → [60]+60.
+
+Road 0x52 + FLAG_PAD adds 0. Replacing it with plaza 0x7C adds +4 r=1.

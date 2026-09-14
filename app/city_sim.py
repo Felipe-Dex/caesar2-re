@@ -2849,6 +2849,56 @@ def selftest() -> list[str]:
         f"next={live[0].next_state if live else -1} n={st.rioters_spawned}"
     )
 
+    from app.city_paint import paint_land_value, service_target_lv
+
+    tiles = _blank_tiles()
+    hoff = _off(20, 20)
+    tiles[hoff] = 0x8B
+    tiles[hoff + 1] = 0x01
+    poff = _off(21, 20)
+    tiles[poff] = 0x7C
+    tiles[poff + 1] = FLAG_PAD
+    paint_land_value(tiles, 20, 1)
+    plaza_lv = i8(tiles[hoff + 15])
+    tiles = _blank_tiles()
+    tiles[hoff] = 0x8B
+    tiles[hoff + 1] = 0x01
+    tiles[poff] = 0x52
+    tiles[poff + 1] = FLAG_PAD
+    paint_land_value(tiles, 20, 1)
+    road52 = i8(tiles[hoff + 15])
+    tiles = _blank_tiles()
+    tiles[hoff] = 0x8B
+    tiles[hoff + 1] = 0x01
+    tiles[poff] = 0x58
+    tiles[poff + 1] = FLAG_PAD
+    paint_land_value(tiles, 20, 1)
+    road58 = i8(tiles[hoff + 15])
+    ok = plaza_lv == 4 and road52 == 0 and road58 == 1
+    lines.append(
+        f"plaza FLAG_PAD +4 vs road: {'ok' if ok else 'FAIL'} "
+        f"plaza={plaza_lv} road52={road52} road58={road58}"
+    )
+
+    tiles = _blank_tiles()
+    tiles[hoff] = 0x8B
+    tiles[hoff + 1] = 0x01
+    for dx, dy in (
+        (-1, -1), (0, -1), (1, -1),
+        (-1, 0), (1, 0),
+        (-1, 1), (0, 1), (1, 1),
+    ):
+        p = _off(20 + dx, 20 + dy)
+        tiles[p] = 0x7C
+        tiles[p + 1] = FLAG_PAD
+    paint_land_value(tiles, 19, 3)
+    ring = i8(tiles[hoff + 15])
+    ok = ring == 32 and service_target_lv(ring, 60) == 32
+    lines.append(
+        f"plaza ring acc 32 kept above 20: {'ok' if ok else 'FAIL'} "
+        f"+15={ring} target={service_target_lv(ring, 60)}"
+    )
+
     from app.messages import selftest as message_selftest
 
     lines.extend(message_selftest())

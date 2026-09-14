@@ -2330,6 +2330,13 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  query does not evolve {query_place(ev, 4, 4).lines}")
     else:
         lines.append("ok    Reservoir → [60]+35 does not evolve")
+    if housing_query_stall_skip(20, 0x39, 0xCC, 0, 8, 2, 100, 100) != 60:
+        lines.append(
+            f"FAIL  stall skip land-value "
+            f"{housing_query_stall_skip(20, 0x39, 0xCC, 0, 8, 2, 100, 100)}"
+        )
+    else:
+        lines.append("ok    0x8B +15=20 entertainment 8 → [60]+60 not +67")
     if housing_query_stall_skip(34, 0x09, 0xFC, 0, 6, 2, 100, 100) != 72:
         lines.append(
             f"FAIL  stall skip grammaticus "

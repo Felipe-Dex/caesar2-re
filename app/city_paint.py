@@ -1245,7 +1245,14 @@ def paint_plus14_security(tiles: bytearray, y0: int, n: int) -> int:
 
 
 def paint_land_value(tiles: bytearray, y0: int, n: int) -> int:
-    """FUN_00040695 — radiate signed +15 from buildings / gardens / fountain."""
+    """FUN_00040695 — radiate signed +15 from buildings / gardens / fountain.
+
+    Plaza ``0x7C–0x7E`` is stamped with FLAG_PAD (``+1=0x20``). The road
+    branch only radiates ``0x58–0x5C`` / ``+1&4`` / ``+1&0x10``. EXE then
+    falls through to ``0x40bcd`` and still applies plaza (LUT ``0x9658d``
+    +4 r=1) or garden (``0x96595`` +2 r=2). Host used to keep those ids
+    under ``flags&1``, so a real plaza never splashed.
+    """
     painted = 0
     for y in range(y0, min(MAP_H, y0 + n)):
         for x in range(MAP_W):
@@ -1291,14 +1298,15 @@ def paint_land_value(tiles: bytearray, y0: int, n: int) -> int:
                 elif hid == ID_BARRACKS:
                     add_land_value(tiles, x, y, 3, 2, 3)
                     painted += 1
-                elif ID_GARDEN_LO <= hid <= ID_GARDEN_HI:
-                    add_land_value(tiles, x, y, 1, 2, 2)
-                    painted += 1
-                elif ID_PLAZA_LO <= hid <= ID_PLAZA_HI:
-                    add_land_value(tiles, x, y, 1, 1, 4)
-                    painted += 1
             elif flags & 0x18:
                 tiles[off + 15] = 0
+                painted += 1
+            # EXE 0x40bcd tail — plaza/garden after the flag radiation.
+            if ID_PLAZA_LO <= hid <= ID_PLAZA_HI:
+                add_land_value(tiles, x, y, 1, 1, 4)
+                painted += 1
+            elif ID_GARDEN_LO <= hid <= ID_GARDEN_HI:
+                add_land_value(tiles, x, y, 1, 2, 2)
                 painted += 1
     return painted
 
@@ -1424,7 +1432,7 @@ def service_target_lv(acc: int, cap: int) -> int:
     block then sits at acc=2 (fountain +2 vs hut stay 0…3) and never leaves
     the first hut. Host writes the service target through the house/insula
     rung (cap ≤ 20) so each month can step toward water/food/entertainment.
-    Above 20, gardens/fountain acc still raise +15 and only clip to cap.
+    Above 20, plaza/garden/fountain acc still raise +15 and only clip to cap.
     """
     if cap <= 20:
         return cap
