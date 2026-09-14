@@ -446,7 +446,7 @@ def _with_view_fallback(hits: list[ChromeHit]) -> list[ChromeHit]:
 
 
 def _with_overlay_well(hits: list[ChromeHit]) -> list[ChromeHit]:
-    """INT_CITY overlay name well. Window plays SfxPlayer overlay/a09 only."""
+    """INT_CITY overlay name well. Window pick is silent (no overlay SFX)."""
     wx, wy, ww, wh = OVERLAY_WELL
     well = ChromeHit("overlay_menu", "Overlay", (wx, wy, ww, wh))
     return [well, *hits]

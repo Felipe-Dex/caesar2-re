@@ -5,9 +5,10 @@ string; body is the next packed NUL ([slot]+1). Slots below 79 are
 confirm-pack / status-bar toasts: red HUD line + SFX, not a talking-head.
 Official C2.ENG [7]+14 is ``Need More Plebs!!!`` (confirm title, not the
 bar). [35]+26 ``Idle Plebs`` is the Forum labor-row label ([36]+19), not
-a HUD toast. The red bar the original shouts — same phrase as unused.wav
-``0x90448`` — is ``Plebs are needed!``. Fire [81] only after a real 69A37
-housing ignite (timer 10), not leftover +3 bit7 / +11 0x30.
+a HUD toast. The red bar the original shouts — EXE unused.wav string
+``0x90448`` — is ``Plebs are needed!``. Host plays ``a09.wav``. Fire [81]
+only after a real 69A37 housing ignite (timer 10), not leftover +3 bit7
+/ +11 0x30.
 Rioter spawn posts [86] Rioting! (EAX=0x57) when 41DD4 type-7 lands.
 City Only type-3 spawn (0x52828) posts [82] The City Is Attacked!
 (EAX=0x53). Disease [80] EAX=0x51 when +11 0x30 leftover (0x44907).
@@ -42,7 +43,7 @@ STATUS_BAR_KEYS = frozenset({"need_plebs", "idle"})
 # Fire / Disease / Attack / Riot + Stolen. Close Query so the clip shows.
 DISASTER_SLOTS = frozenset({80, 81, 82, 85, 86, 88})
 DISASTER_KEYS = frozenset({"disease", "fire", "attack", "riot", "theft"})
-# User-verified HUD + unused.wav cue. C2.ENG [7]+14 is the confirm title.
+# User-verified HUD + a09.wav cue. C2.ENG [7]+14 is the confirm title.
 NEED_PLEBS_HUD = "Plebs are needed!"
 # Shrine / Temple / Basilica origins — Hail / Stolen copy.
 TEMPLE_LO, TEMPLE_HI = 0xA2, 0xAC
@@ -282,7 +283,7 @@ def pending_count(sim) -> int:
 
 
 def post_labor_status(sim, key: str, eng=None) -> str:
-    """Labor-short toast: red status bar + unused.wav, no 58c87 queue.
+    """Labor-short toast: red status bar + a09.wav, no 58c87 queue.
 
     Both the idle=0 short-row case and the leftover-idle + short-row case
     use the HUD line (not C2.ENG [7]+14 / [35]+26). ``eng`` is accepted
@@ -301,10 +302,10 @@ def peek_status(sim) -> str:
 
 
 def take_status_sfx(sim) -> str:
-    """Pop the pending labor SFX (``need_plebs`` → unused.wav), or ``""``.
+    """Pop the pending labor SFX (``need_plebs`` → a09.wav), or ``""``.
 
     Window plays this after scan / Forum allocate — not from overlay blit
-    or overlay well / flyout pick (those stay ``SfxPlayer overlay`` / a09).
+    or overlay well / flyout pick (those stay silent).
     """
     watch = ensure_watch(sim)
     key = watch.status_sfx

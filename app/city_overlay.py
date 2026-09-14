@@ -98,13 +98,22 @@ ISO_TINT_OVERLAYS = frozenset(
 # EXE 0x3E6BA never writes a dry colour — plane 0 keeps dimmed geography.
 # Do not invent a full-map red (old host 0xFE). Coverage is +13 rings only.
 _ISO_WASH_ALPHA = 120
-# Security 0x93/0x90/0x8D are near-brown in CITY1.256; City Only remaps
-# those three so grass wash and the minimap key stay readable.
-_SECURITY_WASH_ALPHA = 180
+# CITY1.256 0x93/0x90/0x8D (Security) and 0x84/0x8D/0x87 (Water) sit near
+# grass brown/olive. City Only remaps those key colours so the wash and
+# minimap swatches stay readable. Plane bytes stay EXE indices.
+_CONTRAST_WASH_ALPHA = 180
+_WASH_BLUE = (40, 96, 230)
+_WASH_YELLOW = (236, 208, 24)
+_WASH_RED = (220, 32, 36)
 _SECURITY_WASH_RGB: dict[int, tuple[int, int, int]] = {
-    0x93: (40, 96, 230),  # Internal — blue
-    0x90: (236, 208, 24),  # External — yellow
-    0x8D: (220, 32, 36),  # Both / Maximum — red
+    0x93: _WASH_BLUE,  # Internal
+    0x90: _WASH_YELLOW,  # External
+    0x8D: _WASH_RED,  # Both / Maximum
+}
+_WATER_WASH_RGB: dict[int, tuple[int, int, int]] = {
+    0x84: _WASH_BLUE,  # Water Supply
+    0x8D: _WASH_YELLOW,  # Pipe Access
+    0x87: _WASH_RED,  # Both
 }
 
 # CITY1.256 indices written to 0xD7BFC. Runtime load preferred; this is
@@ -210,16 +219,26 @@ def palette_rgb(index: int) -> tuple[int, int, int]:
     return _overlay_rgb.get(index, (index, index // 2, 40))
 
 
-def overlay_plane_rgb(overlay_id: int, index: int) -> tuple[int, int, int]:
-    """CITY1.256 index, with Security 0x93/0x90/0x8D remapped for contrast.
-
-    Water (and Tax / Education / Markets) keep the raw palette so Pipe
-    Access 0x8D stays tan. Plane bytes themselves stay EXE 0x93/0x90/0x8D.
-    """
+def _contrast_wash_rgb(
+    overlay_id: int, index: int
+) -> tuple[int, int, int] | None:
     if overlay_id == OVERLAY_SECURITY:
-        remapped = _SECURITY_WASH_RGB.get(index)
-        if remapped is not None:
-            return remapped
+        return _SECURITY_WASH_RGB.get(index)
+    if overlay_id == OVERLAY_WATER:
+        return _WATER_WASH_RGB.get(index)
+    return None
+
+
+def overlay_plane_rgb(overlay_id: int, index: int) -> tuple[int, int, int]:
+    """CITY1.256 index, with Security/Water key colours remapped.
+
+    Security Internal/External/Both and Water Supply/Pipe Access/Both use
+    the same blue/yellow/red so grass wash stays readable. Tax / Education
+    / Markets keep the raw palette. Plane bytes stay EXE indices.
+    """
+    remapped = _contrast_wash_rgb(overlay_id, index)
+    if remapped is not None:
+        return remapped
     return palette_rgb(index)
 
 
@@ -468,8 +487,8 @@ def overlay_iso_wash(
                 continue
             rgb = overlay_plane_rgb(overlay_id, idx)
             alpha = (
-                _SECURITY_WASH_ALPHA
-                if overlay_id == OVERLAY_SECURITY and idx in _SECURITY_WASH_RGB
+                _CONTRAST_WASH_ALPHA
+                if _contrast_wash_rgb(overlay_id, idx) is not None
                 else _ISO_WASH_ALPHA
             )
             sx, sy = tile_iso_xy(tx, ty, zoom=zoom)
@@ -1203,7 +1222,7 @@ _LEGEND_LABEL_X = 34
 
 # 0x61f24 / 0x61fb9: CITY1.256 index + [52] skip. Security uses 0x61fb9
 # (eax=0x20 → Internal / External / Both = +32,+31,+30). Host remaps
-# those three Security indices in overlay_plane_rgb; Water 0x8D is raw.
+# Security and Water key indices in overlay_plane_rgb (legend matches wash).
 _LEGEND_THREE: dict[int, tuple[tuple[int, int, str], ...]] = {
     OVERLAY_WATER: (
         (0x84, 25, "Water Supply"),
@@ -2349,12 +2368,18 @@ def selftest() -> list[str]:
         lines.append("FAIL  water swatch missing")
     else:
         lines.append("ok    Water/Security legend in minimap well")
+    water_supply = overlay_plane_rgb(OVERLAY_WATER, 0x84)
     water_pipe = overlay_plane_rgb(OVERLAY_WATER, 0x8D)
+    water_both = overlay_plane_rgb(OVERLAY_WATER, 0x87)
     sec_int = overlay_plane_rgb(OVERLAY_SECURITY, 0x93)
     sec_ext = overlay_plane_rgb(OVERLAY_SECURITY, 0x90)
     sec_both = overlay_plane_rgb(OVERLAY_SECURITY, 0x8D)
-    if water_pipe != palette_rgb(0x8D):
-        lines.append("FAIL  Water 0x8D Pipe Access remapped")
+    edu_rhetor = overlay_plane_rgb(OVERLAY_EDUCATION, 0x84)
+    if water_supply != sec_int or water_pipe != sec_ext or water_both != sec_both:
+        lines.append(
+            f"FAIL  Water/Security wash mismatch "
+            f"{water_supply}/{sec_int} {water_pipe}/{sec_ext} {water_both}/{sec_both}"
+        )
     elif sec_int == palette_rgb(0x93) or sec_ext == palette_rgb(0x90):
         lines.append("FAIL  Security wash still CITY1.256 brown")
     elif not (sec_ext[0] > 180 and sec_ext[1] > 160 and sec_ext[2] < 80):
@@ -2363,20 +2388,30 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  Security Internal not blue {sec_int}")
     elif not (sec_both[0] > 180 and sec_both[0] > sec_both[1] + 80):
         lines.append(f"FAIL  Security Both not red {sec_both}")
+    elif edu_rhetor != palette_rgb(0x84):
+        lines.append(f"FAIL  Education 0x84 remapped {edu_rhetor}")
     else:
-        lines.append("ok    Security wash yellow/blue/red; Water 0x8D untouched")
+        lines.append("ok    Water/Security wash blue/yellow/red; Education raw")
     sx = wx + _LEGEND_SWATCH[0] + _LEGEND_SWATCH_WH // 2
     sy0 = wy + _LEGEND_SWATCH[1] + _LEGEND_SWATCH_WH // 2
     painted_int = sec_key.getpixel((sx, sy0))
     painted_ext = sec_key.getpixel((sx, sy0 + _LEGEND_SWATCH_GAP))
     painted_both = sec_key.getpixel((sx, sy0 + 2 * _LEGEND_SWATCH_GAP))
+    painted_supply = water_key.getpixel((sx, sy0))
     painted_pipe = water_key.getpixel((sx, sy0 + _LEGEND_SWATCH_GAP))
+    painted_wboth = water_key.getpixel((sx, sy0 + 2 * _LEGEND_SWATCH_GAP))
     if painted_int != sec_int or painted_ext != sec_ext or painted_both != sec_both:
         lines.append(
             f"FAIL  Security legend swatches {painted_int} {painted_ext} {painted_both}"
         )
-    elif painted_pipe != water_pipe:
-        lines.append(f"FAIL  Water Pipe Access swatch remapped {painted_pipe}")
+    elif (
+        painted_supply != water_supply
+        or painted_pipe != water_pipe
+        or painted_wboth != water_both
+    ):
+        lines.append(
+            f"FAIL  Water legend swatches {painted_supply} {painted_pipe} {painted_wboth}"
+        )
     else:
         lines.append("ok    Security/Water legend swatches match plane RGB")
 

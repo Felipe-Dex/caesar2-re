@@ -15,14 +15,14 @@ Pinned play/bind sites (mapped VA):
 - ``fire.wav`` play ``FUN_000696e8`` ``0x697AC``
 - ``smrub.wav`` ``0x697CF``; ``medrub.wav`` / ``lrgrub.wav`` ``0x696AC``
   (``cmp edi,2`` / ``jg`` → medium when ``edi<=2``, large when ``edi>2``)
-- ``a09.wav`` ``0x619F3`` (overlay well / flyout pick — play once, do
-  not arm the EXE's every-8-tick loop). Overlay gadget must never play
-  ``unused.wav``.
+- ``a09.wav`` — user-verified ``Plebs are needed!`` labor toast. Play
+  once on the rising-edge HUD (not every tick). Overlay well / flyout
+  pick is silent (no ``a09.wav``, ``unused.wav``, or ``poscl.wav``).
 - ``forum.wav`` is copied in ``city_sfx_bind_wavs`` ``0x12F2A`` (ambience
   table). Host plays it once on Forum enter.
-- ``unused.wav`` bind ``0x129B2`` / str ``0x90448`` — Need more plebs!
-  HUD cue (“Plebs are needed”). Not ``negcl2.wav``. File may be absent
-  on a flat 1.1A tree (then the toast stays silent).
+- ``unused.wav`` bind ``0x129B2`` / str ``0x90448`` is the EXE labor
+  phrase name. City Only plays ``a09.wav`` (playtest). File may be
+  absent on a flat 1.1A tree.
 - ``gardenb.wav``…``temple1.wav`` in that bind table are looping
   building ambience — do not start those loops.
 """
@@ -51,9 +51,8 @@ EVENT_WAV: dict[str, str] = {
     "destroy_s": "smrub.wav",
     "destroy_m": "medrub.wav",
     "destroy_l": "lrgrub.wav",
-    "overlay": "a09.wav",
     "forum": "forum.wav",
-    "need_plebs": "unused.wav",
+    "need_plebs": "a09.wav",
 }
 
 
@@ -285,17 +284,18 @@ def selftest(game: Path | None = None) -> list[str]:
         "destroy_s": "smrub.wav",
         "destroy_m": "medrub.wav",
         "destroy_l": "lrgrub.wav",
-        "overlay": "a09.wav",
         "forum": "forum.wav",
-        "need_plebs": "unused.wav",
+        "need_plebs": "a09.wav",
     }
     if EVENT_WAV != want:
         lines.append(f"FAIL  EVENT_WAV {EVENT_WAV}")
-    elif EVENT_WAV["overlay"] != "a09.wav" or EVENT_WAV["need_plebs"] == EVENT_WAV["overlay"]:
-        lines.append("FAIL  overlay gadget must be a09.wav, not unused.wav")
+    elif EVENT_WAV.get("overlay"):
+        lines.append("FAIL  overlay pick must be silent (no WAV)")
+    elif EVENT_WAV["need_plebs"] != "a09.wav":
+        lines.append("FAIL  labor toast must be a09.wav")
     else:
         lines.append("ok    EVENT_WAV pinned to EXE 8.3 names")
-        lines.append("ok    overlay gadget is a09.wav (0x619F3), not unused.wav")
+        lines.append("ok    labor toast is a09.wav; overlay pick is silent")
     if "A01" in " ".join(EVENT_WAV.values()).upper() or PREFERRED_RAW.lower() in {
         n.lower() for n in EVENT_WAV.values()
     }:

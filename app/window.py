@@ -161,7 +161,7 @@ HUD_TREASURY_Y = 6
 HUD_TREASURY_SUFFIX = " Dn"
 HUD_GOLD = (255, 228, 160, 255)
 HUD_TREASURY_NEG = (255, 120, 90, 255)
-# Labor-short HUD: red ``Plebs are needed!`` (unused.wav), not cyan debug.
+# Labor-short HUD: red ``Plebs are needed!`` (a09.wav), not cyan debug.
 HUD_STATUS_CYAN = (180, 220, 255, 255)
 HUD_STATUS_RED = (255, 64, 48, 255)
 # C2.ENG [0] File · [1] Options · [2] Speed · [3] Help · host Disasters
@@ -888,11 +888,12 @@ def show(ctx: BootContext, *, game: Path) -> None:
         sfx.play(event)
 
     def _play_labor_sfx() -> None:
-        """Play unused.wav only when scan / Forum allocate just posted.
+        """Play a09.wav only when scan / Forum allocate just posted.
 
         Overlay well / flyout blit must not consume ``status_sfx`` — PhotoImage
         during that blit can pump ``clock_step`` (Query layout / advisor pump
-        made the frame heavier). Nested take would replay unused.wav as a09.
+        made the frame heavier). Nested take would steal the labor cue.
+        Overlay menu pick itself stays silent.
         """
         if _in_blit:
             return
@@ -2570,10 +2571,9 @@ def show(ctx: BootContext, *, game: Path) -> None:
             overlay_flyout = not overlay_flyout
             palette.close()
             # Drop Query without _pump_advisor. 1891448 routed this through
-            # _close_query; the nested pump + overlay blit replayed unused.wav.
+            # _close_query; the nested pump + overlay blit stole labor SFX.
             place_dlg = None
-            # Overlay well (city_chrome overlay_menu): a09.wav, not unused.wav.
-            _sfx("overlay")
+            # Overlay well / flyout: silent (no a09, unused, or poscl).
             blit(f"Overlay: {overlay_name(overlay_id, ctx.eng)}")
             return
         if action == "zoom_in":
@@ -2601,12 +2601,10 @@ def show(ctx: BootContext, *, game: Path) -> None:
             # EXE 0x329EF: cancel build tool slots. Does not reset overlay.
             tool = None
             _close_query()
-            _sfx("click")
             blit(f"ferramenta cancelada  tesouro {ctx.sim.treasury}")
             return
         overlay_id = idx
-        # EXE 0x619F3 — a09.wav only. Never unused.wav / need_plebs.
-        _sfx("overlay")
+        # Overlay flyout pick is silent (no a09, unused, or poscl).
         hint = overlay_help(idx, ctx.eng)
         blit(f"{overlay_name(idx, ctx.eng)} — {hint}")
 
