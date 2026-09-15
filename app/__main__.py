@@ -36,6 +36,7 @@ def _print_status(ctx) -> None:
         f"{on_sim_step.__module__}.on_sim_step "
         "(one slot then walkers_tick; M = month; play/faster auto-clock; E = evolve80)"
     )
+    print(f"screen        : {getattr(ctx, 'screen', 'title')}")
     sim = getattr(ctx, "sim", None)
     if sim is not None:
         print(
@@ -55,8 +56,8 @@ def _print_status(ctx) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Caesar II v0 — load original files, show one PL8. "
-            "--new --city-only starts a fresh city (grass+river). "
+            "Caesar II v0 — default opens the title/menu (backgrnd.pl8). "
+            "--new --city-only skips the title and starts a fresh city. "
             "Space/T = one city_sim_phase slot then walkers_tick. "
             "M = skip stubs + one calendar_advance (month++). "
             "Unpaused play/faster auto-advances months (sim_tick_due). "
@@ -171,6 +172,10 @@ def main(argv: list[str] | None = None) -> int:
                 break
         if sav is None:
             sav = pick_save(game)
+    if sav is None and args.map_preview is not None and not args.new:
+        from app.city_map import pick_save
+
+        sav = pick_save(game)
     if sav is not None:
         from app.sav import resolve_sav_path
 
@@ -327,6 +332,17 @@ def main(argv: list[str] | None = None) -> int:
                 menu_fail += 1
         if menu_fail:
             print("FAILED        : menu selftest")
+            return 1
+        from app.title import selftest as title_selftest
+
+        print("-- title selftest --")
+        title_fail = 0
+        for line in title_selftest():
+            print(f"  {line}")
+            if "FAIL" in line:
+                title_fail += 1
+        if title_fail:
+            print("FAILED        : title selftest")
             return 1
         from app.sav import selftest as sav_selftest
 

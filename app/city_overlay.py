@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from PIL import Image, ImageDraw, ImageFont
 
 from app.city_map import (
+    FLAG_PAD,
     FLAG_RIVER,
     ID_TERRAIN_MAX,
     MAP_H,
@@ -34,6 +35,7 @@ from app.city_paint import (
     ID_HOSPITAL,
     ID_LIBRARY,
     SECURITY_COV_BITS,
+    cap_housing_plus15,
     civic_edge_access,
     civic_stamp_origin,
     entertainment_level,
@@ -41,10 +43,12 @@ from app.city_paint import (
     factory_type_name,
     hospital_cover_percent,
     library_cover_percent,
+    paint_land_value,
     security_enclosure_mask,
     security_overlay_index,
     security_score,
     tile_inside_walls,
+    wipe_lane,
 )
 
 OVERLAY_GEOGRAPHY = 0
@@ -2337,6 +2341,45 @@ def selftest() -> list[str]:
         )
     else:
         lines.append("ok    0x8B +15=20 entertainment 8 → [60]+60 not +67")
+    pl = CityMap()
+    po = pl.offset(4, 4)
+    pl.tiles[po] = 0x8B
+    pl.tiles[po + 1] = 0x01
+    pl.tiles[po + 10] = 0x0C | 0xC0
+    pl.tiles[po + 12] = 1
+    pl.tiles[po + 13] = 0x01 | 0x08
+    nb = pl.offset(5, 4)
+    pl.tiles[nb] = 0x52
+    pl.tiles[nb + 1] = FLAG_PAD
+    wipe_lane(pl.tiles, 15)
+    paint_land_value(pl.tiles, 4, 1)
+    cap_housing_plus15(pl.tiles, 4, 1, population=50)
+    road_lv = i8(pl.tiles[po + 15])
+    pl.tiles[nb] = 0x7C
+    wipe_lane(pl.tiles, 15)
+    paint_land_value(pl.tiles, 4, 1)
+    cap_housing_plus15(pl.tiles, 4, 1, population=50)
+    plaza_lv = i8(pl.tiles[po + 15])
+    pjoin = " ".join(query_place(pl, 4, 4).lines)
+    if plaza_lv != road_lv + 4 or plaza_lv != 24:
+        lines.append(
+            f"FAIL  query plaza +15 lift plaza={plaza_lv} road={road_lv}"
+        )
+    elif _QUERY_EVOLVE_FB[60] in pjoin:
+        lines.append(f"FAIL  query 0x8B plaza still [60]+60 {query_place(pl, 4, 4).lines}")
+    else:
+        lines.append("ok    Improved House next to plaza +15=24 not [60]+60")
+    pl.tiles[po + 12] = 0
+    wipe_lane(pl.tiles, 15)
+    paint_land_value(pl.tiles, 4, 1)
+    cap_housing_plus15(pl.tiles, 4, 1, population=50)
+    njoin = " ".join(query_place(pl, 4, 4).lines)
+    if _QUERY_EVOLVE_FB[67] not in njoin:
+        lines.append(f"FAIL  query plaza no-ent {query_place(pl, 4, 4).lines}")
+    elif _QUERY_EVOLVE_FB[60] in njoin:
+        lines.append(f"FAIL  query plaza no-ent used [60]+60 {query_place(pl, 4, 4).lines}")
+    else:
+        lines.append("ok    Improved House plaza no entertainment → [60]+67 not +60")
     if housing_query_stall_skip(34, 0x09, 0xFC, 0, 6, 2, 100, 100) != 72:
         lines.append(
             f"FAIL  stall skip grammaticus "

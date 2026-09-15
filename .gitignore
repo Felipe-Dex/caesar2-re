@@ -8,6 +8,9 @@
 images/*.png
 images/*.PNG
 
+# Local retail WAV copies for host SFX (do not commit / publish)
+/wav/
+
 # Local RAW audio previews (do not commit / publish)
 sound/*.wav
 sound/*.WAV

@@ -555,6 +555,7 @@ def scan_city_messages(
     hail: bool = False,
     houses_up: int = 0,
     month_wrapped: bool = False,
+    year_wrapped: bool = False,
     fire_ignited: int = 0,
     rioters_spawned: int = 0,
     attack_spawned: int = 0,
@@ -587,6 +588,13 @@ def scan_city_messages(
         watch.hail_done = True
         if enqueue(sim, _make(eng, "hail", 79)):
             fired.append("hail")
+
+    # 58c87 EAX=0x54 → official slot 83 on Dec→Jan. Same congrat clip as Hail.
+    # Discard seen so a later year wrap can speak again (not once per city).
+    if year_wrapped:
+        watch.seen.discard("year")
+        if enqueue(sim, _make(eng, "year", 83)):
+            fired.append("year")
 
     if peak > watch.peak:
         for gate, name in UNLOCK_LABEL.items():
@@ -1057,8 +1065,32 @@ def selftest() -> list[str]:
     got = scan_city_messages(wrap_sim, tiles3, hail=False, month_wrapped=True)
     if "hail" in got or "fire" in got:
         lines.append(f"FAIL  Dec wrap must not Hail/Fire {got}")
+    elif "year" in got:
+        lines.append(f"FAIL  Jan month wrap must not post [83] {got}")
     else:
         lines.append("ok    year wrap does not Hail or dump Fire Alert")
+    year_sim = SimState(city_only=1, population=0, treasury=12000, month=0)
+    init_city_only_labor(year_sim)
+    got = scan_city_messages(
+        year_sim, tiles3, hail=False, month_wrapped=True, year_wrapped=True
+    )
+    ymsg = peek_message(year_sim)
+    if "year" not in got:
+        lines.append(f"FAIL  Dec->Jan must post New Year [83] {got}")
+    elif "hail" in got or "fire" in got:
+        lines.append(f"FAIL  Dec->Jan dumped Hail/Fire {got}")
+    elif ymsg is None or ymsg.slot != 83 or ymsg.key != "year":
+        lines.append(f"FAIL  New Year message {ymsg}")
+    else:
+        lines.append("ok    New Year [83] on Dec->Jan wrap")
+    pop_message(year_sim)
+    got = scan_city_messages(
+        year_sim, tiles3, hail=False, month_wrapped=True, year_wrapped=True
+    )
+    if "year" not in got:
+        lines.append(f"FAIL  second Dec->Jan must post [83] again {got}")
+    else:
+        lines.append("ok    New Year [83] may fire every year wrap")
 
     sim = SimState(city_only=1, population=20, treasury=-3)
     init_city_only_labor(sim)

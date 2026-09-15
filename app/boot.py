@@ -47,6 +47,7 @@ class BootContext:
     notes: list[str] = field(default_factory=list)
     start_in_map: bool = False
     play_audio: bool = True
+    screen: str = "title"
 
     @property
     def key_ok(self) -> bool:
@@ -94,11 +95,14 @@ def run_boot(
     # 4. miles_init @ 0x11758 — not AIL
     audio_status = "audio skipped (--no-audio)"
     if play_audio and city_only:
-        # City Only opens on the map with Hail. A01.RAW is a boot probe,
-        # not the briefing — playing it here sounds like a promotion sting.
-        audio_status = "city SFX on (no boot RAW / A01 sting)"
+        # City Only opens on the map with Hail. Title music is forum1.xmi
+        # (music_load_xmi 0x12279). A01.RAW is Career [69]+4 mandate VO.
+        audio_status = "city SFX on (no title XMI / no A01 mandate)"
     elif play_audio:
-        audio_status = audio.play_raw_preview(game)
+        audio_status = (
+            f"title music {audio.TITLE_XMI} "
+            f"(music_load_xmi {audio.VA_MUSIC_LOAD_XMI:#x}; no A01 mandate)"
+        )
     notes.append(audio_status)
 
     # 5. smk_play @ 0x5AB3D intro.smk — codec not in-process (ffmpeg remux only)
@@ -120,11 +124,13 @@ def run_boot(
     except (OSError, ValueError) as exc:
         notes.append(f"PL8 decode failed: {exc}")
 
-    # 7. city — New Game (City Only) or SavChunk 13 from a .SAV
+    # 7. city — New Game (City Only) or an explicit .SAV. Title boot does
+    # not auto-pick a save; Load on the menu lists {repo}/sav/ (F4).
     city = CityMap()
     walkers: list[Walker] = []
     sim = SimState()
     start_in_map = False
+    screen = "city" if city_only else "title"
     if city_only:
         from app.new_game import start_city_assignment
 
@@ -134,46 +140,45 @@ def run_boot(
         sim = fresh.sim
         notes.extend(fresh.notes)
         start_in_map = True
-    else:
-        sav_path = sav if sav is not None else city_map.pick_save(game)
-        if sav_path is None:
+    elif sav is not None:
+        sav_path = sav
+        try:
+            sizes = city_map.load_chunk_sizes(game)
+            city = city_map.load_city_from_sav(sav_path, sizes, game=game)
             notes.append(
-                f"city_map: no .SAV — {city.width}x{city.height}x{city_map.TILE_BYTES} "
-                f"zeros @ SavChunk {city_map.SAV_CHUNK} (VA {city_map.GHIDRA_BSS:#x})"
+                f"city_map: {sav_path.name} chunk {city_map.SAV_CHUNK} "
+                f"{city.width}x{city.height}x{city_map.TILE_BYTES} "
+                f"({len(city.id_counts())} tile ids) "
+                f"via {len(sizes)} sequential sizes"
             )
-        else:
             try:
-                sizes = city_map.load_chunk_sizes(game)
-                city = city_map.load_city_from_sav(sav_path, sizes, game=game)
+                walkers = load_walkers_from_sav(sav_path, sizes, game=game)
                 notes.append(
-                    f"city_map: {sav_path.name} chunk {city_map.SAV_CHUNK} "
-                    f"{city.width}x{city.height}x{city_map.TILE_BYTES} "
-                    f"({len(city.id_counts())} tile ids) "
-                    f"via {len(sizes)} sequential sizes"
+                    f"walkers: {sav_path.name} chunk 8 "
+                    f"{len(live_walkers(walkers))} live / {len(walkers)}"
                 )
-                try:
-                    walkers = load_walkers_from_sav(sav_path, sizes, game=game)
-                    notes.append(
-                        f"walkers: {sav_path.name} chunk 8 "
-                        f"{len(live_walkers(walkers))} live / {len(walkers)}"
-                    )
-                except (OSError, ValueError) as exc:
-                    notes.append(f"walkers load failed: {exc}")
-                try:
-                    sim = load_sim_from_sav(sav_path, sizes, game=game)
-                    from app.forum import apply_saved_plebs
-                    from app.messages import seed_watch_from_city
-
-                    apply_saved_plebs(sim, city.tiles)
-                    seed_watch_from_city(sim, city.tiles)
-                    notes.append(
-                        f"city_sim: {sav_path.name} phase={sim.phase:#x} "
-                        f"({sim.date_label}) - Space = one slot then walkers"
-                    )
-                except (OSError, ValueError) as exc:
-                    notes.append(f"city_sim load failed: {exc}")
             except (OSError, ValueError) as exc:
-                notes.append(f"city_map load failed: {exc}")
+                notes.append(f"walkers load failed: {exc}")
+            try:
+                sim = load_sim_from_sav(sav_path, sizes, game=game)
+                from app.forum import apply_saved_plebs
+                from app.messages import seed_watch_from_city
+
+                apply_saved_plebs(sim, city.tiles)
+                seed_watch_from_city(sim, city.tiles)
+                notes.append(
+                    f"city_sim: {sav_path.name} phase={sim.phase:#x} "
+                    f"({sim.date_label}) - Space = one slot then walkers"
+                )
+            except (OSError, ValueError) as exc:
+                notes.append(f"city_sim load failed: {exc}")
+        except (OSError, ValueError) as exc:
+            notes.append(f"city_map load failed: {exc}")
+    else:
+        notes.append(
+            "title_screen: backgrnd.pl8 + C2.ENG menu "
+            "(New City / Load / Options / Quit; Career stub)"
+        )
 
     return BootContext(
         game=game,
@@ -192,4 +197,5 @@ def run_boot(
         notes=notes,
         start_in_map=start_in_map,
         play_audio=play_audio,
+        screen=screen,
     )

@@ -1401,6 +1401,7 @@ def city_sim_phase(
             tiles,
             houses_up=up,
             month_wrapped=wrapped,
+            year_wrapped=year_wrapped,
             fire_ignited=ign,
             rioters_spawned=riot,
             attack_spawned=int(getattr(state, "attack_spawned", 0)),
@@ -2849,7 +2850,29 @@ def selftest() -> list[str]:
         f"next={live[0].next_state if live else -1} n={st.rioters_spawned}"
     )
 
-    from app.city_paint import paint_land_value, service_target_lv
+    from app.city_paint import (
+        cap_housing_plus15,
+        paint_land_value,
+        refresh_land_value,
+        service_target_lv,
+        wipe_lane,
+    )
+
+    def _improved_next_to(neighbor: int) -> tuple[bytearray, int]:
+        tiles = _blank_tiles()
+        hoff = _off(20, 20)
+        tiles[hoff] = 0x8B
+        tiles[hoff + 1] = 0x01
+        tiles[hoff + 10] = 0x0C | 0xC0
+        tiles[hoff + 12] = 1
+        tiles[hoff + 13] = 0x01 | 0x08
+        poff = _off(21, 20)
+        tiles[poff] = neighbor
+        tiles[poff + 1] = FLAG_PAD
+        wipe_lane(tiles, 15)
+        paint_land_value(tiles, 20, 1)
+        cap_housing_plus15(tiles, 20, 1, population=50)
+        return tiles, i8(tiles[hoff + 15])
 
     tiles = _blank_tiles()
     hoff = _off(20, 20)
@@ -2859,25 +2882,33 @@ def selftest() -> list[str]:
     tiles[poff] = 0x7C
     tiles[poff + 1] = FLAG_PAD
     paint_land_value(tiles, 20, 1)
-    plaza_lv = i8(tiles[hoff + 15])
+    plaza_raw = i8(tiles[hoff + 15])
     tiles = _blank_tiles()
     tiles[hoff] = 0x8B
     tiles[hoff + 1] = 0x01
     tiles[poff] = 0x52
     tiles[poff + 1] = FLAG_PAD
     paint_land_value(tiles, 20, 1)
-    road52 = i8(tiles[hoff + 15])
+    road52_raw = i8(tiles[hoff + 15])
     tiles = _blank_tiles()
     tiles[hoff] = 0x8B
     tiles[hoff + 1] = 0x01
     tiles[poff] = 0x58
     tiles[poff + 1] = FLAG_PAD
     paint_land_value(tiles, 20, 1)
-    road58 = i8(tiles[hoff + 15])
-    ok = plaza_lv == 4 and road52 == 0 and road58 == 1
+    road58_raw = i8(tiles[hoff + 15])
+    ok = plaza_raw == 4 and road52_raw == 0 and road58_raw == 1
     lines.append(
         f"plaza FLAG_PAD +4 vs road: {'ok' if ok else 'FAIL'} "
-        f"plaza={plaza_lv} road52={road52} road58={road58}"
+        f"plaza={plaza_raw} road52={road52_raw} road58={road58_raw}"
+    )
+
+    _plaza_tiles, plaza_lv = _improved_next_to(0x7C)
+    _road_tiles, road52 = _improved_next_to(0x52)
+    ok = plaza_lv == road52 + 4 and plaza_lv == 24 and road52 == 20
+    lines.append(
+        f"house next to 0x7C +15 lift vs 0x52: {'ok' if ok else 'FAIL'} "
+        f"plaza={plaza_lv} road52={road52}"
     )
 
     tiles = _blank_tiles()
@@ -2897,6 +2928,27 @@ def selftest() -> list[str]:
     lines.append(
         f"plaza ring acc 32 kept above 20: {'ok' if ok else 'FAIL'} "
         f"+15={ring} target={service_target_lv(ring, 60)}"
+    )
+    ok = service_target_lv(4, 60) == 24 and service_target_lv(0, 60) == 20
+    lines.append(
+        f"service floor keeps plaza +4: {'ok' if ok else 'FAIL'} "
+        f"plaza={service_target_lv(4, 60)} road={service_target_lv(0, 60)}"
+    )
+
+    tiles = _blank_tiles()
+    tiles[hoff] = 0x8B
+    tiles[hoff + 1] = 0x01
+    tiles[hoff + 10] = 0x0C | 0xC0
+    tiles[hoff + 12] = 1
+    tiles[hoff + 13] = 0x01 | 0x08
+    tiles[hoff + 15] = 20
+    tiles[poff] = 0x7C
+    tiles[poff + 1] = FLAG_PAD
+    refresh_land_value(tiles, population=50)
+    ok = i8(tiles[hoff + 15]) == 24
+    lines.append(
+        f"refresh after plaza place lifts +15: {'ok' if ok else 'FAIL'} "
+        f"+15={i8(tiles[hoff + 15])}"
     )
 
     from app.messages import selftest as message_selftest

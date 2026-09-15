@@ -113,6 +113,21 @@ from app.city_overlay import (
     query_place,
 )
 from app.palette import PaletteState, action_for_tool
+from app.title import (
+    ACTION_CAREER,
+    ACTION_LOAD,
+    ACTION_NEW,
+    ACTION_OPTIONS,
+    ACTION_QUIT,
+    LOGO_MS,
+    TitleSession,
+    career_stub_text,
+    click_title,
+    compose_title,
+    load_boot_logos,
+    menu_items,
+    options_report,
+)
 from app.place import (
     DRAW_AQUEDUCT,
     DRAW_GARDEN,
@@ -806,6 +821,11 @@ def show(ctx: BootContext, *, game: Path) -> None:
     from app import assets, audio, city_map
 
     load_overlay_palette(game)
+    # WinMM / pygame must claim the device before Tk, or City Only stays silent.
+    options = HostOptions(sound=bool(getattr(ctx, "play_audio", True)))
+    sfx = audio.SfxPlayer(game, enabled=options.sound)
+    sfx.prepare()
+    title_music = audio.TitleMusic()
     root = tk.Tk()
     root.title("Caesar II — v0")
     root.geometry(f"{SCREEN_W}x{SCREEN_H}")
@@ -830,6 +850,16 @@ def show(ctx: BootContext, *, game: Path) -> None:
 
     map_mode = False
     map_ready = False
+    offmap = "title"
+    title_session = TitleSession()
+    title_items = menu_items(eng=ctx.eng)
+    logo_frames: list[tuple[str, Image.Image]] = []
+    logo_i = -1
+    logo_after: str | None = None
+    if not ctx.start_in_map:
+        logo_frames = load_boot_logos(game)
+        if logo_frames:
+            logo_i = 0
     cam_x = 0
     cam_y = 0
     zoom = 0
@@ -880,8 +910,6 @@ def show(ctx: BootContext, *, game: Path) -> None:
     save_typing = False
     save_picked_this_session = False
     save_slot_name: str | None = None
-    options = HostOptions(sound=bool(getattr(ctx, "play_audio", True)))
-    sfx = audio.SfxPlayer(game, enabled=options.sound)
     city_skill = int(ctx.sim.skill) if getattr(ctx.sim, "city_only", 0) else 2
 
     def _sfx(event: str) -> None:
@@ -1017,9 +1045,18 @@ def show(ctx: BootContext, *, game: Path) -> None:
             _prof_note(t0)
             return
         if not map_mode:
-            frame = compose_frame(
-                ctx, shown, view=None, map_mode=False, extra_alert=extra_alert
-            )
+            if logo_i >= 0 and logo_i < len(logo_frames):
+                frame = _fit(logo_frames[logo_i][1]).convert("RGB")
+            elif offmap == "title":
+                frame = compose_title(
+                    ctx.image, eng=ctx.eng, extra=shown, items=title_items
+                )
+                if menu_report is not None:
+                    frame = blit_menu_report(frame, menu_report)
+            else:
+                frame = compose_frame(
+                    ctx, shown, view=None, map_mode=False, extra_alert=extra_alert
+                )
             _set_layer(well_item, None, "well")
             _set_layer(front_item, None, "front")
             _set_layer(ui_item, frame.convert("RGB"), "ui")
@@ -1467,6 +1504,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
         from app.walkers import drawable_walkers
 
         map_mode = True
+        title_music.stop()
         n_walkers = len(drawable_walkers(ctx.walkers))
         old = world_wh() if map_ready else None
         _ensure_sheets(zoom)
@@ -1477,7 +1515,8 @@ def show(ctx: BootContext, *, game: Path) -> None:
         _invalidate_live()
         if getattr(ctx.sim, "city_only", 0):
             _scan_city_events(hail=hail)
-        blit(map_status(n_walkers, None if zoom in pl8_sheets else None))
+        extra = map_status(n_walkers, None if zoom in pl8_sheets else None)
+        blit(extra)
 
     def _advisor_has_video() -> bool:
         return advisor_clip is not None
@@ -1885,6 +1924,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
         save_picks = None
         save_typed = ""
         save_typing = False
+        title_session.options_open = False
 
     def _open_report(
         report: MenuReport,
@@ -2068,6 +2108,10 @@ def show(ctx: BootContext, *, game: Path) -> None:
         ctx.walkers = walkers
         ctx.sim = sim
         ctx.start_in_map = True
+        ctx.screen = "city"
+        root.title("Caesar II — City Only" if getattr(sim, "city_only", 0) else "Caesar II")
+        title_music.stop()
+        options.music = False
         if getattr(sim, "city_only", 0):
             city_skill = int(sim.skill)
         tool = None
@@ -2113,6 +2157,10 @@ def show(ctx: BootContext, *, game: Path) -> None:
         ctx.walkers = fresh.walkers
         ctx.sim = fresh.sim
         ctx.start_in_map = True
+        ctx.screen = "city"
+        root.title("Caesar II — City Only")
+        title_music.stop()
+        options.music = False
         tool = None
         overlay_id = OVERLAY_GEOGRAPHY
         overlay_flyout = False
@@ -2146,6 +2194,101 @@ def show(ctx: BootContext, *, game: Path) -> None:
             picks=picks,
         )
 
+    def _skip_logos() -> None:
+        nonlocal logo_i, logo_after
+        logo_i = -1
+        if logo_after is not None:
+            try:
+                root.after_cancel(logo_after)
+            except (tk.TclError, ValueError):
+                pass
+            logo_after = None
+
+    def _advance_logo() -> None:
+        nonlocal logo_i, logo_after
+        logo_after = None
+        if logo_i < 0:
+            return
+        logo_i += 1
+        if logo_i >= len(logo_frames):
+            logo_i = -1
+            blit(None)
+            return
+        blit(None)
+        logo_after = root.after(LOGO_MS, _advance_logo)
+
+    def _set_title_music(on: bool) -> str:
+        if on and not map_mode:
+            return title_music.set_enabled(True, game)
+        title_music.stop()
+        return title_music.last_status
+
+    def _open_title_options() -> None:
+        title_session.options_open = True
+        _open_report(options_report(options, eng=ctx.eng))
+
+    def _title_click(x: int, y: int) -> None:
+        if logo_i >= 0:
+            _skip_logos()
+            blit(None)
+            return
+        if menu_report is not None:
+            if report_contains(x, y):
+                if load_picks:
+                    idx = report_line_at(x, y, len(load_picks))
+                    if idx is not None:
+                        dest = load_picks[idx]
+                        _close_report()
+                        _load_sav(dest)
+                    return
+                if title_session.options_open:
+                    idx = report_line_at(x, y, 3)
+                    if idx == 0:
+                        options.music = not options.music
+                        _set_title_music(options.music)
+                    elif idx == 1:
+                        options.sound = not options.sound
+                        sfx.set_enabled(options.sound)
+                        if options.sound:
+                            _sfx("click")
+                    elif idx == 2:
+                        options.animations = not options.animations
+                    if idx is not None and idx != 1:
+                        _sfx("click")
+                    _open_title_options()
+                    return
+                return
+            _close_report()
+            blit(None)
+            return
+        action = click_title(x, y, title_items, eng=ctx.eng)
+        if action is None:
+            return
+        if action == ACTION_NEW:
+            _sfx("click")
+            title_session.apply(ACTION_NEW)
+            _apply_new_city()
+            return
+        if action == ACTION_LOAD:
+            _sfx("click")
+            _apply_load()
+            return
+        if action == ACTION_OPTIONS:
+            _sfx("click")
+            _open_title_options()
+            return
+        if action == ACTION_QUIT:
+            q = _eng_skip(ctx.eng, 9, 0, "Exit to DOS?")
+            if _confirm(q):
+                on_close()
+            return
+        if action == ACTION_CAREER:
+            _sfx("click_no")
+            stub = career_stub_text(ctx.eng)
+            title_session.apply(ACTION_CAREER, stub=stub)
+            blit(stub)
+            return
+
     def clock_step() -> None:
         """sim_tick_due 0x3E4B9 — auto-advance when Speed is not paused.
 
@@ -2163,6 +2306,8 @@ def show(ctx: BootContext, *, game: Path) -> None:
         dt = max(0, min(dt, _MAX_CLOCK_DT_MS))
         sim_after = root.after(TICK_MS, clock_step)
         if not map_mode or forum_state is not None:
+            if not map_mode:
+                title_music.tick()
             return
         from app.sim import on_clock_step, sim_tick_due
         from app.walkers import (
@@ -2172,6 +2317,14 @@ def show(ctx: BootContext, *, game: Path) -> None:
         )
 
         use_realtime_slides()
+        sfx.tick_ambience(
+            ctx.city.tiles,
+            cam_x,
+            cam_y,
+            max(1, win_w - SIDEBAR_W),
+            max(1, win_h - TOP_BAR_H),
+            zoom,
+        )
         n = sim_tick_due(ctx.sim, dt)
         sim_ran = False
         ph = w = None
@@ -2281,7 +2434,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
         blit(map_status(len(drawable_walkers(ctx.walkers))))
 
     def use_pl8(name: str, first_only: bool) -> None:
-        nonlocal map_mode
+        nonlocal map_mode, offmap
         map_mode = False
         try:
             img, path, n = assets.load_pl8_image(game, name, first_only=first_only)
@@ -2291,6 +2444,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
         ctx.image = img
         ctx.image_name = path.name
         ctx.n_sprites = n
+        offmap = "title" if name.lower().startswith("backgrnd") else "debug"
         blit(f"loaded {path.name}")
 
     def _cancel_build() -> bool:
@@ -2361,6 +2515,14 @@ def show(ctx: BootContext, *, game: Path) -> None:
             if _forum_back():
                 return
             if not map_mode:
+                if menu_report is not None:
+                    _close_report()
+                    blit(None)
+                    return
+                if logo_i >= 0:
+                    _skip_logos()
+                    blit(None)
+                    return
                 on_close()
             return
         if _on_save_picker_key(event):
@@ -2369,6 +2531,10 @@ def show(ctx: BootContext, *, game: Path) -> None:
             on_close()
             return
         if not map_mode:
+            if logo_i >= 0 and key not in {"q"}:
+                _skip_logos()
+                blit(None)
+                return
             if key in {"1"}:
                 use_pl8("backgrnd.pl8", first_only=True)
             elif key in {"2"}:
@@ -2672,10 +2838,11 @@ def show(ctx: BootContext, *, game: Path) -> None:
                 return True
             if slot == SLOT_OPTIONS and skip == OPT_MUSIC:
                 options.music = not options.music
+                extra = _set_title_music(options.music)
                 blit(
                     f"{_eng_skip(ctx.eng, 56, 0, 'Music is')} "
                     f"{on_off(ctx.eng, options.music)}"
-                    + (" — XMI not in host" if options.music else "")
+                    + (f" — {extra}" if extra and options.music else "")
                 )
                 return True
             if slot == SLOT_OPTIONS and skip == OPT_SOUND:
@@ -2801,7 +2968,12 @@ def show(ctx: BootContext, *, game: Path) -> None:
             drag = None
             press_on_chrome = True
             return
-        if not map_mode or not map_ready:
+        if not map_mode:
+            pending_click = (event.x, event.y)
+            drag = None
+            press_on_chrome = True
+            return
+        if not map_ready:
             return
         if event.y < TOP_BAR_H or (
             menu_open is not None
@@ -2924,6 +3096,8 @@ def show(ctx: BootContext, *, game: Path) -> None:
         band_cur = None
         press_on_chrome = False
         if not map_mode:
+            if click is not None:
+                _title_click(click[0], click[1])
             return
         if (
             start is not None
@@ -3133,7 +3307,9 @@ def show(ctx: BootContext, *, game: Path) -> None:
     host.bind("<Button-5>", on_wheel)
     def on_close() -> None:
         _stop_advisor_video()
+        title_music.stop()
         sfx.close()
+        _skip_logos()
         if water_after is not None:
             root.after_cancel(water_after)
         if sim_after is not None:
@@ -3145,7 +3321,13 @@ def show(ctx: BootContext, *, game: Path) -> None:
         root.title("Caesar II — City Only")
         show_city_map(reset_cam=True, hail=True)
     else:
-        blit(ctx.audio_status)
+        root.title("Caesar II")
+        if ctx.play_audio:
+            options.music = True
+            ctx.audio_status = title_music.start(game)
+        blit(ctx.audio_status if logo_i < 0 else None)
+        if logo_i >= 0:
+            logo_after = root.after(LOGO_MS, _advance_logo)
     water_after = root.after(WATER_FRAME_MS, on_water)
     sim_after = root.after(TICK_MS, clock_step)
     root.mainloop()
