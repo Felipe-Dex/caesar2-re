@@ -69,7 +69,7 @@ Um Space = **um** slot `[0x1026A8]`, não o dump `0xD6`. Wrap `> 0xD6` avança o
 | **3** | mapa iso + walkers | entra `map_mode` |
 | Space / T | 1 pulso | câmara não muda |
 | E | evolve80 | host-only |
-| A | 2 s `A01.RAW` | |
+| A | off-map debug: 2 s `A01.RAW` (mandate VO — not title) | title music is `forum1.xmi` |
 | setas / arrastar | pan | só no mapa; passo 96/48/24. Com Housing/Roads/Clear o arrasto é borracha, não pan |
 | + − / ] [ / Z / roda | zoom 0/1/2 | PL8 ou scale nearest |
 | Home | recentrar | |

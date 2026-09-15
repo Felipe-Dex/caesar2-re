@@ -95,11 +95,14 @@ def run_boot(
     # 4. miles_init @ 0x11758 — not AIL
     audio_status = "audio skipped (--no-audio)"
     if play_audio and city_only:
-        # City Only opens on the map with Hail. A01.RAW is a boot probe,
-        # not the briefing — playing it here sounds like a promotion sting.
-        audio_status = "city SFX on (no boot RAW / A01 sting)"
+        # City Only opens on the map with Hail. Title music is forum1.xmi
+        # (music_load_xmi 0x12279). A01.RAW is Career [69]+4 mandate VO.
+        audio_status = "city SFX on (no title XMI / no A01 mandate)"
     elif play_audio:
-        audio_status = audio.play_raw_preview(game)
+        audio_status = (
+            f"title music {audio.TITLE_XMI} "
+            f"(music_load_xmi {audio.VA_MUSIC_LOAD_XMI:#x}; no A01 mandate)"
+        )
     notes.append(audio_status)
 
     # 5. smk_play @ 0x5AB3D intro.smk — codec not in-process (ffmpeg remux only)

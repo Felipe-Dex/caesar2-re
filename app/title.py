@@ -373,6 +373,28 @@ def selftest() -> list[str]:
             lines.append(f"ok    boot logos on disk: {', '.join(logos)}")
         else:
             lines.append("ok    boot logos absent (skip splash)")
+        mandate = eng.skip(69, 4) or ""
+        if "fulfilled the mandate" not in mandate.lower():
+            lines.append(f"FAIL  C2.ENG [69]+4 {mandate!r}")
+        else:
+            lines.append("ok    mandate line is C2.ENG [69]+4 (A01.RAW, not title)")
     except (OSError, ValueError, ImportError):
         lines.append("ok    title ENG/PL8 skipped (no install)")
+    from app.advisor_video import advisor_plays_audio
+    from app.audio import MANDATE_RAW, TITLE_XMI, title_boot_audio
+
+    if title_boot_audio(city_only=False, play_audio=True) != TITLE_XMI:
+        lines.append("FAIL  title boot is not forum1.xmi")
+    elif title_boot_audio(city_only=True, play_audio=True) != "city_sfx":
+        lines.append("FAIL  city-only still wants title music")
+    elif MANDATE_RAW[:3].lower() in title_boot_audio(city_only=False, play_audio=True).lower():
+        lines.append("FAIL  A01 mandate still on title boot")
+    else:
+        lines.append("ok    title boot does not start A01/mandate")
+    hail = type("M", (), {"slot": 79, "key": "hail"})()
+    year = type("M", (), {"slot": 83, "key": "year"})()
+    if not advisor_plays_audio(hail) or not advisor_plays_audio(year):
+        lines.append("FAIL  Hail/year must keep mp4 audio")
+    else:
+        lines.append("ok    Hail [79] / New Year [83] still have mp4 audio")
     return lines

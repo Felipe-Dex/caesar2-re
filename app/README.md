@@ -85,7 +85,7 @@ A janela nativa é **640×480** (viewport sobre o canvas iso; já não encolhe o
 - Console: install path, key-file check, the 14 `gfx_load_boot_assets` names, C2.ENG count, boot notes.
 - A **640×480** window (stand-in for VESA `video_init` @ `0x28341`).
 - **Title**: `logo1.pl8` / `logo2.pl8` if present, then decoded `backgrnd.pl8` + `backgrnd.256` via `tools/decode_pl8.py` (not a copy of the format) plus C2.ENG `[38]` menu chrome (`app/title.py`).
-- Optional: **2 seconds** of `A01.RAW` through Windows `winsound` on the title screen only (not Miles, not City Only). City SFX are retail ``.wav`` via pygame/ffplay. Missing audio → skip.
+- Title music is retail ``forum1.xmi`` (``music_load_xmi`` ``0x12279``, after ``intro.smk``). Host converts XMIDI → SMF and plays it through WinMM MCI. ``A01.RAW`` is Career Promotion VO ([69]+4 *You have fulfilled the mandate…*) — **not** played on title. City SFX are retail ``.wav`` via WinMM. Missing audio → skip.
 
 No intro video. `INTRO.SMK` is only verified on disk (`smk_play` @ `0x5AB3D` is a stub; `tools/decode_smk.py` remuxes with ffmpeg, it does not play in-process).
 

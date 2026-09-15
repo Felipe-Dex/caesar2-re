@@ -43,7 +43,9 @@ Pinned play/bind sites (mapped VA):
 
 from __future__ import annotations
 
+import ctypes
 import os
+import struct
 import subprocess
 import sys
 import tempfile
@@ -58,6 +60,14 @@ from app.config import REPO_ROOT, find_file
 RAW_RATE = 22050
 PREVIEW_SECONDS = 2
 PREFERRED_RAW = "A01.RAW"
+# Career Promotion [69]+4 VO ("You have fulfilled the mandate…").
+# raw_name_bank 0x93694 index 0. Not title music.
+MANDATE_RAW = "A01.RAW"
+# c2_main 0x10288 / music_load_xmi 0x12279 — Miles MDI after intro.smk.
+TITLE_XMI = "forum1.xmi"
+VA_BOOT_INTRO_SMK = 0x1027E
+VA_BOOT_TITLE_XMI = 0x1028D
+VA_MUSIC_LOAD_XMI = 0x12279
 _MAX_LIVE = 3
 
 # Event → EXE 8.3 name. Do not map City Only start to A01.
@@ -326,6 +336,213 @@ def play_raw_preview(game: Path, name: str = PREFERRED_RAW) -> str:
     except RuntimeError as exc:
         return f"skip audio: {exc}"
     return f"playing {path.name} ({len(samples)} B @ {RAW_RATE} Hz, async)"
+
+
+def title_boot_audio(*, city_only: bool, play_audio: bool) -> str:
+    """EXE title path: forum1.xmi. Never A01.RAW (mandate / Promotion)."""
+    if not play_audio:
+        return "skip"
+    if city_only:
+        return "city_sfx"
+    return TITLE_XMI
+
+
+def _smf_vlq(value: int) -> bytes:
+    value = max(0, int(value))
+    parts = [value & 0x7F]
+    value >>= 7
+    while value:
+        parts.append((value & 0x7F) | 0x80)
+        value >>= 7
+    parts.reverse()
+    return bytes(parts)
+
+
+def _read_vlq(data: bytes, i: int) -> tuple[int, int]:
+    val = 0
+    while i < len(data):
+        b = data[i]
+        i += 1
+        val = (val << 7) | (b & 0x7F)
+        if b < 0x80:
+            break
+    return val, i
+
+
+def _xmi_evnt(data: bytes) -> bytes | None:
+    idx = data.find(b"EVNT")
+    if idx < 0 or idx + 8 > len(data):
+        return None
+    size = struct.unpack(">I", data[idx + 4 : idx + 8])[0]
+    end = idx + 8 + size
+    if end > len(data):
+        return None
+    return data[idx + 8 : end]
+
+
+def xmi_to_smf(data: bytes) -> bytes:
+    """Miles XMIDI (FORM XDIR / CAT XMID) → SMF type 0 for WinMM sequencer.
+
+    Title boot loads ``forum1.xmi`` via ``music_load_xmi`` ``0x12279``.
+    """
+    evnt = _xmi_evnt(data)
+    if not evnt:
+        raise ValueError("XMI has no EVNT chunk")
+    events: list[tuple[int, bytes]] = []
+    i = 0
+    t = 0
+    running = 0
+    while i < len(evnt):
+        delay = 0
+        while i < len(evnt) and evnt[i] < 0x80:
+            delay += evnt[i]
+            i += 1
+        t += delay
+        if i >= len(evnt):
+            break
+        status = evnt[i]
+        if status < 0x80:
+            if running < 0x80:
+                break
+            status = running
+        else:
+            i += 1
+            running = status
+        kind = status & 0xF0
+        if kind == 0x90:
+            if i + 2 > len(evnt):
+                break
+            note = evnt[i]
+            vel = evnt[i + 1]
+            i += 2
+            dur, i = _read_vlq(evnt, i)
+            events.append((t, bytes((status, note, vel))))
+            if vel:
+                events.append((t + max(dur, 1), bytes((0x80 | (status & 0x0F), note, 0))))
+            continue
+        if kind in (0x80, 0xA0, 0xB0, 0xE0):
+            if i + 2 > len(evnt):
+                break
+            events.append((t, bytes((status, evnt[i], evnt[i + 1]))))
+            i += 2
+            continue
+        if kind in (0xC0, 0xD0):
+            if i >= len(evnt):
+                break
+            events.append((t, bytes((status, evnt[i]))))
+            i += 1
+            continue
+        if status == 0xFF:
+            if i >= len(evnt):
+                break
+            meta = evnt[i]
+            i += 1
+            n, i = _read_vlq(evnt, i)
+            payload = evnt[i : i + n]
+            i += n
+            events.append((t, bytes((0xFF, meta)) + _smf_vlq(n) + payload))
+            if meta == 0x2F:
+                break
+            continue
+        if status in (0xF0, 0xF7):
+            n, i = _read_vlq(evnt, i)
+            payload = evnt[i : i + n]
+            i += n
+            events.append((t, bytes((status,)) + _smf_vlq(n) + payload))
+            continue
+        break
+    events.sort(key=lambda e: e[0])
+    track = bytearray()
+    prev = 0
+    for when, payload in events:
+        track += _smf_vlq(when - prev)
+        track += payload
+        prev = when
+    track += _smf_vlq(0) + b"\xff\x2f\x00"
+    # tempo 500000 µs + PPQN 60 ≈ Miles default
+    head = b"MThd" + struct.pack(">IHHH", 6, 0, 1, 60)
+    return head + b"MTrk" + struct.pack(">I", len(track)) + bytes(track)
+
+
+class TitleMusic:
+    """WinMM MCI sequencer for ``forum1.xmi``. Not waveOut / city SFX."""
+
+    def __init__(self) -> None:
+        self.enabled = False
+        self.path: Path | None = None
+        self._mid: Path | None = None
+        self._open = False
+        self.last_status = "idle"
+
+    def start(self, game: Path) -> str:
+        self.stop()
+        xmi = find_file(game, TITLE_XMI)
+        if xmi is None:
+            self.last_status = f"skip title music: {TITLE_XMI} not found"
+            return self.last_status
+        if sys.platform != "win32":
+            self.last_status = f"skip title music: {TITLE_XMI} (no WinMM)"
+            return self.last_status
+        try:
+            smf = xmi_to_smf(xmi.read_bytes())
+        except (OSError, ValueError) as exc:
+            self.last_status = f"skip title music: {exc}"
+            return self.last_status
+        tmp = Path(tempfile.gettempdir()) / "c2_title.mid"
+        tmp.write_bytes(smf)
+        self._mid = tmp
+        self.path = xmi
+        err, _why = _mci(f'open "{tmp}" type sequencer alias c2title')
+        if err:
+            self.last_status = f"skip title music: mci open {err}"
+            return self.last_status
+        self._open = True
+        err, _why = _mci("play c2title")
+        if err:
+            self.stop()
+            self.last_status = f"skip title music: mci play {err}"
+            return self.last_status
+        self.enabled = True
+        self.last_status = f"title music {xmi.name} (music_load_xmi 0x12279)"
+        return self.last_status
+
+    def stop(self) -> None:
+        self.enabled = False
+        if self._open:
+            _mci("stop c2title")
+            _mci("close c2title")
+            self._open = False
+        self.last_status = "stopped"
+
+    def tick(self) -> None:
+        """edx=1 at the boot call — restart when the sequence ends."""
+        if not self.enabled or not self._open:
+            return
+        err, mode = _mci("status c2title mode")
+        if err or mode != "stopped":
+            return
+        _mci("play c2title from 0")
+
+    def set_enabled(self, on: bool, game: Path | None = None) -> str:
+        if on:
+            if self.enabled and self._open:
+                return self.last_status
+            if game is None:
+                return "skip title music: no install"
+            return self.start(game)
+        self.stop()
+        return "Music is OFF"
+
+
+def _mci(cmd: str) -> tuple[int, str]:
+    if sys.platform != "win32":
+        return 1, "no winmm"
+    try:
+        buf = ctypes.create_unicode_buffer(512)
+        err = int(ctypes.windll.winmm.mciSendStringW(cmd, buf, 511, 0))
+        return err, buf.value
+    except (AttributeError, OSError, ValueError):
+        return 1, "mci failed"
 
 
 def load_pcm(path: Path) -> array | None:
@@ -1047,4 +1264,27 @@ def selftest(game: Path | None = None) -> list[str]:
             lines.append(f"FAIL  Windows SFX backend {backend!r} (want winmm)")
         else:
             lines.append("ok    Windows SFX backend winmm")
+    plan = title_boot_audio(city_only=False, play_audio=True)
+    city_plan = title_boot_audio(city_only=True, play_audio=True)
+    if plan != TITLE_XMI or MANDATE_RAW.split(".")[0].lower() in plan.lower():
+        lines.append(f"FAIL  title boot {plan!r} (want {TITLE_XMI})")
+    elif city_plan != "city_sfx":
+        lines.append(f"FAIL  city-only title plan {city_plan!r}")
+    else:
+        lines.append("ok    title boot forum1.xmi; city-only skip; no A01 mandate")
+    try:
+        from app.config import resolve_game_dir
+
+        g, _why = resolve_game_dir()
+        xmi = find_file(g, TITLE_XMI)
+        if xmi is None:
+            lines.append("ok    forum1.xmi missing (skip convert)")
+        else:
+            smf = xmi_to_smf(xmi.read_bytes())
+            if smf[:4] != b"MThd" or smf[14:18] != b"MTrk":
+                lines.append("FAIL  forum1.xmi did not convert to SMF")
+            else:
+                lines.append("ok    forum1.xmi converts to SMF for WinMM")
+    except (OSError, ValueError, ImportError) as exc:
+        lines.append(f"ok    title XMI convert skipped ({exc})")
     return lines

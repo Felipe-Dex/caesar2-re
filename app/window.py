@@ -825,6 +825,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
     options = HostOptions(sound=bool(getattr(ctx, "play_audio", True)))
     sfx = audio.SfxPlayer(game, enabled=options.sound)
     sfx.prepare()
+    title_music = audio.TitleMusic()
     root = tk.Tk()
     root.title("Caesar II — v0")
     root.geometry(f"{SCREEN_W}x{SCREEN_H}")
@@ -1503,6 +1504,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
         from app.walkers import drawable_walkers
 
         map_mode = True
+        title_music.stop()
         n_walkers = len(drawable_walkers(ctx.walkers))
         old = world_wh() if map_ready else None
         _ensure_sheets(zoom)
@@ -2108,6 +2110,8 @@ def show(ctx: BootContext, *, game: Path) -> None:
         ctx.start_in_map = True
         ctx.screen = "city"
         root.title("Caesar II — City Only" if getattr(sim, "city_only", 0) else "Caesar II")
+        title_music.stop()
+        options.music = False
         if getattr(sim, "city_only", 0):
             city_skill = int(sim.skill)
         tool = None
@@ -2155,6 +2159,8 @@ def show(ctx: BootContext, *, game: Path) -> None:
         ctx.start_in_map = True
         ctx.screen = "city"
         root.title("Caesar II — City Only")
+        title_music.stop()
+        options.music = False
         tool = None
         overlay_id = OVERLAY_GEOGRAPHY
         overlay_flyout = False
@@ -2211,6 +2217,12 @@ def show(ctx: BootContext, *, game: Path) -> None:
         blit(None)
         logo_after = root.after(LOGO_MS, _advance_logo)
 
+    def _set_title_music(on: bool) -> str:
+        if on and not map_mode:
+            return title_music.set_enabled(True, game)
+        title_music.stop()
+        return title_music.last_status
+
     def _open_title_options() -> None:
         title_session.options_open = True
         _open_report(options_report(options, eng=ctx.eng))
@@ -2233,6 +2245,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
                     idx = report_line_at(x, y, 3)
                     if idx == 0:
                         options.music = not options.music
+                        _set_title_music(options.music)
                     elif idx == 1:
                         options.sound = not options.sound
                         sfx.set_enabled(options.sound)
@@ -2293,6 +2306,8 @@ def show(ctx: BootContext, *, game: Path) -> None:
         dt = max(0, min(dt, _MAX_CLOCK_DT_MS))
         sim_after = root.after(TICK_MS, clock_step)
         if not map_mode or forum_state is not None:
+            if not map_mode:
+                title_music.tick()
             return
         from app.sim import on_clock_step, sim_tick_due
         from app.walkers import (
@@ -2823,10 +2838,11 @@ def show(ctx: BootContext, *, game: Path) -> None:
                 return True
             if slot == SLOT_OPTIONS and skip == OPT_MUSIC:
                 options.music = not options.music
+                extra = _set_title_music(options.music)
                 blit(
                     f"{_eng_skip(ctx.eng, 56, 0, 'Music is')} "
                     f"{on_off(ctx.eng, options.music)}"
-                    + (" — XMI not in host" if options.music else "")
+                    + (f" — {extra}" if extra and options.music else "")
                 )
                 return True
             if slot == SLOT_OPTIONS and skip == OPT_SOUND:
@@ -3291,6 +3307,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
     host.bind("<Button-5>", on_wheel)
     def on_close() -> None:
         _stop_advisor_video()
+        title_music.stop()
         sfx.close()
         _skip_logos()
         if water_after is not None:
@@ -3305,6 +3322,9 @@ def show(ctx: BootContext, *, game: Path) -> None:
         show_city_map(reset_cam=True, hail=True)
     else:
         root.title("Caesar II")
+        if ctx.play_audio:
+            options.music = True
+            ctx.audio_status = title_music.start(game)
         blit(ctx.audio_status if logo_i < 0 else None)
         if logo_i >= 0:
             logo_after = root.after(LOGO_MS, _advance_logo)
