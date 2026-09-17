@@ -36,7 +36,9 @@ Or, if that `python` is already on PATH:
 python -m app
 ```
 
-**City Only** (New Game — relva + rio, sem SAV). Abre já no mapa iso. Skill `0…4` (default **2 Normal**, tesouro 12000):
+**Title / menu** (default, no `--city-only`): Sierra `LOGO1.PL8` then Impressions `LOGO2.PL8` if they resolve from the install, then `title_screen` `backgrnd.pl8` + C2.ENG buttons. **Start a New Game** (City Construction Kit) enters the same city as `--new --city-only`. **Load** is the existing `*.sav` / F4 list. **Options** is Music / Sound / Animations. **Quit** asks `Exit to DOS?`. **Campaign?** is listed gray — click shows `[38]+1` (*full campaign game*), it does not start Career.
+
+**City Only** (New Game — relva + rio, sem SAV). Abre já no mapa iso, sem o título. Skill `0…4` (default **2 Normal**, tesouro 12000):
 
 ```text
 python -m app --new --city-only
@@ -45,11 +47,11 @@ python -m app --new --city-only --skill 0 --no-audio
 python -m app --new --city-only --check --no-audio
 ```
 
-Or double-click `city-only.bat` at the repo root (same as `python -m app --new --city-only`).
+Or double-click `game.bat` at the repo root for the title/menu (`python -m app`), or `city-only.bat` to skip into City Only (`python -m app --new --city-only`).
 
-Hail on map enter is text + ``congrat`` talking-head, **muted** (EXE table [79] is ``congrat.smk``; that file’s audio is the promotion fanfare, so Hail stays silent). Pop milestones and New Structure play the same clip **with** audio when Sound is on. Other advisor clips play mp4 audio unless Options Sound is off or you pass ``--no-audio``. Do not copy game mp4s into git.
+Hail on map enter is text + ``congrat`` talking-head **with** audio when Sound is on (EXE table [79] is ``congrat.smk``). Dec→Jan New Year [83] uses the same clip with audio (Annual Summary panel still opens). Pop milestones and New Structure play the same clip with audio. Do **not** play ``A01.RAW`` on City Only start. Other advisor clips play mp4 audio unless Options Sound is off or you pass ``--no-audio``. Do not copy game mp4s into git.
 
-City SFX (place / click / fire / destroy / overlay / forum) play from the retail WAV names when Sound is on. Default ``python -m app --new --city-only`` is **not** muted — you should hear ``place.wav`` / ``poscl.wav`` etc. Mute with Options → Sound or ``--no-audio``. Do **not** play ``A01.RAW`` on City Only start. SFX are one-shot (no loop). Do not copy WAVs into git.
+City SFX (place / click / fire / destroy / overlay / forum) play from the retail WAV names when Sound is on. Default ``python -m app --new --city-only`` is **not** muted — you should hear ``place.wav`` / ``poscl.wav`` etc. Click is ``poscl.wav`` (``miles_init`` ``0x117E4``). City ambience is the EXE proximity mixer (``0x12A8F`` / ``0x12E1E``): occasional one-shots when that building is in the camera well — **not** global loops. The dog is ``gardenb.wav``, only when a **garden** ``0x78–0x7B`` is on-screen (housing does not enable it). Empty new city is silent. Mute with Options → Sound or ``--no-audio``. Do **not** play ``A01.RAW`` on City Only start. One-shots do not loop. Do not copy WAVs into git. Inventory: ``findings/city_ambience.md``.
 
 Plano das fatias seguintes (placement, água, Forum…): `findings/city_only.md`. **Não** há `--career` nesta versão.
 
@@ -82,9 +84,8 @@ A janela nativa é **640×480** (viewport sobre o canvas iso; já não encolhe o
 
 - Console: install path, key-file check, the 14 `gfx_load_boot_assets` names, C2.ENG count, boot notes.
 - A **640×480** window (stand-in for VESA `video_init` @ `0x28341`).
-- **Title art**: decoded `backgrnd.pl8` + `backgrnd.256` via `tools/decode_pl8.py` (not a copy of the format).
-- HUD: path, one `C2.ENG` string (the “Caesar II - Version …” line if present).
-- Optional: **2 seconds** of `A01.RAW` through Windows `winsound` on the title screen only (not Miles, not City Only). City SFX are retail ``.wav`` via pygame/ffplay. Missing audio → skip.
+- **Title**: `logo1.pl8` / `logo2.pl8` if present, then decoded `backgrnd.pl8` + `backgrnd.256` via `tools/decode_pl8.py` (not a copy of the format) plus C2.ENG `[38]` menu chrome (`app/title.py`).
+- Title music is retail ``forum1.xmi`` (``music_load_xmi`` ``0x12279``, after ``intro.smk``). Host converts XMIDI → SMF and plays it through WinMM MCI. ``A01.RAW`` is Career Promotion VO ([69]+4 *You have fulfilled the mandate…*) — **not** played on title. City SFX are retail ``.wav`` via WinMM. Missing audio → skip.
 
 No intro video. `INTRO.SMK` is only verified on disk (`smk_play` @ `0x5AB3D` is a stub; `tools/decode_smk.py` remuxes with ffmpeg, it does not play in-process).
 
@@ -100,13 +101,13 @@ No intro video. `INTRO.SMK` is only verified on disk (`smk_play` @ `0x5AB3D` is 
 | `video_init` 640×480 | `0x28341` | tkinter window |
 | `miles_init` | `0x11758` | skip / optional RAW |
 | `smk_play` `intro.smk` | `0x5AB3D` | file exists? yes/no |
-| `title_screen` | `0x5D37F` | real PL8 blit |
+| `title_screen` | `0x5D37F` | `app/title.py` — `backgrnd.pl8` + C2.ENG menu |
 | `view_frame` / city tick | `0x3CF9A` | **Space / T** → 1 slot `city_sim_phase` then `walkers_tick` |
 | `start_city_assignment` / `city_map_generate` | `0x1049B` / `0x65809` | `--new --city-only` → `app/new_game.py` (Career ainda não) |
 | city map SavChunk 13 | `0xE2FBC` | `city_map.py`: 80×80×20 from `.SAV` **ou** generate; tecla **3** |
 | walkers SavChunk 8 | `0x1107A4` | `walkers.py`: 201×58; overlay after `render_iso` (tecla **3**) |
 
-`--new --city-only` starts a city (grass + river, year −300, treasury from C2MODEL). Paleta `INT_CITY` + placement v1: Tent `0x82` (custo 6), estrada `0x52–0x5C`, ponte `0x4E–0x51` no rio recto (recusa curva), clear em dois passos (`id≥0x82`→`0x05`, rubble→`0x1C`; garden/plaza `0x78–0x7E` flatten `0x1C`). Flyouts Water/Forums/… ainda stub. Houses / forums / industry / people blit from the original PL8s when a `.SAV` is loaded (tecla **3**).
+`--new --city-only` starts a city (grass + river, year −300, treasury from C2MODEL). Paleta `INT_CITY` + flyouts (Water / Forums / Security / Industry / Sanitation / Entert'ment / Worship / Education / Amenities) — Arena `0xE7` leftover. Tent `0x82` (custo 6), estrada `0x52–0x5C`, ponte `0x4E–0x51` no rio recto (recusa curva), clear em dois passos (`id≥0x82`→`0x05`, rubble→`0x1C`; garden/plaza `0x78–0x7E` flatten `0x1C`). Houses / forums / industry / people blit from the original PL8s.
 
 ---
 

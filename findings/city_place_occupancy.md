@@ -2,7 +2,7 @@
 
 Ghidra HTTP was down this pass. Listing from mapped `ghidra_work/c2_x.bin` (Capstone). No EXE in git.
 
-**Host:** `app/place.py` — road skips occupied cells; Clear wipes the N×N from `+5`. Barracks/Reservoir stamp-follow preview unchanged.
+**Host:** `app/place.py` — road skips occupied cells; Clear wipes the N×N from `+5`. N×N stamps (Barracks 0xE4 3×3) refuse the whole footprint if any cell is occupied (including another barracks).
 
 ---
 
@@ -93,7 +93,24 @@ Aqueducts are a **network of 1×1** in this table. Clearing one stub does **not*
 
 ---
 
-## 3. Still TODO (construction rules)
+## 3. N×N stamp occupancy — `FUN_00069cfc` `0x69CFC` / `FUN_00069f26` `0x69F26`
+
+Place dispatcher `0x2FE8E` (`[0x102484]` tool). Baths 2×2 goes through `69cfc`; Barracks `0xE4` (DAT `0x94FE5[0xE4]=9` → N=3) through `69f26`. Both walk **every** cell of the footprint and **refuse the whole stamp** (`[0x102458]=1`) if any tile sets `ebx`:
+
+| Check | VA (2×2 / 3×3) | Occupied when |
+|---|---|---|
+| `+1 & 0x10` | `0x69DA7` / `0x69FD5` | river |
+| **`+1 & 0xE7`** | **`0x69DC0`** | any flag except river `0x10` / bank `0x08` — **Barracks `+1=0x01` hits** |
+| `+0 < 8` and `+3 & 0x80` | `0x69DDB` | leftover |
+| `+7` / `+8` nonzero | `0x69DF9` / `0x69E0C` | walker |
+
+Host bug: `_civic_kind` returned **keep** on same-id tiles and **stamp** on the leftover grass, so an offset 3×3 mixed keep+stamp and `_write_stamp` overwrote the first fort. Adjacent (origin ±3, no shared tiles) is allowed — those 9 cells are all `+1=0`.
+
+`0xCCB03` is a global “already failed” latch in the click dispatcher, not the per-tile test.
+
+---
+
+## 4. Still TODO (construction rules)
 
 - Player click dispatcher that **first** sets pad `+1 |= 0x20` (669C6 only retiles existing pad). Occupancy `≥ 0x7C` is pinned; the exact “refuse whole stroke vs skip cell” UI ding is not.
 - Road cost (city slot still unpinned).

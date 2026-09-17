@@ -845,6 +845,30 @@ def sync_water_building_graphic(
     return False
 
 
+def sync_all_water_building_graphics(
+    tiles: bytearray, *, water_staffed: bool = True
+) -> int:
+    """Restamp fountain/bath +4 after a reservoir ring / charge change.
+
+    EXE place ``0x42ADF`` / ``0x302F5`` and ``FUN_0003fef7`` ``0x40099``
+    only rewrite +4 when ``+13&4`` is already on the tile (6dba2 2×2).
+    Host place of a river-fed ``0xBE`` paints that ring; this pass updates
+    baths that were stamped dry before the tank existed.
+    """
+    if len(tiles) < MAP_W * MAP_H * TILE_STRIDE:
+        return 0
+    n = 0
+    for y in range(MAP_H):
+        for x in range(MAP_W):
+            hid = tiles[_off(x, y)]
+            if ID_FOUNTAIN_LO <= hid <= ID_FOUNTAIN_HI or ID_BATH_LO <= hid <= ID_BATH_HI:
+                if sync_water_building_graphic(
+                    tiles, x, y, water_staffed=water_staffed
+                ):
+                    n += 1
+    return n
+
+
 def is_fortification_id(tid: int) -> bool:
     return tid in FORTIFICATION_IDS
 
@@ -1432,15 +1456,28 @@ def service_target_lv(acc: int, cap: int) -> int:
     block then sits at acc=2 (fountain +2 vs hut stay 0…3) and never leaves
     the first hut. Host writes the service target through the house/insula
     rung (cap ≤ 20) so each month can step toward water/food/entertainment.
-    Above 20, plaza/garden/fountain acc still raise +15 and only clip to cap.
+    Above 20, a 40695 acc below the Improved House floor is added on top of
+    20 so plaza +4 / garden +2 is not discarded (road 0x52 stays at 20).
+    Acc already ≥ 20 (dense plazas) is kept and only clipped to cap.
     """
     if cap <= 20:
         return cap
     if acc < 20:
-        acc = 20
+        acc = 20 + acc
     if acc > cap:
         return cap
     return acc
+
+
+def refresh_land_value(tiles: bytearray, *, population: int = 0) -> int:
+    """Wipe +15, radiate 40695, then write the 40d08 service targets.
+
+    Place/clear of plaza or garden must rebuild immediately. Otherwise Query
+    keeps last month's capped +15=20 until phases 0x52 / 0x76–0x8D run.
+    """
+    wipe_lane(tiles, 15)
+    paint_land_value(tiles, 0, MAP_H)
+    return cap_housing_plus15(tiles, 0, MAP_H, population=population)
 
 
 def cap_housing_plus15(
