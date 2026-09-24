@@ -5,7 +5,9 @@ Impressions) live on the 1.1A tree; ``title_screen`` loads ``backgrnd.256`` +
 ``backgrnd.pl8`` (640×480) then jumps to menu chrome. C2.ENG **[38]** names
 the title items. Career / REGIONS is shown, not hosted.
 
-``--city-only`` never enters this module's screen — it stays ``city``.
+**Start a New Game** opens New Game Options (skill picker ``0x5CF80``,
+Campaign locked to City-only Mode). ``--city-only`` never enters this
+module's screen — it stays ``city`` at host default skill 2 Normal.
 """
 
 from __future__ import annotations
@@ -28,6 +30,7 @@ from app.menus import (
 )
 
 SCREEN_TITLE = "title"
+SCREEN_SKILL = "skill"
 SCREEN_CITY = "city"
 
 ACTION_NEW = "new_city"
@@ -35,25 +38,38 @@ ACTION_LOAD = "load"
 ACTION_OPTIONS = "options"
 ACTION_QUIT = "quit"
 ACTION_CAREER = "career"
+ACTION_START = "start_game"
+ACTION_SKILL_BACK = "skill_back"
 
 # C2.ENG packed run from CITY-ONLY MODE [38].
 ENG_TITLE = 38
+SKIP_CHOOSE = 9
+SKIP_BLURB0 = 10
 SKIP_NEW = 21
+SKIP_ACCEPT = 22
 SKIP_LOAD = 20
 SKIP_QUIT = 23
 SKIP_CAMPAIGN = 15
 SKIP_CAREER_YES = 16
+SKIP_CITY_ONLY = 17
 SKIP_CAREER_STUB = 1
 SKIP_GAME_OPTIONS = 8
+SKIP_OPTIONS_TITLE = 24
+SKIP_START_THIS = 25
+SKIP_SKILL0 = 26
 ENG_FILE = 0
 SKIP_OPTIONS = 5
 ENG_VERSION = 10
+SKILL_COUNT = 5
+SKILL_DEFAULT = 2  # Normal — host --city-only convention (INF default is 0)
 
 # BACKGRND.PL8 is one 640×480 bitmap (no painted buttons). Chrome sits over
 # the lower-left city — same gold outline family as File/Options reports.
 PANEL_X = 28
 PANEL_Y = 248
 PANEL_W = 292
+SKILL_PANEL_Y = 120
+SKILL_PANEL_W = 400
 HEADER_H = 28
 ITEM_H = 22
 ITEM_PAD_X = 10
@@ -83,15 +99,33 @@ class TitleSession:
     """Window-free title/menu state. ``--city-only`` starts on the city."""
 
     screen: str = SCREEN_TITLE
+    skill: int = SKILL_DEFAULT
     toast: str = ""
     options_open: bool = False
 
+    def select_skill(self, n: int) -> int:
+        self.skill = max(0, min(SKILL_COUNT - 1, int(n)))
+        return self.skill
+
     def apply(self, action: str, *, stub: str = "") -> str:
         if action == ACTION_NEW:
-            self.screen = SCREEN_CITY
+            self.screen = SCREEN_SKILL
             self.toast = ""
             self.options_open = False
             return ACTION_NEW
+        if action.startswith("skill_") and action[6:].isdigit():
+            self.select_skill(int(action[6:]))
+            return action
+        if action == ACTION_START:
+            self.screen = SCREEN_CITY
+            self.toast = ""
+            self.options_open = False
+            return ACTION_START
+        if action == ACTION_SKILL_BACK:
+            self.screen = SCREEN_TITLE
+            self.toast = ""
+            self.options_open = False
+            return ACTION_SKILL_BACK
         if action == ACTION_CAREER:
             self.toast = stub or "not in this build"
             return ACTION_CAREER
@@ -197,6 +231,88 @@ def click_title(
     return hit.action
 
 
+def skill_name_label(skill: int, *, eng=None) -> str:
+    n = max(0, min(SKILL_COUNT - 1, int(skill)))
+    fallbacks = ("Novice", "Easy", "Normal", "Hard", "Impossible!")
+    return _eng(eng, ENG_TITLE, SKIP_SKILL0 + n, fallbacks[n])
+
+
+def skill_blurb(skill: int, *, eng=None) -> str:
+    n = max(0, min(SKILL_COUNT - 1, int(skill)))
+    fallbacks = (
+        "A basic introduction to Caesar II",
+        "A simpler challenge",
+        "Our suggested level of difficulty",
+        "More challenging for the experienced designer",
+        "A suicide-pact with city deterioration!",
+    )
+    return _eng(eng, ENG_TITLE, SKIP_BLURB0 + n, fallbacks[n])
+
+
+def skill_items(*, skill: int = SKILL_DEFAULT, eng=None) -> list[TitleItem]:
+    """New Game Options rows. Campaign stays locked on City-only Mode."""
+    rows: list[TitleItem] = []
+    y = SKILL_PANEL_Y + HEADER_H
+    rows.append(
+        TitleItem(
+            ACTION_CAREER,
+            _eng(eng, ENG_TITLE, SKIP_CAMPAIGN, "Campaign?"),
+            (PANEL_X, y, SKILL_PANEL_W, ITEM_H),
+            False,
+        )
+    )
+    y += ITEM_H
+    rows.append(
+        TitleItem(
+            ACTION_CAREER,
+            _eng(eng, ENG_TITLE, SKIP_CITY_ONLY, "NO -- City-only Mode"),
+            (PANEL_X, y, SKILL_PANEL_W, ITEM_H),
+            False,
+        )
+    )
+    y += ITEM_H + 4
+    rows.append(
+        TitleItem(
+            ACTION_NEW,
+            _eng(eng, ENG_TITLE, SKIP_CHOOSE, "Choose a Skill Level"),
+            (PANEL_X, y, SKILL_PANEL_W, ITEM_H),
+            False,
+        )
+    )
+    y += ITEM_H
+    for i in range(SKILL_COUNT):
+        rows.append(
+            TitleItem(
+                f"skill_{i}",
+                skill_name_label(i, eng=eng),
+                (PANEL_X, y, SKILL_PANEL_W, ITEM_H),
+                True,
+            )
+        )
+        y += ITEM_H
+    y += ITEM_H + 4
+    rows.append(
+        TitleItem(
+            ACTION_START,
+            _eng(eng, ENG_TITLE, SKIP_START_THIS, "Start this Game"),
+            (PANEL_X, y, SKILL_PANEL_W, ITEM_H),
+            True,
+        )
+    )
+    return rows
+
+
+def click_skill(
+    x: int, y: int, items: list[TitleItem] | None = None, *,
+    skill: int = SKILL_DEFAULT, eng=None,
+) -> str | None:
+    rows = items if items is not None else skill_items(skill=skill, eng=eng)
+    hit = item_at(x, y, rows, eng=eng)
+    if hit is None or not hit.enabled:
+        return None
+    return hit.action
+
+
 def options_report(options: HostOptions | None = None, *, eng=None) -> MenuReport:
     """In-game Options subset (Music / Sound / Animations). No Career."""
     opt = options if options is not None else HostOptions()
@@ -289,6 +405,89 @@ def compose_title(
     return Image.alpha_composite(base, overlay).convert("RGB")
 
 
+def _title_base(background: Image.Image | None) -> Image.Image:
+    if background is not None:
+        base = background.convert("RGBA")
+        if base.size != (SCREEN_W, SCREEN_H):
+            canvas = Image.new("RGBA", (SCREEN_W, SCREEN_H), (12, 16, 28, 255))
+            src = base
+            if src.width > SCREEN_W or src.height > SCREEN_H:
+                src = src.copy()
+                src.thumbnail((SCREEN_W, SCREEN_H), Image.Resampling.NEAREST)
+            x = (SCREEN_W - src.width) // 2
+            y = (SCREEN_H - src.height) // 2
+            canvas.paste(src, (x, y), src)
+            base = canvas
+        return base
+    return Image.new("RGBA", (SCREEN_W, SCREEN_H), (12, 16, 28, 255))
+
+
+def compose_skill(
+    background: Image.Image | None,
+    *,
+    skill: int = SKILL_DEFAULT,
+    eng=None,
+    extra: str | None = None,
+    items: list[TitleItem] | None = None,
+) -> Image.Image:
+    """New Game Options over BACKGRND — Construction Kit, not Career."""
+    n = max(0, min(SKILL_COUNT - 1, int(skill)))
+    base = _title_base(background)
+    overlay = Image.new("RGBA", (SCREEN_W, SCREEN_H), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    font = ImageFont.load_default()
+    rows = items if items is not None else skill_items(skill=n, eng=eng)
+    hint_h = ITEM_H + 8
+    bottoms = [ry + rh for _a, _l, (rx, ry, rw, rh) in (
+        (it.action, it.label, it.rect) for it in rows
+    )]
+    bottom = max(bottoms) + hint_h + 8 if bottoms else SKILL_PANEL_Y + HEADER_H + 8
+    draw.rectangle(
+        (PANEL_X, SKILL_PANEL_Y, PANEL_X + SKILL_PANEL_W - 1, bottom - 1),
+        fill=_PANEL,
+        outline=_OUTLINE,
+    )
+    header = _eng(eng, ENG_TITLE, SKIP_OPTIONS_TITLE, "New Game Options")
+    draw.text((PANEL_X + ITEM_PAD_X, SKILL_PANEL_Y + 8), header[:42], fill=_GOLD, font=font)
+    selected = f"skill_{n}"
+    for item in rows:
+        rx, ry, rw, rh = item.rect
+        if item.action == selected:
+            draw.rectangle((rx + 2, ry, rx + rw - 3, ry + rh - 1), fill=(40, 56, 36, 220))
+            mark = "> "
+            fill = _GOLD
+        elif item.enabled:
+            mark = "  "
+            fill = _INK
+        else:
+            mark = "  "
+            fill = _DIM
+        draw.text((rx + ITEM_PAD_X, ry + 4), (mark + item.label)[:44], fill=fill, font=font)
+    blurb = skill_blurb(n, eng=eng)
+    start = next((it for it in rows if it.action == ACTION_START), None)
+    if start is not None:
+        bx, by, _bw, _bh = start.rect
+        draw.text(
+            (PANEL_X + ITEM_PAD_X, by - ITEM_H + 2),
+            blurb[:46],
+            fill=_GOLD,
+            font=font,
+        )
+        draw.text(
+            (PANEL_X + ITEM_PAD_X, by + ITEM_H + 2),
+            _eng(eng, ENG_TITLE, SKIP_ACCEPT, "Click right or ENTER to accept")[:46],
+            fill=_DIM,
+            font=font,
+        )
+    if extra:
+        draw.rectangle(
+            (6, SCREEN_H - 28, SCREEN_W - 7, SCREEN_H - 7),
+            fill=(0, 0, 0, 170),
+        )
+        draw.text((14, SCREEN_H - 24), extra[:88], fill=_INK, font=font)
+    return Image.alpha_composite(base, overlay).convert("RGB")
+
+
 def selftest() -> list[str]:
     lines: list[str] = []
     if launch_screen(city_only=False) != SCREEN_TITLE:
@@ -333,10 +532,68 @@ def selftest() -> list[str]:
     session = TitleSession()
     if session.screen != SCREEN_TITLE:
         lines.append("FAIL  session default not title")
-    elif session.apply(ACTION_NEW) != ACTION_NEW or session.screen != SCREEN_CITY:
-        lines.append(f"FAIL  New City stay {session.screen!r}")
+    elif session.apply(ACTION_NEW) != ACTION_NEW or session.screen != SCREEN_SKILL:
+        lines.append(f"FAIL  New Game stay {session.screen!r} (want skill)")
+    elif session.skill != SKILL_DEFAULT:
+        lines.append(f"FAIL  picker default skill {session.skill}")
     else:
-        lines.append("ok    click New City transitions to city")
+        lines.append("ok    title New Game opens difficulty screen before city")
+    if launch_screen(city_only=True) == SCREEN_SKILL:
+        lines.append("FAIL  --city-only visited skill screen")
+    elif launch_screen_from_argv(["--new", "--city-only"]) != SCREEN_CITY:
+        lines.append("FAIL  --city-only argv not city")
+    else:
+        lines.append("ok    --city-only never visits difficulty screen")
+    pick = TitleSession()
+    pick.apply(ACTION_NEW)
+    pick.select_skill(0)
+    if pick.apply(ACTION_START) != ACTION_START or pick.screen != SCREEN_CITY:
+        lines.append(f"FAIL  Start this Game stay {pick.screen!r}")
+    elif pick.skill != 0:
+        lines.append(f"FAIL  Novice not stored {pick.skill}")
+    else:
+        from app.new_game import (
+            RATINGS_SEED_BY_SKILL,
+            TREASURY_BY_SKILL,
+            start_city_assignment,
+        )
+        from app.forum import NEED_AVG_RANK0, NEED_IND_RANK0, rating_need
+
+        fresh = start_city_assignment(skill=pick.skill)
+        if fresh.sim.skill != 0 or fresh.treasury != TREASURY_BY_SKILL[0]:
+            lines.append(
+                f"FAIL  Novice assignment skill={fresh.sim.skill} "
+                f"treasury={fresh.treasury}"
+            )
+        elif fresh.sim.ratings_seed != RATINGS_SEED_BY_SKILL[0]:
+            lines.append(f"FAIL  Novice ratings_seed {fresh.sim.ratings_seed}")
+        else:
+            need_i, need_a = rating_need(fresh.sim)
+            if (need_i, need_a) != (NEED_IND_RANK0[0], NEED_AVG_RANK0[0]):
+                lines.append(f"FAIL  Novice Need {need_i}/{need_a}")
+            else:
+                lines.append(
+                    "ok    choosing Novice sets assignment "
+                    f"(treasury {fresh.treasury}, Need {need_i}/{need_a})"
+                )
+        hard = start_city_assignment(skill=3)
+        if hard.treasury != TREASURY_BY_SKILL[3] or hard.sim.skill != 3:
+            lines.append(f"FAIL  Hard assignment {hard.sim.skill}/{hard.treasury}")
+        else:
+            lines.append(f"ok    Hard assignment treasury {hard.treasury}")
+    rows = skill_items(skill=2)
+    start = next(it for it in rows if it.action == ACTION_START)
+    sx, sy, _sw, _sh = start.rect
+    if click_skill(sx + 4, sy + 4, rows, skill=2) != ACTION_START:
+        lines.append("FAIL  click Start this Game miss")
+    else:
+        lines.append("ok    click Start this Game hits confirm")
+    novice_row = next(it for it in rows if it.action == "skill_0")
+    vx, vy, _vw, _vh = novice_row.rect
+    if click_skill(vx + 4, vy + 4, rows, skill=2) != "skill_0":
+        lines.append("FAIL  click Novice miss")
+    else:
+        lines.append("ok    click Novice selects skill 0")
     stuck = TitleSession()
     stub = career_stub_text()
     if stuck.apply(ACTION_CAREER, stub=stub) != ACTION_CAREER:
@@ -353,6 +610,11 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  title compose {frame.size}")
     else:
         lines.append("ok    title compose 640x480")
+    skill_frame = compose_skill(None, skill=2)
+    if skill_frame.size != (SCREEN_W, SCREEN_H):
+        lines.append(f"FAIL  skill compose {skill_frame.size}")
+    else:
+        lines.append("ok    New Game Options compose 640x480")
 
     try:
         from app.assets import load_eng
@@ -364,10 +626,20 @@ def selftest() -> list[str]:
             lines.append(f"FAIL  C2.ENG [38]+21 {eng.skip(ENG_TITLE, SKIP_NEW)!r}")
         elif eng.skip(ENG_TITLE, SKIP_LOAD) != "Load a Previously Saved Game":
             lines.append(f"FAIL  C2.ENG [38]+20 {eng.skip(ENG_TITLE, SKIP_LOAD)!r}")
+        elif eng.skip(ENG_TITLE, SKIP_OPTIONS_TITLE) != "New Game Options":
+            lines.append(f"FAIL  C2.ENG [38]+24 {eng.skip(ENG_TITLE, SKIP_OPTIONS_TITLE)!r}")
+        elif eng.skip(ENG_TITLE, SKIP_START_THIS) != "Start this Game":
+            lines.append(f"FAIL  C2.ENG [38]+25 {eng.skip(ENG_TITLE, SKIP_START_THIS)!r}")
+        elif eng.skip(ENG_TITLE, SKIP_CHOOSE) != "Choose a Skill Level":
+            lines.append(f"FAIL  C2.ENG [38]+9 {eng.skip(ENG_TITLE, SKIP_CHOOSE)!r}")
+        elif eng.skip(ENG_TITLE, SKIP_CITY_ONLY) != "NO -- City-only Mode":
+            lines.append(f"FAIL  C2.ENG [38]+17 {eng.skip(ENG_TITLE, SKIP_CITY_ONLY)!r}")
+        elif eng.skip(ENG_TITLE, SKIP_SKILL0) != "Novice":
+            lines.append(f"FAIL  C2.ENG [38]+26 {eng.skip(ENG_TITLE, SKIP_SKILL0)!r}")
         elif find_file(game, TITLE_PL8) is None:
             lines.append("FAIL  backgrnd.pl8 missing")
         else:
-            lines.append("ok    C2.ENG title pack + backgrnd.pl8 resolve")
+            lines.append("ok    C2.ENG title pack + New Game Options + backgrnd.pl8")
         logos = [name for name in LOGO_PL8S if find_file(game, name) is not None]
         if logos:
             lines.append(f"ok    boot logos on disk: {', '.join(logos)}")

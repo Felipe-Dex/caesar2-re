@@ -57,7 +57,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Caesar II v0 — default opens the title/menu (backgrnd.pl8). "
-            "--new --city-only skips the title and starts a fresh city. "
+            "Title Start a New Game asks New Game Options (skill 0..4). "
+            "--new --city-only skips title + picker (default skill 2 Normal). "
             "Space/T = one city_sim_phase slot then walkers_tick. "
             "M = skip stubs + one calendar_advance (month++). "
             "Unpaused play/faster auto-advances months (sim_tick_due). "

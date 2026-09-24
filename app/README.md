@@ -36,9 +36,9 @@ Or, if that `python` is already on PATH:
 python -m app
 ```
 
-**Title / menu** (default, no `--city-only`): Sierra `LOGO1.PL8` then Impressions `LOGO2.PL8` if they resolve from the install, then `title_screen` `backgrnd.pl8` + C2.ENG buttons. **Start a New Game** (City Construction Kit) enters the same city as `--new --city-only`. **Load** is the existing `*.sav` / F4 list. **Options** is Music / Sound / Animations. **Quit** asks `Exit to DOS?`. **Campaign?** is listed gray — click shows `[38]+1` (*full campaign game*), it does not start Career.
+**Title / menu** (default, no `--city-only`): Sierra `LOGO1.PL8` then Impressions `LOGO2.PL8` if they resolve from the install, then `title_screen` `backgrnd.pl8` + C2.ENG buttons. **Start a New Game** opens **New Game Options** (`C2.ENG` [38]+24, picker `0x5CF80`) — Construction Kit: Campaign locked to `NO -- City-only Mode`, **Choose a Skill Level** Novice…Impossible! (0…4), then **Start this Game**. That skill is the same byte `start_city_assignment` already reads (treasury / ratings seed / Need / labor / invasions). **Load** is the existing `*.sav` / F4 list. **Options** is Music / Sound / Animations. **Quit** asks `Exit to DOS?`. **Campaign?** is listed gray — click shows `[38]+1` (*full campaign game*), it does not start Career.
 
-**City Only** (New Game — relva + rio, sem SAV). Abre já no mapa iso, sem o título. Skill `0…4` (default **2 Normal**, tesouro 12000):
+**City Only** (`--new --city-only` / `city-only.bat`) skips title **and** the skill picker and opens already on the iso map. Host default skill is **2 Normal** (treasury 12000) — same as `--skill` when omitted. EXE INF default is Novice (0) + City Only; the host skip keeps Normal. Skill `0…4`:
 
 ```text
 python -m app --new --city-only

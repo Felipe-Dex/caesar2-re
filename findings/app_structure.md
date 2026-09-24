@@ -74,7 +74,7 @@ Um Space = **um** slot `[0x1026A8]`, não o dump `0xD6`. Wrap `> 0xD6` avança o
 | + − / ] [ / Z / roda | zoom 0/1/2 | PL8 ou scale nearest |
 | Home | recentrar | |
 
-`--new --city-only` abre **já no mapa** (não no título). `python -m app` sem essa flag abre o título (`app/title.py`, `backgrnd.pl8` + C2.ENG). Load `.SAV` é o botão **Load** / F4; **3** ainda entra no mapa (debug).
+`--new --city-only` abre **já no mapa** (não no título nem no picker de skill; default host **2 Normal**). `python -m app` sem essa flag abre o título (`app/title.py`, `backgrnd.pl8` + C2.ENG); **Start a New Game** vai a New Game Options (`SCREEN_SKILL`, Campaign locked City-only) e só depois `start_city_assignment`. Load `.SAV` é o botão **Load** / F4; **3** ainda entra no mapa (debug).
 
 Não há tecla cidade↔província, Forum, ou “mês inteiro”.
 

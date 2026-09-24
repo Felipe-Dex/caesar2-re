@@ -6,6 +6,9 @@ are not this module. Ghidra HTTP was down; generate was read with Capstone
 on ghidra_work/c2_x.bin (tools/_city_map_generate_disasm.py).
 
     python -m app --new --city-only [--skill 0..4]
+
+    Title Start a New Game (no --city-only) opens New Game Options first
+    and passes the chosen 0..4 here. --city-only keeps host default 2.
 """
 
 from __future__ import annotations

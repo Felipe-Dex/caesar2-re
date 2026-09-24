@@ -119,14 +119,20 @@ from app.title import (
     ACTION_NEW,
     ACTION_OPTIONS,
     ACTION_QUIT,
+    ACTION_SKILL_BACK,
+    ACTION_START,
     LOGO_MS,
+    SCREEN_SKILL,
     TitleSession,
     career_stub_text,
+    click_skill,
     click_title,
+    compose_skill,
     compose_title,
     load_boot_logos,
     menu_items,
     options_report,
+    skill_items,
 )
 from app.place import (
     DRAW_AQUEDUCT,
@@ -1048,9 +1054,17 @@ def show(ctx: BootContext, *, game: Path) -> None:
             if logo_i >= 0 and logo_i < len(logo_frames):
                 frame = _fit(logo_frames[logo_i][1]).convert("RGB")
             elif offmap == "title":
-                frame = compose_title(
-                    ctx.image, eng=ctx.eng, extra=shown, items=title_items
-                )
+                if title_session.screen == SCREEN_SKILL:
+                    frame = compose_skill(
+                        ctx.image,
+                        skill=title_session.skill,
+                        eng=ctx.eng,
+                        extra=shown,
+                    )
+                else:
+                    frame = compose_title(
+                        ctx.image, eng=ctx.eng, extra=shown, items=title_items
+                    )
                 if menu_report is not None:
                     frame = blit_menu_report(frame, menu_report)
             else:
@@ -2145,13 +2159,15 @@ def show(ctx: BootContext, *, game: Path) -> None:
                 continue
         return path.name
 
-    def _apply_new_city() -> None:
+    def _apply_new_city(*, skill: int | None = None) -> None:
         nonlocal city_skill, tool, overlay_id, overlay_flyout, place_dlg
         nonlocal menu_report, forum_state, load_picks, save_picks
         nonlocal save_typed, save_typing
         from app.new_game import start_city_assignment
         from app.walkers import drawable_walkers
 
+        if skill is not None:
+            city_skill = max(0, min(4, int(skill)))
         fresh = start_city_assignment(skill=city_skill, game=game)
         ctx.city = fresh.city
         ctx.walkers = fresh.walkers
@@ -2223,6 +2239,10 @@ def show(ctx: BootContext, *, game: Path) -> None:
         title_music.stop()
         return title_music.last_status
 
+    def _start_from_skill() -> None:
+        title_session.apply(ACTION_START)
+        _apply_new_city(skill=title_session.skill)
+
     def _open_title_options() -> None:
         title_session.options_open = True
         _open_report(options_report(options, eng=ctx.eng))
@@ -2261,13 +2281,25 @@ def show(ctx: BootContext, *, game: Path) -> None:
             _close_report()
             blit(None)
             return
+        if title_session.screen == SCREEN_SKILL:
+            rows = skill_items(skill=title_session.skill, eng=ctx.eng)
+            action = click_skill(x, y, rows, skill=title_session.skill, eng=ctx.eng)
+            if action is None:
+                return
+            _sfx("click")
+            if action == ACTION_START:
+                _start_from_skill()
+                return
+            title_session.apply(action)
+            blit(None)
+            return
         action = click_title(x, y, title_items, eng=ctx.eng)
         if action is None:
             return
         if action == ACTION_NEW:
             _sfx("click")
             title_session.apply(ACTION_NEW)
-            _apply_new_city()
+            blit(None)
             return
         if action == ACTION_LOAD:
             _sfx("click")
@@ -2523,6 +2555,10 @@ def show(ctx: BootContext, *, game: Path) -> None:
                     _skip_logos()
                     blit(None)
                     return
+                if title_session.screen == SCREEN_SKILL:
+                    title_session.apply(ACTION_SKILL_BACK)
+                    blit(None)
+                    return
                 on_close()
             return
         if _on_save_picker_key(event):
@@ -2534,6 +2570,24 @@ def show(ctx: BootContext, *, game: Path) -> None:
             if logo_i >= 0 and key not in {"q"}:
                 _skip_logos()
                 blit(None)
+                return
+            if title_session.screen == SCREEN_SKILL:
+                if key in {"return", "kp_enter"}:
+                    _sfx("click")
+                    _start_from_skill()
+                    return
+                if key in {"up", "left"}:
+                    title_session.select_skill(title_session.skill - 1)
+                    blit(None)
+                    return
+                if key in {"down", "right"}:
+                    title_session.select_skill(title_session.skill + 1)
+                    blit(None)
+                    return
+                if ch in {"0", "1", "2", "3", "4"}:
+                    title_session.select_skill(int(ch))
+                    blit(None)
+                    return
                 return
             if key in {"1"}:
                 use_pl8("backgrnd.pl8", first_only=True)
@@ -3224,6 +3278,9 @@ def show(ctx: BootContext, *, game: Path) -> None:
             blit(last_extra)
             return
         if not map_mode:
+            if title_session.screen == SCREEN_SKILL and logo_i < 0:
+                _sfx("click")
+                _start_from_skill()
             return
         aborted = band_start is not None
         band_start = None
