@@ -34,6 +34,7 @@ N×N>1×1 = **stamp-follow** (um ghost, commit no mouse-up). 1×1 = rect (como G
 | Palatine | `0xB7` `+4=44,46,49,4D,…53` | 4×4 | 0 | Forums → Palatine (**sem slot C2MODEL único — não debitar**) |
 | Theater | `0xE5` `+3=0x0C` `+4=24,26,25,27` | 2×2 | 300 | Entert'ment → Theater |
 | Odeum | `0xE6` `+4=28,2A,29,2B` | 2×2 | 500 | Entert'ment → Odeum |
+| Arena | `0xE7` `+3=0x0C` `+4=2C,2E,31,2D,30,33,2F,32,34` | 3×3 | 700 | Entert'ment → Arena (EXE tool `0x19`; **not** leftover) |
 | Coliseum | `0xE8` `+4=35,37,3A,36,39,3C,38,3B,3D` | 3×3 | 1000 | Entert'ment → Coliseum |
 | Circus | `0xEB`+`0xEC` `+3=0x14` | **6×3** EW | 1500 | Entert'ment → Circus (um ghost pareado) |
 | C.Maximus | `0xED`+`0xEE` `+3=0x14` | **4×8** NS | 2500 | Entert'ment → C.Maximus |
@@ -56,7 +57,6 @@ Place checks: civic recusa rio / prédio ocupado / (na maior parte) estrada. Pla
 
 | Nome | Porquê |
 |---|---|
-| **Arena `0xE7`** | DAT diz 3×3 e C2MODEL tem custo 700, mas **sem origem SAV / +4**. Flyout fica “leftover”. |
 | Senate | **não** é stamp de cidade |
 | Farms | só província |
 | Housing extras (villa / palace grades) | evolve-only `0x82–0xA1` |

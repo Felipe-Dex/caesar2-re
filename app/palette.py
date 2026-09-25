@@ -3,7 +3,8 @@
 Decoded INT_CITY frames bind content to the picture: sprite 21 bottles
 → Industry (Market / Factory types), sprite 22 vessel+cross → Sanitation
 (Baths / Hospital). HELP.ENG Cty Icn is the same order. Title and items
-stay paired. Arena stays leftover (no SAV origin). Factory opens the
+stay paired. Arena ``0xE7`` is the EXE tool ``0x19`` 3×3 stamp.
+Factory opens the
 goods picker (HELP: eight kinds of Business; C2.ENG [61] Bakery).
 """
 
@@ -17,6 +18,7 @@ from app.city_chrome import SIDEBAR_X, action_for_tool as _chrome_action
 from app.unlocks import POP_UNLOCK, peak_population
 from app.place import (
     TOOL_AQUEDUCT,
+    TOOL_ARENA,
     TOOL_AVENTINE,
     TOOL_BARRACKS,
     TOOL_BASILICA,
@@ -79,6 +81,7 @@ _TOOL_ACTION = {
     TOOL_PALATINE: "forums",
     TOOL_THEATER: "entertainment",
     TOOL_ODEUM: "entertainment",
+    TOOL_ARENA: "entertainment",
     TOOL_COLISEUM: "entertainment",
     TOOL_CIRCUS: "entertainment",
     TOOL_CMAXIMUS: "entertainment",
@@ -114,6 +117,7 @@ _TOOL_HINT = {
     TOOL_PALATINE: "Palatine 0xB7 4×4 (sem débito C2MODEL; stamp-follow)",
     TOOL_THEATER: "Theater 0xE5 2×2 (custo 300; stamp-follow)",
     TOOL_ODEUM: "Odeum 0xE6 2×2 (custo 500; stamp-follow)",
+    TOOL_ARENA: "Arena 0xE7 3×3 (custo 700; stamp-follow)",
     TOOL_COLISEUM: "Coliseum 0xE8 3×3 (custo 1000; stamp-follow)",
     TOOL_CIRCUS: "Circus 0xEB+0xEC 6×3 (custo 1500; um ghost pareado)",
     TOOL_CMAXIMUS: "C.Maximus 0xED+0xEE 4×8 (custo 2500; um ghost pareado)",
@@ -180,7 +184,7 @@ _FLYOUTS: dict[str, tuple[FlyoutItem, ...]] = {
     "entertainment": (
         FlyoutItem("theater", "Theater", TOOL_THEATER, _TOOL_HINT[TOOL_THEATER]),
         FlyoutItem("odeum", "Odeum", TOOL_ODEUM, _TOOL_HINT[TOOL_ODEUM]),
-        FlyoutItem("arena", "Arena", None, "Arena 0xE7 — leftover (DAT 3×3, sem origem SAV / +4)"),
+        FlyoutItem("arena", "Arena", TOOL_ARENA, _TOOL_HINT[TOOL_ARENA]),
         FlyoutItem("coliseum", "Coliseum", TOOL_COLISEUM, _TOOL_HINT[TOOL_COLISEUM]),
         FlyoutItem("circus", "Circus", TOOL_CIRCUS, _TOOL_HINT[TOOL_CIRCUS]),
         FlyoutItem("cmaximus", "C.Maximus", TOOL_CMAXIMUS, _TOOL_HINT[TOOL_CMAXIMUS]),
@@ -486,10 +490,11 @@ def selftest() -> list[str]:
         lines.append("ok    Aventine escolhe 0xAF")
     r = pal.click_grid("entertainment", (478, 300, 30, 24))
     r = pal.click_item("arena")
-    if r.tool is not None or "leftover" not in r.message or pal.open != "entertainment":
+    if r.tool != TOOL_ARENA or pal.open is not None:
         lines.append(f"FAIL  arena {r.message} open={pal.open}")
     else:
-        lines.append("ok    Arena permanece leftover")
+        lines.append("ok    Arena escolhe 0xE7")
+    r = pal.click_grid("entertainment", (478, 300, 30, 24))
     r = pal.click_item("circus")
     if r.tool != TOOL_CIRCUS or pal.open is not None:
         lines.append(f"FAIL  circus {r.tool} open={pal.open}")
