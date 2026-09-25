@@ -107,7 +107,7 @@ _TOOL_HINT = {
     TOOL_WELL: "Well 0xD7 (rect 1×1; custo 20)",
     TOOL_FOUNTAIN: "Fountain 0xDD (rect 1×1; custo 15)",
     TOOL_GARDEN: "Gardens 0x78–0x7B LUT 0x93FCC (rect; custo 3)",
-    TOOL_PLAZA: "Plaza 0x7C (rect 1×1; custo 12; precisa de estrada)",
+    TOOL_PLAZA: "Plaza 0x7C (rect 1×1; custo 12; relva ou estrada)",
     TOOL_PREFECTURE: "Praefecture 0xE3 +3=0x80 +4=0x50 (custo 100)",
     TOOL_TOWER: "Tower 0xBF (rect 1×1; custo 75)",
     TOOL_BARRACKS: "Barracks 0xE4 3×3 (custo 400; um stamp, fantasma segue o rato)",

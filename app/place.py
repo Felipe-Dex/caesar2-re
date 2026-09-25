@@ -70,7 +70,8 @@ walker — same-id 0xE4 is occupied, not a join). Circus 6×3 EW (0xEB+0xEC) / 3
 (0xE9+0xEA) and C.Maximus 4×8 / 8×4 are one paired ghost — odd facing
 swaps the long axis. Paint remaps +4 along that W×H at facing 1–3
 (leftover pair at odd facing) so extra_rows still meet after rotate.
-Plaza is 1×1 rect on/next to a road. Wall is a road-style
+Plaza is 1×1 rect on grass (EXE ``FUN_00068ad9`` ``+0 < 0x1E``)
+or on a road (host keep). Wall is a road-style
 line (gate when the line hits a road) and retires ``0xC1``–``0xCA``
 from neighbours (wall / gate / tower).
 
@@ -416,7 +417,7 @@ class StampSpec:
     """One city stamp. ``variants`` is raster y then x for the first (or only) block.
 
     ``tid2`` / ``variants2`` are the abutting half (Circus / C.Maximus).
-    ``need_road`` is Plaza: must touch a city road (or sit on one).
+    ``need_road`` is unused: EXE plaza ``68ad9`` has no road gate.
     """
 
     tool: str
@@ -532,7 +533,7 @@ _reg(StampSpec(TOOL_BARRACKS, "Barracks", ID_BARRACKS, 3, 3, COST_BARRACKS, 0x01
 _reg(StampSpec(TOOL_SHRINE, "Shrine", ID_SHRINE, 1, 1, COST_SHRINE, 0x01, 0x00,
                (0x3C,), frozenset(range(0xA2, 0xA6))))
 _reg(StampSpec(TOOL_PLAZA, "Plaza", ID_PLAZA, 1, 1, COST_PLAZA, FLAG_PAD, 0x04,
-               (0x74,), frozenset({0x7C, 0x7D, 0x7E}), need_road=True))
+               (0x74,), frozenset({0x7C, 0x7D, 0x7E})))
 
 _STAMP_SIZE.update({s.tool: s.w for s in _STAMPS.values() if s.w == s.h})
 _PAIR_SIBLING = {
@@ -4300,19 +4301,46 @@ def selftest() -> list[str]:
     _grass_block(2, 6)
     sim.treasury = 12
     r = try_place(city, 2, 6, TOOL_PLAZA, sim)
-    if r.ok:
-        lines.append(f"FAIL  plaza sem estrada {r.message}")
-    else:
-        lines.append("ok    Plaza recusa sem estrada")
-    try_place(city, 3, 6, TOOL_ROAD, None)
-    r = try_place(city, 2, 6, TOOL_PLAZA, sim)
     if not r.ok or city.tiles[city.offset(2, 6)] != ID_PLAZA or sim.treasury != 0:
         lines.append(
-            f"FAIL  plaza junto à estrada {r.message} "
+            f"FAIL  plaza no mato {r.message} "
             f"{city.tiles[city.offset(2, 6)]:#x} treas={sim.treasury}"
         )
     else:
+        lines.append("ok    Plaza 0x7C 1×1 custo 12 no mato (EXE 68ad9 +0<0x1E)")
+    _grass_block(2, 7)
+    try_place(city, 3, 7, TOOL_ROAD, None)
+    sim.treasury = 12
+    r = try_place(city, 2, 7, TOOL_PLAZA, sim)
+    if not r.ok or city.tiles[city.offset(2, 7)] != ID_PLAZA or sim.treasury != 0:
+        lines.append(
+            f"FAIL  plaza junto à estrada {r.message} "
+            f"{city.tiles[city.offset(2, 7)]:#x} treas={sim.treasury}"
+        )
+    else:
         lines.append("ok    Plaza 0x7C 1×1 custo 12 junto à estrada")
+    _grass_block(4, 6)
+    try_place(city, 4, 6, TOOL_ROAD, None)
+    sim.treasury = 12
+    r = try_place(city, 4, 6, TOOL_PLAZA, sim)
+    if not r.ok or city.tiles[city.offset(4, 6)] != ID_PLAZA:
+        lines.append(f"FAIL  plaza na estrada {r.message}")
+    else:
+        lines.append("ok    Plaza 0x7C substitui estrada 0x52")
+    r = try_place(city, 40, 40, TOOL_PLAZA, sim)
+    if r.ok or city.tiles[city.offset(40, 40)] != ID_BARRACKS:
+        lines.append(f"FAIL  plaza no quartel {r.message}")
+    else:
+        lines.append("ok    Plaza recusa quartel 0xE4")
+    _grass_block(5, 6)
+    woff = city.offset(5, 6)
+    city.tiles[woff] = ID_WALL_EW
+    city.tiles[woff + 1] = 0x02
+    r = try_place(city, 5, 6, TOOL_PLAZA, sim)
+    if r.ok or city.tiles[woff] != ID_WALL_EW:
+        lines.append(f"FAIL  plaza na wall {r.message}")
+    else:
+        lines.append("ok    Plaza recusa wall 0xC2")
 
     lv_city = CityMap()
     lv_city.source = "place-plaza-lv"

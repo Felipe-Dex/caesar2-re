@@ -1,0 +1,18 @@
+Plaza place occupancy (c2_x.bin / PS.EXE 1.1A)
+
+Tool [0x102484]==7 → FUN_00068ad9 0x68AD9 (dispatcher 0x3010c).
+Garden is tool 6 → FUN_00068950. Same occupancy, different write.
+
+Per cell (not 69cfc / 69f26):
+  +0 >= 0x1E          → skip (road 0x52, water 0x1E+, buildings, wall, plaza)
+  +0 < 8 and +3 & 0x80 → skip (leftover)
+  else stamp: +0=0x7C, 6985B wipe, +4=0x74, +3=(+3&0xE3)|4, +1 |= 0x20
+
+No FLAG_PAD requirement. No cardinal-road test. Grass 0x14 / meadow 0x1C OK.
+
+Host bug: StampSpec.need_road invented "must touch a road", so isolated
+mato was skip. Road→plaza already worked (allow_road). Barracks/wall
+already skip via tid >= 0x78.
+
+Host keep: allow_road so 0x52 still becomes plaza (user workaround).
+EXE itself skips roads (id >= 0x1E).
