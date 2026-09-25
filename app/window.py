@@ -137,7 +137,9 @@ from app.title import (
 from app.place import (
     DRAW_AQUEDUCT,
     DRAW_GARDEN,
+    DRAW_GATE,
     DRAW_WALL,
+    ID_GATE,
     ID_RUBBLE,
     SPAN_TOOLS,
     STAMP_TOOLS,
@@ -443,7 +445,8 @@ def overlay_span_preview(
         th = iso_tile_size(zoom)[1]
         painted = False
         for tx, ty, tid, variant in piece_rows:
-            spr = building_sprite_image(tid, piece_draw, variant, sheets, zoom=zoom)
+            pdraw = DRAW_GATE if tid == ID_GATE else piece_draw
+            spr = building_sprite_image(tid, pdraw, variant, sheets, zoom=zoom)
             if spr is None:
                 continue
             ghost = _as_ghost(spr, refuse=bool(preview.refuse))
