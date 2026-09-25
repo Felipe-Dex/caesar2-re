@@ -26,7 +26,7 @@ N×N>1×1 = **stamp-follow** (um ghost, commit no mouse-up). 1×1 = rect (como G
 
 | UI | Id | Pé | Custo | Como escolher |
 |---|---|---|---|---|
-| Plaza | `0x7C` (`+1=FLAG_PAD`, `+4=0x74`) | 1×1 rect | 12 | Amenities → Plaza (precisa de estrada / plaza cardinal; pode sentar na estrada) |
+| Plaza | `0x7C` (`+1=FLAG_PAD`, `+4=0x74`) | 1×1 rect | 12 | Amenities → Plaza (`FUN_00068ad9`: `+0 < 0x1E` no mato; host também substitui estrada) |
 | Wall | EW `0xC2` `+4=0x04` · NS `0xC1` `+4=0x00` · `+1=0x02` | linha | 20 | Security → Wall |
 | Gate | `0xC0` `+1=0x24` · NS `+4=0x92` · EW `+4=0x93` | combo | 5 | automático quando a linha de Wall cruza uma estrada (não é botão) |
 | Aventine | `0xAF` `+3=0x04` `+4=04,06,05,07` | 2×2 | 100 | Forums → Aventine |
@@ -51,7 +51,7 @@ N×N>1×1 = **stamp-follow** (um ghost, commit no mouse-up). 1×1 = rect (como G
 
 Housing evolve `0x82–0xA1` **não** são botões da paleta. Aventine / Janiculan / Palatine **são** stamps de Forum (não evolve-only).
 
-Place checks: civic recusa rio / prédio ocupado / (na maior parte) estrada. Plaza `allow_road` + `need_road`. Wall recusa rio e ocupado; na estrada vira Gate. Sem check extra de água além do que o aqueduto / reservatório já fazem.
+Place checks: civic recusa rio / prédio ocupado / (na maior parte) estrada. Plaza `allow_road` (sem `need_road` — EXE `68ad9` carimba relva `+0 < 0x1E`). Wall recusa rio e ocupado; na estrada vira Gate. Sem check extra de água além do que o aqueduto / reservatório já fazem.
 
 ## Still blocked (não inventar)
 
