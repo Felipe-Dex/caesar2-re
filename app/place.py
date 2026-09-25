@@ -7,7 +7,11 @@ and remaps) is refused. A cardinal neighbour that is already a bridge
 (`0x4E–0x51`, river+pad) is refused — 665DF walks only ±0x14 / ±0x640
 and will not flood river→river. Diagonals are allowed. Road will not
 write when ``+0 >= 0x7C`` (``FUN_000669c6`` ``0x66B8D``) — skip that
-cell, rest of the line still stamps. Clear: ``+0 >= 0x82`` (``0x68D2F``)
+cell, rest of the line still stamps — except a Wall ``0xC1``–``0xCA``
+/ existing Gate ``0xC0``: ``0x665DF`` converts ``+1`` wall ``0x02`` to
+tower/pad ``0x24``, then ``0x67201`` writes Gate ``0xC0`` (same stamp
+as wall-on-road; no extra debit — city road has no pinned cost).
+Clear: ``+0 >= 0x82`` (``0x68D2F``)
 → rubble 0x05 (``FUN_000696e8``); garden ``0x78–0x7B`` and plaza/statue
 ``0x7C–0x7E`` share the ``< 0x82`` flatten (``FUN_000697fe`` → grass
 0x1A–0x1D; host 0x1C). Rubble → 0x1C (D.SAV / user). Multi-tile
@@ -72,7 +76,9 @@ swaps the long axis. Paint remaps +4 along that W×H at facing 1–3
 (leftover pair at odd facing) so extra_rows still meet after rotate.
 Plaza is 1×1 rect on/next to a road. Wall is a road-style
 line (gate when the line hits a road) and retires ``0xC1``–``0xCA``
-from neighbours (wall / gate / tower).
+from neighbours (wall / gate / tower). Road on a wall / gate cell
+stamps the same Gate ``0xC0`` (``+1=0x24``, ``+3=0x88``, ``+4`` from
+LUT ``0x94D17``).
 
 Not the full EXE stamp. Tent 6 is observed (sav_c), not C2MODEL. City
 road / aqueduct / Palatine have no pinned city-cost slot — do not invent;
@@ -583,11 +589,25 @@ def is_city_road(city: CityMap, x: int, y: int) -> bool:
     return tid < ID_TERRAIN_MAX and bool(flags & FLAG_PAD)
 
 
+def is_road_to_gate(city: CityMap, x: int, y: int) -> bool:
+    """Wall run / existing Gate — ``0x665DF`` +1&0x02 then ``0x67201`` pad+0x04."""
+    if not in_map(x, y):
+        return False
+    return is_wall_id(city.tiles[city.offset(x, y)])
+
+
+def _is_road_join(city: CityMap, x: int, y: int) -> bool:
+    """Pad gather 0x6ADB0: city road / bridge, or Gate ``0xC0`` (+1 includes 0x20)."""
+    if is_city_road(city, x, y):
+        return True
+    return in_map(x, y) and city.tiles[city.offset(x, y)] == ID_GATE
+
+
 def _road_mask(city: CityMap, x: int, y: int) -> int:
     mask = 0
     bit = 1
     for dx, dy in _CARDINALS:
-        if is_city_road(city, x + dx, y + dy):
+        if _is_road_join(city, x + dx, y + dy):
             mask |= bit
         bit <<= 1
     return mask
@@ -1933,6 +1953,21 @@ def _wall_kind(city: CityMap, x: int, y: int) -> str:
     return "stamp"
 
 
+def _write_gate_cell(
+    city: CityMap,
+    x: int,
+    y: int,
+    pending: set[tuple[int, int]] | None = None,
+    *,
+    horizontal: bool | None = None,
+) -> int:
+    """Gate ``0xC0`` ``+1=0x24`` ``+3=0x88`` — ``0x67201`` @ ``0x67422``."""
+    mask = _fort_join_mask(city, x, y, pending)
+    var = gate_variant_for(mask, horizontal=horizontal)
+    _write_building(city, x, y, ID_GATE, 0x24, 0x88, var)
+    return ID_GATE
+
+
 def _write_wall_cell(
     city: CityMap,
     x: int,
@@ -1941,11 +1976,9 @@ def _write_wall_cell(
     *,
     horizontal: bool | None = None,
 ) -> int:
-    mask = _fort_join_mask(city, x, y, pending)
     if is_city_road(city, x, y) and not is_bridge(city, x, y):
-        var = gate_variant_for(mask, horizontal=horizontal)
-        _write_building(city, x, y, ID_GATE, 0x24, 0x88, var)
-        return ID_GATE
+        return _write_gate_cell(city, x, y, pending, horizontal=horizontal)
+    mask = _fort_join_mask(city, x, y, pending)
     tid = wall_id_for(mask)
     _write_building(city, x, y, tid, 0x02, DRAW_WALL, wall_variant_for(tid))
     return tid
@@ -2121,6 +2154,18 @@ def try_place(
             dirty = [(x, y)]
             dirty.extend(_retile_roads(city, _neighbor_ring(x, y)))
             return PlaceResult(True, f"ponte {bid:#x} em ({x},{y})", dirty=dirty)
+        if is_road_to_gate(city, x, y):
+            _write_gate_cell(city, x, y)
+            dirty = [(x, y)]
+            ring = _neighbor_ring(x, y)
+            dirty.extend(_retile_walls(city, [(x, y), *ring]))
+            dirty.extend(_retile_roads(city, ring))
+            dirty.extend(_retile_towers(city, [(x, y), *ring]))
+            return PlaceResult(
+                True,
+                f"Gate {ID_GATE:#x} em ({x},{y})",
+                dirty=list(dict.fromkeys(dirty)),
+            )
         if is_road_occupied(city, x, y):
             return PlaceResult(False, f"ocupado em ({x},{y}) — +0 >= 0x7C")
         _write_terrain(city, x, y, ID_ROAD_NS, FLAG_PAD)
@@ -2574,6 +2619,8 @@ def _road_line_kind(
                 if (x + dx, y + dy) in pending_bridges:
                     return "skip"
         return "stamp"
+    if is_road_to_gate(city, x, y):
+        return "stamp"
     if is_road_occupied(city, x, y):
         return "skip"
     return "stamp"
@@ -2957,6 +3004,11 @@ def try_place_span(
             done.add((x, y))
     if tool == TOOL_ROAD:
         dirty.extend(_retile_roads(city, list(preview.ok)))
+        wall_ring: list[tuple[int, int]] = list(preview.ok)
+        for x, y in preview.ok:
+            wall_ring.extend(_neighbor_ring(x, y))
+        dirty.extend(_retile_walls(city, wall_ring))
+        dirty.extend(_retile_towers(city, wall_ring))
         return PlaceResult(
             True, f"Estrada {n_ok}{extra}", dirty=list(dict.fromkeys(dirty))
         )
@@ -4413,6 +4465,79 @@ def selftest() -> list[str]:
         )
     else:
         lines.append("ok    Wall 5×5 autotile box still encloses (corners 0xC3–0xC6)")
+
+    treas_before = sim.treasury
+    r_gate = try_place(city, 52, 50, TOOL_ROAD, sim)
+    box_gate = city.tiles[city.offset(52, 50)]
+    box_fl = city.tiles[city.offset(52, 50) + 1]
+    box_var = city.tiles[city.offset(52, 50) + 4]
+    if (
+        not r_gate.ok
+        or box_gate != ID_GATE
+        or box_fl != 0x24
+        or box_var != 0x93
+        or sim.treasury != treas_before
+        or not _inside_walls(city.tiles, 52, 52)
+        or _inside_walls(city.tiles, 48, 52)
+    ):
+        lines.append(
+            f"FAIL  road-on-wall box {r_gate.message} id={box_gate:#x} "
+            f"+1={box_fl:#x}+4={box_var:#x} treas={sim.treasury}"
+        )
+    else:
+        lines.append("ok    road-on-wall 0xC0 +1=0x24 +4=0x93; recinto ainda fecha")
+
+    _grass_block(2, 14, 5, 3)
+    sim.treasury = 200
+    try_place_span(city, 2, 14, 6, 14, TOOL_WALL, sim)
+    grass_id_before = city.tiles[city.offset(4, 16)]
+    r_mid = try_place(city, 4, 14, TOOL_ROAD, sim)
+    r_grass = try_place(city, 4, 16, TOOL_ROAD, sim)
+    mid_id = city.tiles[city.offset(4, 14)]
+    mid_fl = city.tiles[city.offset(4, 14) + 1]
+    grass_id = city.tiles[city.offset(4, 16)]
+    wall_l = city.tiles[city.offset(3, 14)]
+    wall_r = city.tiles[city.offset(5, 14)]
+    prev = preview_span(city, TOOL_ROAD, 4, 14, 4, 16, 0)
+    if (
+        not r_mid.ok
+        or mid_id != ID_GATE
+        or mid_fl != 0x24
+        or not r_grass.ok
+        or not (ID_ROAD_LO <= grass_id <= ID_ROAD_HI)
+        or not is_wall_run_id(wall_l)
+        or not is_wall_run_id(wall_r)
+        or grass_id_before >= ID_TERRAIN_MAX
+    ):
+        lines.append(
+            f"FAIL  road-on-wall/grass {r_mid.message} {r_grass.message} "
+            f"mid={mid_id:#x} grass={grass_id:#x} "
+            f"L={wall_l:#x} R={wall_r:#x}"
+        )
+    else:
+        lines.append("ok    road-on-wall -> Gate 0xC0; road-on-grass still road")
+    if (4, 14) in prev.skip:
+        lines.append(f"FAIL  road preview still skips gate {prev.skip}")
+    else:
+        lines.append("ok    preview estrada no gate não salta")
+
+    _grass_block(16, 14, 1, 5)
+    sim.treasury = 200
+    try_place_span(city, 16, 16, 16, 16, TOOL_WALL, sim)
+    r_span = try_place_span(city, 16, 14, 16, 18, TOOL_ROAD, sim)
+    span_ids = [city.tiles[city.offset(16, y)] for y in range(14, 19)]
+    if (
+        not r_span.ok
+        or span_ids[2] != ID_GATE
+        or not (ID_ROAD_LO <= span_ids[0] <= ID_ROAD_HI)
+        or not (ID_ROAD_LO <= span_ids[4] <= ID_ROAD_HI)
+    ):
+        lines.append(
+            f"FAIL  road span across wall {r_span.message} "
+            f"{[hex(t) for t in span_ids]}"
+        )
+    else:
+        lines.append("ok    arrasto NS: estrada / Gate 0xC0 / estrada")
 
     _grass_block(10, 8, 3, 1)
     sim.treasury = 175
