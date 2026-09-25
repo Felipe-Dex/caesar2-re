@@ -1,0 +1,45 @@
+Arena 0xE7 is a City Construction Kit stamp (PS.EXE 1.1A / c2_x.bin)
+
+Host greyed the flyout because palette.py set tool=None ("leftover, no SAV / +4").
+EXE does not grey it. City Only / Construction Kit pick writes tool 0x19.
+
+Flyout pick 0x32961:
+  [0x102484] = 0x19
+  cost dword [0x967ab] = 700
+  same chain as Theater 0x17 / Odeum 0x18 / Coliseum 0x1a
+
+Place 0x30607 (dispatcher 0x2FE8E, tool [0x102484]==0x19):
+  push 0x2C          +4 base
+  ECX = 0x0C         BUILD1C sheet
+  EBX = 0xE7         id
+  call FUN_00069f26  3x3 occupancy + write (same as Coliseum / Barracks)
+  then OR origin +3 bit7 (same extra as Coliseum 0x30679)
+
+DAT_00094FE5[0xE7] = 9 -> N=3 (0x68D54). Theater/Odeum 0xE5/0xE6 type=4 (2x2).
+
++4 write in 69f26:
+  tile[+4] = pushed_base + LUT_00094230[piece]
+  LUT[0..8] = 0,2,5, 1,4,7, 3,6,8
+  Arena: 2C 2E 31 / 2D 30 33 / 2F 32 34
+  Coliseum base 0x35 uses the same deltas (Achea +4 matches).
+
+C2MODEL [118:124] = 300,500,700,1000,1500,2500 (Theater..C.Maximus).
+EXE cost table 0x967a3..0x967b7 is the same six dwords.
+Arena is NOT in the six FAQ pop unlocks (400/800/1200/1800/2400/4800) —
+those gate Janiculan / Odeum / Library / Palatine / Coliseum / C.Maximus.
+Theater and Arena start unlocked (pop 0).
+
+HELP.ENG: "The ENTERTAINMENT button lets you build Theaters, Arenas and Circuses."
+HELP.ENG Colosseum tip: Arena is the basic blood-sport venue; Coliseum is the
+later upgrade (wider radius). C2.ENG short label [22] is Theater only;
+Arena has no C2.ENG token (same as Odeum / Coliseum).
+
++12: FUN_0004034b @ 0x404a2 cmp eax,0xE7. Rings 9/7/5 extra=2 bits 2-3
+(keep 0xF3 mask 0x0C). Coliseum 0xE8 is the large sibling 11/9/7.
+No performer walkers — coverage is +12 paint (C2 has none).
+
+FUN_00012a8f: 0xE5-0xE6 type 0x13 (culture), 0xE7-0xE8 type 5 (blood-sport).
+
+Occupancy / road / money: same 69f26 / 6e0d6 path as Coliseum.
+Host stamp matches Theater/Odeum rules (refuse river / occupied / road;
+debit 700).

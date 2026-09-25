@@ -2,7 +2,7 @@
 
 User-listed **English UI labels** from the city build menu (three rows). Those labels are the **source of truth for names**. Tile ids come from A/B/C/D saves, FELIPE01 sheet census, and `FUN_00012a8f` `0x12A8F` advisor-type ranges. C2.ENG indices only where the string **equals** the UI word (not a substring of another phrase). No EXE / SAV / PL8 in git.
 
-**Closed names:** **`0x82` Tent** (`sav_c.md`, C2.ENG **[23]**), **`0xBE` Reservoir** (`sav_ab.md`, C2.ENG **[12]**), **`0xB7` Palatine** (Achea D56), **`0xD7` Well** / **`0xE5` Theater** (`sav_d.md`). Grid v3 also closed Garden / Plaza / Fountain stages / Janiculan stages / Market stages (`achea.md` §10). **`0xCB`** = aqueduct cap / stub (20230610 D1). Remaining UNKNOWN: Arena, Fountain 3rd, missing Palatine/Temple states.
+**Closed names:** **`0x82` Tent** (`sav_c.md`, C2.ENG **[23]**), **`0xBE` Reservoir** (`sav_ab.md`, C2.ENG **[12]**), **`0xB7` Palatine** (Achea D56), **`0xD7` Well** / **`0xE5` Theater** (`sav_d.md`). Grid v3 also closed Garden / Plaza / Fountain stages / Janiculan stages / Market stages (`achea.md` §10). **`0xCB`** = aqueduct cap / stub (20230610 D1). **`0xE7` Arena** closed from EXE place (tool `0x19`, DAT 3×3, +4 base `0x2C`) — the “no SAV origin” leftover claim was a host stub, not an EXE grey. Remaining UNKNOWN: Fountain 3rd, missing Palatine/Temple states.
 
 ---
 
@@ -206,12 +206,11 @@ Pause (or save before sim phase `0x51`) so the river `+13` wrap does not muddy t
 
 **Highest leverage** (names still UNKNOWN):
 
-1. **Arena** — pair-2 small **`0xE7`** (Coliseum is `0xE8`).
-2. **Fountain 3rd** — leftover in type 8 is **`0xDB`** (`0xDD`/`0xDC`/`0xDE` named).
-3. **Well siblings** — `0xD8–0xDA` (same type `0x0F` / +13 `0x02` painter; **not** named).
-4. **Missing other 3rd/1st states** — Janiculan `0xB5`?, Palatine `0xB6`/`0xB8`, Temple `0xA9`. Baths `0xE1` and Market `0xFC` closed on 20230610.
+1. **Fountain 3rd** — leftover in type 8 is **`0xDB`** (`0xDD`/`0xDC`/`0xDE` named).
+2. **Well siblings** — `0xD8–0xDA` (same type `0x0F` / +13 `0x02` painter; **not** named).
+3. **Missing other 3rd/1st states** — Janiculan `0xB5`?, Palatine `0xB6`/`0xB8`, Temple `0xA9`. Baths `0xE1` and Market `0xFC` closed on 20230610.
 
-Already done: empty→**Reservoir** (`0xBE`), empty→**Tent** (`0x82`), D.SAV→**Well `0xD7`** / **Theater `0xE5`**. Grid v3 closed Palatine `0xB7`, Garden `0x78–0x7B`, Plaza `0x7C–0x7E`, Road=terrain+pad, Fountain/Janiculan/Market/Baths stages, Grammaticus `0xF3`, Rhetor `0xF4`, Odeum `0xE6`, Factory `0xFA`.
+Already done: empty→**Reservoir** (`0xBE`), empty→**Tent** (`0x82`), D.SAV→**Well `0xD7`** / **Theater `0xE5`**. Grid v3 closed Palatine `0xB7`, Garden `0x78–0x7B`, Plaza `0x7C–0x7E`, Road=terrain+pad, Fountain/Janiculan/Market/Baths stages, Grammaticus `0xF3`, Rhetor `0xF4`, Odeum `0xE6`, Factory `0xFA`. **Arena `0xE7`** closed from EXE place (`0x30607` / tool `0x19`), not from a SAV origin.
 
 ---
 
@@ -221,7 +220,7 @@ Already done: empty→**Reservoir** (`0xBE`), empty→**Tent** (`0x82`), D.SAV�
 - Palatine **`0xB7` closed**. Other Palatine grades (`0xB6`/`0xB8`/`0xB9`) unseen.
 - Type-7 leftovers: `0xAE`/`0xB0` (hyp Aventine stages).
 - Well **`0xD7` closed** (D.SAV). `0xD8–0xDA` unseen. `0xBC–0xBD` still leftover type `0x11`. Fountain 3rd unseen (`0xDB` hyp). `0xCB` = aqueduct stub (20230610 D1).
-- Leftover `0xE7` (Arena / pair-2 small). **`0xE9`/`0xEA`** are the second Circus 3×6 (`achea.md` §11; walker **`0xEA`**). Theater **`0xE5` closed**.
+- **Arena `0xE7` closed** (EXE tool `0x19`, DAT type 9 → 3×3, +4 base `0x2C` + LUT `0x94230`). **`0xE9`/`0xEA`** are the second Circus 3×6 (`achea.md` §11; walker **`0xEA`**). Theater **`0xE5` closed**.
 - `0xF1–0xF2` leftover. Zoom / Query are UI only. Clear area stamps **`0x1C`**. Rubble is terrain **`0x05`**.
 
 Do not start a crack session from the drive-letter strings.
