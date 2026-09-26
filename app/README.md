@@ -36,7 +36,7 @@ Or, if that `python` is already on PATH:
 python -m app
 ```
 
-**Title / menu** (default, no `--city-only`): Sierra `LOGO1.PL8` then Impressions `LOGO2.PL8` if they resolve from the install, then `title_screen` `backgrnd.pl8` + C2.ENG buttons. **Start a New Game** opens **New Game Options** (`C2.ENG` [38]+24, picker `0x5CF80`) — Construction Kit: Campaign locked to `NO -- City-only Mode`, **Choose a Skill Level** Novice…Impossible! (0…4), then **Start this Game**. That skill is the same byte `start_city_assignment` already reads (treasury / ratings seed / Need / labor / invasions). **Load** is the existing `*.sav` / F4 list. **Options** is Music / Sound / Animations. **Quit** asks `Exit to DOS?`. **Campaign?** is listed gray — click shows `[38]+1` (*full campaign game*), it does not start Career.
+**Title / menu** (default, no `--city-only`): Sierra `LOGO1.PL8` then Impressions `LOGO2.PL8` if they resolve, then `intro.smk` (gold CAESAR II card + SMK audio), then `title_screen` `backgrnd.pl8` + C2.ENG `[38]` buttons with `forum1.xmi`. **Start a New Game** opens **New Game Options** (`C2.ENG` [38]+24, picker `0x5CF80`) — Construction Kit: Campaign locked to `NO -- City-only Mode`, **Choose a Skill Level** Novice…Impossible! (0…4), then **Start this Game**. That skill is the same byte `start_city_assignment` already reads (treasury / ratings seed / Need / labor / invasions). **Load** is the existing `*.sav` / F4 list. **Options** is Music / Sound / Animations. **Quit** asks `Exit to DOS?`. **Campaign?** is listed gray — click shows `[38]+1` (*full campaign game*), it does not start Career.
 
 **City Only** (`--new --city-only` / `city-only.bat`) skips title **and** the skill picker and opens already on the iso map. Host default skill is **2 Normal** (treasury 12000) — same as `--skill` when omitted. EXE INF default is Novice (0) + City Only; the host skip keeps Normal. Skill `0…4`:
 
@@ -86,10 +86,8 @@ A janela nativa é **640×480** (viewport sobre o canvas iso; já não encolhe o
 
 - Console: install path, key-file check, the 14 `gfx_load_boot_assets` names, C2.ENG count, boot notes.
 - A **640×480** window (stand-in for VESA `video_init` @ `0x28341`).
-- **Title**: `logo1.pl8` / `logo2.pl8` if present, then decoded `backgrnd.pl8` + `backgrnd.256` via `tools/decode_pl8.py` (not a copy of the format) plus C2.ENG `[38]` menu chrome (`app/title.py`).
-- Title music is retail ``forum1.xmi`` (``music_load_xmi`` ``0x12279``, after ``intro.smk``). Host converts XMIDI → SMF and plays it through WinMM MCI. ``A01.RAW`` is Career Promotion VO ([69]+4 *You have fulfilled the mandate…*) — **not** played on title. City SFX are retail ``.wav`` via WinMM. Missing audio → skip.
-
-No intro video. `INTRO.SMK` is only verified on disk (`smk_play` @ `0x5AB3D` is a stub; `tools/decode_smk.py` remuxes with ffmpeg, it does not play in-process).
+- **Title**: Sierra `logo1.pl8` then Impressions `logo2.pl8` if they resolve, then `smk_play` `intro.smk` (gold CAESAR II card — `videos_new/intro.mp4` like other SMKs, else `videos/intro.mp4`, else retail `INTRO.SMK`). After the clip: decoded `backgrnd.pl8` + `backgrnd.256` plus C2.ENG `[38]` menu chrome (`app/title.py`).
+- Gold-card audio is the intro SMK/mp4 track (smackaud). ``forum1.xmi`` (``music_load_xmi`` ``0x12279``) starts only on the BACKGRND `[38]` menu. Host converts that XMIDI → SMF for WinMM MCI. ``title.xmi`` is not in the EXE. ``cityprov.xmi`` is city/province. ``A01.RAW`` is Career Promotion VO ([69]+4 *You have fulfilled the mandate…*) — **not** played on boot. City SFX are retail ``.wav`` via WinMM. Missing audio → skip.
 
 ---
 
@@ -102,8 +100,8 @@ No intro video. `INTRO.SMK` is only verified on disk (`smk_play` @ `0x5AB3D` is 
 | `gfx_load_boot_assets` | `0x10E89` | verify 14 names; decode only title / CITYFIXT |
 | `video_init` 640×480 | `0x28341` | tkinter window |
 | `miles_init` | `0x11758` | skip / optional RAW |
-| `smk_play` `intro.smk` | `0x5AB3D` | file exists? yes/no |
-| `title_screen` | `0x5D37F` | `app/title.py` — `backgrnd.pl8` + C2.ENG menu |
+| `smk_play` `intro.smk` | `0x5AB3D` | `videos_new/intro.mp4` / `videos/intro.mp4` / retail SMK; SMK audio on the gold card |
+| `title_screen` | `0x5D37F` | `app/title.py` — `backgrnd.pl8` + C2.ENG `[38]`; `forum1.xmi` |
 | `view_frame` / city tick | `0x3CF9A` | **Space / T** → 1 slot `city_sim_phase` then `walkers_tick` |
 | `start_city_assignment` / `city_map_generate` | `0x1049B` / `0x65809` | `--new --city-only` → `app/new_game.py` (Career ainda não) |
 | city map SavChunk 13 | `0xE2FBC` | `city_map.py`: 80×80×20 from `.SAV` **ou** generate; tecla **3** |

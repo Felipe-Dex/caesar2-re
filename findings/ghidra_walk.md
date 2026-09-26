@@ -40,10 +40,10 @@ Watcom register args (EAX/EDX/EBX/ECX). Ghidra’s decompiler often **drops** th
 | SFX heap | `sfx_try_alloc` `0x13546` | Optional bank. `FUN_0001359E` is a stub `return 1`. OOM → `Not enough free memory to run Caesar2.` + `exit_`. |
 | Zoom + scan LUT | `zoom_set_params` `0x29601`, `video_build_scan_lut` `0x29529` | Zoom 0/1/2 tile metrics; 640×480 / 16 grid. |
 | Profile | `load_caesar2_inf` `0x703E0` | `open_("caesar2.inf")`. |
-| Prepare video | `video_prepare_smk` `0x59C87` | Palette + fade/clear. Ghidra “noreturn” on `video_blit_dirty` is **false** (that fn returns). |
-| **Intro** | **`smk_play` `0x5AB3D`** | Call site `0x10279`: `mov eax, "intro.smk"`. Loop until done / skip. |
-| **Music** | **`music_load_xmi` `0x12279`** | Next: `edx=1`, `eax="forum1.xmi"`. |
-| **Title** | **`title_screen` `0x5D37F`** | `load_file("backgrnd.256")` + `backgrnd.pl8` (640×480), then `jmp 0x5AFC6` (menu chrome). |
+| Prepare + logos | `video_prepare_smk` `0x59C87` | Sierra `logo1.pl8` (`0x59C9A`) then Impressions `logo2.pl8` (`0x59CC4`). No XMI. |
+| **Intro card** | **`smk_play` `0x5AB3D`** | Call site `0x10279`: `mov eax, "intro.smk"`. Gold CAESAR II relief (640×480). Audio is **SMK smackaud**, not an XMI (`title.xmi` is not in the EXE; `cityprov.xmi` is city/province). |
+| **Menu music** | **`music_load_xmi` `0x12279`** | **After** intro: `edx=1`, `eax="forum1.xmi"`. Same load again at `0x103CE` when returning to the menu. |
+| **Title menu** | **`title_screen` `0x5D37F`** | `load_file("backgrnd.256")` + `backgrnd.pl8` (640×480), then `jmp 0x5AFC6` (C2.ENG **[38]** chrome). |
 | Title input | `title_input_wait` `0x2E7B1` | Spin until `[0xC459C]==1` (click / key). |
 | **Outer loop** | `while ([0xCCAFF7]==0)` | Quit flag. See modes below. |
 | Shutdown | `0x59C86` (nop), `0x703A5`, `0x135A3`, `0x1358A`, handle free, `0x283B6` | Then return to `exit_`. |

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pin title boot files + music_load_xmi forum1.xmi (not A01 mandate).
+"""Pin boot: intro.smk SMK audio on the gold card; forum1.xmi on BACKGRND.
 
 Read-only vs PS.EXE / c2_x.bin. Ghidra HTTP down — Capstone + strings.
 """
@@ -37,7 +37,7 @@ def main() -> int:
     img, src = load_image()
     print(f"image {src} len={len(img)}")
     dec = Cs(CS_ARCH_X86, CS_MODE_32)
-    print("==== c2_main intro.smk + forum1.xmi + title_screen ====")
+    print("==== c2_main intro.smk (card) then forum1.xmi (menu) ====")
     for insn in dec.disasm(img[0x10279 - BASE : 0x102A3 - BASE], 0x10279):
         print(
             f"  {insn.address:08x}  {insn.bytes.hex():22s} "
@@ -50,7 +50,21 @@ def main() -> int:
     print(f"raw bank[0] {img[RAW_BANK - BASE : RAW_BANK - BASE + 8]!r}")
     print("A01.RAW is bank index 0 = Career mandate VO, not this boot chain")
 
+    from app.audio import INTRO_AUDIO, TITLE_XMI, intro_card_audio, title_boot_audio
+    from app.advisor_video import resolve_intro_video
+    from app.config import resolve_game_dir
     from app.title import selftest
+
+    print("==== boot plan (card vs menu) ====")
+    print(f"  gold CAESAR II card : {intro_card_audio(city_only=False, play_audio=True)}")
+    print(f"  BACKGRND [38] menu  : {title_boot_audio(city_only=False, play_audio=True)}")
+    print(f"  want card {INTRO_AUDIO} / menu {TITLE_XMI}")
+    try:
+        game, _why = resolve_game_dir()
+        intro = resolve_intro_video(game)
+        print(f"  intro resolve       : {intro}")
+    except (OSError, ValueError):
+        print("  intro resolve       : (no install)")
 
     print("\n==== host title selftest ====")
     failed = 0
@@ -62,7 +76,10 @@ def main() -> int:
 
     print("\n==== host audio (title plan) ====")
     for line in audio_selftest():
-        if "title" in line.lower() or "forum1" in line.lower() or "A01" in line:
+        if any(
+            key in line.lower()
+            for key in ("title", "forum1", "intro", "gold", "a01", "card", "menu")
+        ):
             print(f"  {line}")
             if "FAIL" in line:
                 failed += 1

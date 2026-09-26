@@ -40,7 +40,7 @@ app/
 
 | Superfície | Módulo | EXE |
 |---|---|---|
-| Título (`backgrnd.pl8`) | `assets.pick_boot_image` + `window._fit` | `title_screen` `0x5D37F` |
+| Título (`backgrnd.pl8`) | `assets.pick_boot_image` + `window._fit` | `title_screen` `0x5D37F` after `intro.smk` |
 | Sprite solto (tecla 2) | `assets.load_pl8_image` | debug do host, não é view |
 | Mapa iso 80×80 | `city_map.render_iso` | `city_map_draw` `0x360F7` / terrain `0x361DC` |
 | Pessoas | `walkers.overlay_walkers` | `city_map_draw_walkers` `0x364A0` |
@@ -69,7 +69,7 @@ Um Space = **um** slot `[0x1026A8]`, não o dump `0xD6`. Wrap `> 0xD6` avança o
 | **3** | mapa iso + walkers | entra `map_mode` |
 | Space / T | 1 pulso | câmara não muda |
 | E | evolve80 | host-only |
-| A | off-map debug: 2 s `A01.RAW` (mandate VO — not title) | title music is `forum1.xmi` |
+| A | off-map debug: 2 s `A01.RAW` (mandate VO — not title) | gold card = `intro.smk`; menu = `forum1.xmi` |
 | setas / arrastar | pan | só no mapa; passo 96/48/24. Com Housing/Roads/Clear o arrasto é borracha, não pan |
 | + − / ] [ / Z / roda | zoom 0/1/2 | PL8 ou scale nearest |
 | Home | recentrar | |
@@ -109,7 +109,7 @@ Fonte: `view_modes.md`, `ghidra_walk.md`, `ghidra_sim.md`.
 
 ```
 c2_main 0x10010
-  boot (cfg, gfx, video, Miles, intro.smk, title)
+  boot (cfg, gfx, video, Miles, logo1/2, intro.smk+SMK audio, forum1.xmi + title)
   enter_view_mode 0x3351B          # kind 0 cidade / 1 província / 2 batalha
   loop:
       view_frame 0x3CF9A           # se view_submode==0

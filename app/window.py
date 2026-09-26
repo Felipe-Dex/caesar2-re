@@ -892,6 +892,8 @@ def show(ctx: BootContext, *, game: Path) -> None:
     logo_frames: list[tuple[str, Image.Image]] = []
     logo_i = -1
     logo_after: str | None = None
+    intro_clip = None
+    intro_after: str | None = None
     if not ctx.start_in_map:
         logo_frames = load_boot_logos(game)
         if logo_frames:
@@ -1085,6 +1087,12 @@ def show(ctx: BootContext, *, game: Path) -> None:
         if not map_mode:
             if logo_i >= 0 and logo_i < len(logo_frames):
                 frame = _fit(logo_frames[logo_i][1]).convert("RGB")
+            elif intro_clip is not None:
+                snap = intro_clip.snapshot()
+                if snap is not None:
+                    frame = _fit(snap).convert("RGB")
+                else:
+                    frame = Image.new("RGB", (SCREEN_W, SCREEN_H), (0, 0, 0))
             elif offmap == "title":
                 if title_session.screen == SCREEN_SKILL:
                     frame = compose_skill(
@@ -2312,6 +2320,69 @@ def show(ctx: BootContext, *, game: Path) -> None:
             picks=picks,
         )
 
+    def _stop_intro() -> None:
+        nonlocal intro_clip, intro_after
+        if intro_after is not None:
+            try:
+                root.after_cancel(intro_after)
+            except (tk.TclError, ValueError):
+                pass
+            intro_after = None
+        if intro_clip is not None:
+            intro_clip.close()
+            intro_clip = None
+
+    def _enter_title_menu() -> None:
+        """BACKGRND [38] — music_load_xmi forum1.xmi after intro.smk."""
+        _stop_intro()
+        if ctx.play_audio and options.music:
+            ctx.audio_status = title_music.start(game)
+        blit(ctx.audio_status)
+
+    def _on_intro_tick() -> None:
+        nonlocal intro_after
+        intro_after = None
+        if intro_clip is None:
+            return
+        if intro_clip.finished:
+            _enter_title_menu()
+            return
+        blit(None)
+        intro_after = root.after(
+            max(16, int(getattr(intro_clip, "delay_ms", 83))),
+            _on_intro_tick,
+        )
+
+    def _start_intro() -> None:
+        """smk_play 0x5AB3D intro.smk — gold CAESAR II card, SMK audio."""
+        nonlocal intro_clip, intro_after
+        _stop_intro()
+        from app.advisor_video import (
+            INTRO_H,
+            INTRO_W,
+            AdvisorClip,
+            find_ffmpeg,
+            resolve_intro_video,
+        )
+
+        path = resolve_intro_video(game)
+        if path is None or find_ffmpeg() is None:
+            _enter_title_menu()
+            return
+        clip = AdvisorClip(
+            path, mute=not ctx.play_audio, dest_w=INTRO_W, dest_h=INTRO_H
+        )
+        if not clip.begin():
+            clip.close()
+            _enter_title_menu()
+            return
+        intro_clip = clip
+        ctx.audio_status = (
+            f"intro {path.name} (smk_play 0x5AB3D; SMK audio, not forum1)"
+        )
+        blit(None)
+        intro_after = root.after(clip.delay_ms, _on_intro_tick)
+
     def _skip_logos() -> None:
         nonlocal logo_i, logo_after
         logo_i = -1
@@ -2322,6 +2393,10 @@ def show(ctx: BootContext, *, game: Path) -> None:
                 pass
             logo_after = None
 
+    def _boot_after_logos() -> None:
+        _skip_logos()
+        _start_intro()
+
     def _advance_logo() -> None:
         nonlocal logo_i, logo_after
         logo_after = None
@@ -2330,7 +2405,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
         logo_i += 1
         if logo_i >= len(logo_frames):
             logo_i = -1
-            blit(None)
+            _boot_after_logos()
             return
         blit(None)
         logo_after = root.after(LOGO_MS, _advance_logo)
@@ -2351,8 +2426,10 @@ def show(ctx: BootContext, *, game: Path) -> None:
 
     def _title_click(x: int, y: int) -> None:
         if logo_i >= 0:
-            _skip_logos()
-            blit(None)
+            _boot_after_logos()
+            return
+        if intro_clip is not None:
+            _enter_title_menu()
             return
         if menu_report is not None:
             if report_contains(x, y):
@@ -2655,8 +2732,10 @@ def show(ctx: BootContext, *, game: Path) -> None:
                     blit(None)
                     return
                 if logo_i >= 0:
-                    _skip_logos()
-                    blit(None)
+                    _boot_after_logos()
+                    return
+                if intro_clip is not None:
+                    _enter_title_menu()
                     return
                 if title_session.screen == SCREEN_SKILL:
                     title_session.apply(ACTION_SKILL_BACK)
@@ -2671,8 +2750,10 @@ def show(ctx: BootContext, *, game: Path) -> None:
             return
         if not map_mode:
             if logo_i >= 0 and key not in {"q"}:
-                _skip_logos()
-                blit(None)
+                _boot_after_logos()
+                return
+            if intro_clip is not None and key not in {"q"}:
+                _enter_title_menu()
                 return
             if title_session.screen == SCREEN_SKILL:
                 if key in {"return", "kp_enter"}:
@@ -3388,7 +3469,11 @@ def show(ctx: BootContext, *, game: Path) -> None:
             blit(last_extra)
             return
         if not map_mode:
-            if title_session.screen == SCREEN_SKILL and logo_i < 0:
+            if (
+                title_session.screen == SCREEN_SKILL
+                and logo_i < 0
+                and intro_clip is None
+            ):
                 _sfx("click")
                 _start_from_skill()
             return
@@ -3474,6 +3559,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
     host.bind("<Button-5>", on_wheel)
     def on_close() -> None:
         _stop_advisor_video()
+        _stop_intro()
         title_music.stop()
         sfx.close()
         _skip_logos()
@@ -3491,10 +3577,11 @@ def show(ctx: BootContext, *, game: Path) -> None:
         root.title("Caesar II")
         if ctx.play_audio:
             options.music = True
-            ctx.audio_status = title_music.start(game)
-        blit(ctx.audio_status if logo_i < 0 else None)
         if logo_i >= 0:
+            blit(None)
             logo_after = root.after(LOGO_MS, _advance_logo)
+        else:
+            _start_intro()
     water_after = root.after(WATER_FRAME_MS, on_water)
     sim_after = root.after(TICK_MS, clock_step)
     root.mainloop()

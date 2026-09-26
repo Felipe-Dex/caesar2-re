@@ -66,11 +66,18 @@ PREFERRED_RAW = "A01.RAW"
 # Career Promotion [69]+4 VO ("You have fulfilled the mandate…").
 # raw_name_bank 0x93694 index 0. Not title music.
 MANDATE_RAW = "A01.RAW"
-# c2_main 0x10288 / music_load_xmi 0x12279 — Miles MDI after intro.smk.
+# Gold CAESAR II card is intro.smk (smk_play 0x5AB3D @ 0x10279). Audio is
+# SMK smackaud, not an XMI. title.xmi is not in the EXE. cityprov.xmi is
+# city/province (edx=0), not this card. A01.RAW is Career mandate VO.
+INTRO_AUDIO = "intro.smk"
+# c2_main 0x10288 / music_load_xmi 0x12279 — Miles MDI AFTER intro.smk,
+# with title_screen 0x5D37F BACKGRND.PL8 + C2.ENG [38].
 TITLE_XMI = "forum1.xmi"
 VA_BOOT_INTRO_SMK = 0x1027E
 VA_BOOT_TITLE_XMI = 0x1028D
 VA_MUSIC_LOAD_XMI = 0x12279
+VA_VIDEO_PREPARE = 0x59C87
+VA_TITLE_SCREEN = 0x5D37F
 _MAX_LIVE = 3
 
 # Event → EXE 8.3 name. Do not map City Only start to A01.
@@ -386,8 +393,17 @@ def play_raw_preview(game: Path, name: str = PREFERRED_RAW) -> str:
     return f"playing {path.name} ({len(samples)} B @ {RAW_RATE} Hz, async)"
 
 
+def intro_card_audio(*, city_only: bool, play_audio: bool) -> str:
+    """Gold CAESAR II still: intro.smk smackaud. Not forum1 / cityprov / A01."""
+    if not play_audio:
+        return "skip"
+    if city_only:
+        return "city_sfx"
+    return INTRO_AUDIO
+
+
 def title_boot_audio(*, city_only: bool, play_audio: bool) -> str:
-    """EXE title path: forum1.xmi. Never A01.RAW (mandate / Promotion)."""
+    """BACKGRND [38] menu: forum1.xmi. Never A01.RAW (mandate / Promotion)."""
     if not play_audio:
         return "skip"
     if city_only:
@@ -431,7 +447,8 @@ def _xmi_evnt(data: bytes) -> bytes | None:
 def xmi_to_smf(data: bytes) -> bytes:
     """Miles XMIDI (FORM XDIR / CAT XMID) → SMF type 0 for WinMM sequencer.
 
-    Title boot loads ``forum1.xmi`` via ``music_load_xmi`` ``0x12279``.
+    BACKGRND menu loads ``forum1.xmi`` via ``music_load_xmi`` ``0x12279``.
+    The gold CAESAR II card is ``intro.smk`` audio, not this XMI.
     """
     evnt = _xmi_evnt(data)
     if not evnt:
@@ -513,7 +530,7 @@ def xmi_to_smf(data: bytes) -> bytes:
 
 
 class TitleMusic:
-    """WinMM MCI sequencer for ``forum1.xmi``. Not waveOut / city SFX."""
+    """WinMM MCI sequencer for BACKGRND-menu ``forum1.xmi``. Not intro SMK."""
 
     def __init__(self) -> None:
         self.enabled = False
@@ -1337,14 +1354,20 @@ def selftest(game: Path | None = None) -> list[str]:
             lines.append(f"FAIL  Windows SFX backend {backend!r} (want winmm)")
         else:
             lines.append("ok    Windows SFX backend winmm")
+    card = intro_card_audio(city_only=False, play_audio=True)
     plan = title_boot_audio(city_only=False, play_audio=True)
     city_plan = title_boot_audio(city_only=True, play_audio=True)
-    if plan != TITLE_XMI or MANDATE_RAW.split(".")[0].lower() in plan.lower():
-        lines.append(f"FAIL  title boot {plan!r} (want {TITLE_XMI})")
+    if card != INTRO_AUDIO or card == TITLE_XMI:
+        lines.append(f"FAIL  intro card {card!r} (want {INTRO_AUDIO})")
+    elif plan != TITLE_XMI or MANDATE_RAW.split(".")[0].lower() in plan.lower():
+        lines.append(f"FAIL  title menu {plan!r} (want {TITLE_XMI})")
     elif city_plan != "city_sfx":
         lines.append(f"FAIL  city-only title plan {city_plan!r}")
     else:
-        lines.append("ok    title boot forum1.xmi; city-only skip; no A01 mandate")
+        lines.append(
+            "ok    intro card intro.smk; BACKGRND menu forum1.xmi; "
+            "city-only skip; no A01 mandate"
+        )
     try:
         from app.config import resolve_game_dir
 
