@@ -249,6 +249,7 @@ class SimState:
     factory_count: int = 0  # 0xFA origins; av-bill stand-in for [0x10279c]
     goods: bytearray = field(default_factory=lambda: bytearray(768))  # chunk 339
     factory_labor: int = 0  # chunk 140 [0x102b08] — 41b33 labor seed
+    land_value_adj: int = 0  # chunk 139 [0x102ad4] — 40695 housing bonus
     province_links: int = 0  # chunk 276 [0x102714] — 0 = City Only / no farms
     tribute: int = 0  # chunk 157; City Only stays 0
     tax_ytd: int = 0  # [0x102924] raw pop-tax accumulator
@@ -444,6 +445,7 @@ def load_sim_from_sav(
         labor_need=need,
         goods=goods,
         factory_labor=_chunk_i32(chunks, 140, 0),
+        land_value_adj=_chunk_i32(chunks, 139, 0),
         province_links=_chunk_i32(chunks, 276, 0),
         tribute=0 if city_only else _chunk_i32(chunks, 157, 0),
         surplus_last=_chunk_i32(chunks, 33, 0),
@@ -1250,7 +1252,7 @@ def city_sim_phase(
     elif 0x76 <= phase <= 0x7D and can:
         y0, n = _band10(phase, 0x76)
         state.row = y0
-        painted = paint_land_value(tiles, y0, n)
+        painted = paint_land_value(tiles, y0, n, land_adj=state.land_value_adj)
         note = f"lv-written={painted}"
     elif 0x7E <= phase <= 0x8D and can:
         y0, n = _band5(phase, 0x7E)
@@ -3155,11 +3157,12 @@ def selftest() -> list[str]:
     wipe_lane(tiles, 15)
     paint_land_value(tiles, 18, 5)
     eight_shrine = i8(tiles[hoff + 15])
-    ok = eight_shrine == 8 * 5
+    # 0x91 radiates +1 r=1 onto itself (6da0e, no skip). 8*5 + 1.
+    ok = eight_shrine == 8 * 5 + 1
     lines.append(
         f"8 shrines in r=2 add 40: {'ok' if ok else 'FAIL'} +15={eight_shrine}"
     )
-    ok = service_target_lv(eight_shrine, 60) == 40
+    ok = service_target_lv(eight_shrine, 60) == 41
     lines.append(
         f"acc>=20 keeps shrine splash (not 20+acc): {'ok' if ok else 'FAIL'} "
         f"target={service_target_lv(eight_shrine, 60)}"
@@ -3174,7 +3177,7 @@ def selftest() -> list[str]:
     wipe_lane(tiles, 15)
     paint_land_value(tiles, 18, 5)
     ten_garden = i8(tiles[hoff + 15])
-    ok = ten_garden == 10 * 2
+    ok = ten_garden == 10 * 2 + 1
     lines.append(
         f"10 gardens in r=2 add 20: {'ok' if ok else 'FAIL'} +15={ten_garden}"
     )
@@ -3203,8 +3206,8 @@ def selftest() -> list[str]:
     yard_raw = i8(tiles[hoff + 15])
     # Plaza r=1 only hits the 3 street tiles at d<=1. Garden r=2 hits
     # the first courtyard row (5 tiles). Farther garden rows add 0.
-    want = 3 * 4 + n_g_in * 2
-    ok = n_g_in == 5 and yard_raw == 22 and want == 22
+    want = 3 * 4 + n_g_in * 2 + 1
+    ok = n_g_in == 5 and yard_raw == 23 and want == 23
     lines.append(
         f"front-edge plaza+garden yard: {'ok' if ok else 'FAIL'} "
         f"plazas_row={n_plaza} gardens_r2={n_g_in} raw={yard_raw}"
@@ -3232,8 +3235,8 @@ def selftest() -> list[str]:
     shrine_yard_raw = i8(tiles[hoff + 15])
     ok = (
         n_s_in == 5
-        and shrine_yard_raw == 37
-        and service_target_lv(shrine_yard_raw, 46) == 37
+        and shrine_yard_raw == 38
+        and service_target_lv(shrine_yard_raw, 46) == 38
     )
     lines.append(
         f"front-edge plaza+shrine yard: {'ok' if ok else 'FAIL'} "
@@ -3257,10 +3260,32 @@ def selftest() -> list[str]:
     wipe_lane(tiles, 15)
     paint_land_value(tiles, 18, 8)
     far_raw = i8(tiles[hoff + 15])
-    ok = far_raw == 12 and service_target_lv(12, 46) == 32
+    ok = far_raw == 13 and service_target_lv(13, 46) == 33
     lines.append(
         f"amenity row at d=3 ignored (floor 20+12): {'ok' if ok else 'FAIL'} "
         f"raw={far_raw} target={service_target_lv(far_raw, 46)}"
+    )
+
+    # 20260924 Query (42,60) vs villa (41,58): 6da0e must splash the
+    # 2×2 +8 onto the 1×1 that shares the south edge. skip_housing
+    # left that origin at acc~5 and 20+acc wrote the odd +15=25.
+    tiles = _blank_tiles()
+    for i, (dx, dy) in enumerate(((0, 0), (1, 0), (0, 1), (1, 1))):
+        o = _off(20 + dx, 20 + dy)
+        tiles[o] = 0x9C
+        tiles[o + 1] = 0x01
+        tiles[o + 5] = 0 if i == 0 else i
+    ioff = _off(20, 22)
+    tiles[ioff] = 0x8E
+    tiles[ioff + 1] = 0x01
+    wipe_lane(tiles, 15)
+    paint_land_value(tiles, 20, 3)
+    villa_raw = i8(tiles[_off(20, 20) + 15])
+    ins_raw = i8(tiles[ioff + 15])
+    ok = ins_raw >= 8 and villa_raw >= 8
+    lines.append(
+        f"villa +8 reaches edge 1x1: {'ok' if ok else 'FAIL'} "
+        f"villa={villa_raw} insula={ins_raw}"
     )
 
     from app.messages import selftest as message_selftest

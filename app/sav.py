@@ -77,6 +77,7 @@ HISTORY_COUNT_CHUNK = 338
 POP_CHUNK = 32
 GOODS_CHUNK = 339
 FACTORY_LABOR_CHUNK = 140
+LAND_ADJ_CHUNK = 139  # [0x102ad4] 40695 housing bonus
 PROVINCE_LINKS_CHUNK = 276
 CONSTRUCT_YTD_CHUNK = 155  # [0x102A2C] YTD constructions (0x30B2C / 0x2F3FB)
 
@@ -183,6 +184,7 @@ HOST_OWNED_CHUNKS: frozenset[int] = frozenset(
         RATINGS_SEED_CHUNK,
         GOODS_CHUNK,
         FACTORY_LABOR_CHUNK,
+        LAND_ADJ_CHUNK,
         PROVINCE_LINKS_CHUNK,
         WRAP3_CHUNK,
         CHUNK_CITY_ONLY,
@@ -442,6 +444,7 @@ def owned_payloads(
         LABOR_EST_CHUNK: _i32(getattr(sim, "plebs_estimate", 0)),
         LABOR_TABLE_CHUNK: _labor_table(sim),
         FACTORY_LABOR_CHUNK: _i32(getattr(sim, "factory_labor", 0)),
+        LAND_ADJ_CHUNK: _i32(getattr(sim, "land_value_adj", 0)),
         157: _i32(tribute),
         CHUNK_PID: _i32(getattr(sim, "pid", 0)),
         PROVINCE_LINKS_CHUNK: _i32(getattr(sim, "province_links", 0)),

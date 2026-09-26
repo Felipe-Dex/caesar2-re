@@ -55,6 +55,38 @@ _WORSHIP_LV: tuple[tuple[int, int], ...] = (
     (7, 3), (8, 3), (9, 4), (10, 4),
 )
 ID_WORSHIP_LO, ID_WORSHIP_HI = 0xA2, 0xAD
+# 40695 civic after worship: (bonus, radius, size, need_+13&4).
+# FELIPE02 A/B: C.Max +5 r=6 and palace-to-palace 6da0e are required for +15=64.
+_FORUM_LV: tuple[tuple[int, int, int], ...] = (
+    (2, 2, 2), (3, 2, 2), (4, 2, 2), (5, 3, 2),
+    (3, 2, 3), (4, 2, 3), (5, 3, 3), (6, 3, 3),
+    (3, 2, 4), (4, 3, 4), (5, 3, 4), (6, 4, 4),
+)
+_CIVIC_LV: dict[int, tuple[int, int, int, bool]] = {}
+for _hid in range(0xDB, 0xDF):
+    _CIVIC_LV[_hid] = (2, 2, 1, True)
+_CIVIC_LV[0xE3] = (3, 2, 1, False)
+_CIVIC_LV[0xE4] = (3, 2, 3, False)
+_CIVIC_LV[0xE5] = (3, 2, 2, False)
+_CIVIC_LV[0xE6] = (3, 4, 2, False)
+_CIVIC_LV[0xE7] = (4, 3, 3, False)
+_CIVIC_LV[0xE8] = (4, 5, 3, False)
+for _hid in range(0xE9, 0xED):
+    _CIVIC_LV[_hid] = (4, 4, 3, False)
+for _hid in range(0xED, 0xF1):
+    _CIVIC_LV[_hid] = (5, 6, 4, False)
+_CIVIC_LV[0xF3] = (3, 2, 2, False)
+_CIVIC_LV[0xF4] = (4, 4, 3, False)
+_CIVIC_LV[0xF5] = (4, 4, 3, False)
+_CIVIC_LV[0xFB] = (4, 3, 3, False)
+_CIVIC_LV[0xDF] = (3, 3, 2, True)
+_CIVIC_LV[0xE0] = (4, 3, 2, True)
+_CIVIC_LV[0xE1] = (5, 3, 2, True)
+_CIVIC_LV[0xE2] = (6, 3, 2, True)
+_CIVIC_LV[0xFC] = (2, 1, 2, False)
+_CIVIC_LV[0xFD] = (3, 1, 2, False)
+_CIVIC_LV[0xFE] = (4, 1, 2, False)
+_CIVIC_LV[0xFF] = (5, 1, 2, False)
 
 ID_GARDEN_LO, ID_GARDEN_HI = 0x78, 0x7B
 ID_PLAZA_LO, ID_PLAZA_HI = 0x7C, 0x7E
@@ -552,10 +584,9 @@ def add_land_value(
 ) -> None:
     """FUN_0006da0e — add signed bonus over (size+2r) square, clamp −64…+64.
 
-    Housing skips its own footprint so a tent's −2 does not cancel fountain/garden
-    splash on that cell (C2MODEL radiates onto neighbors). It also skips other
-    housing: a dense hut grid's −2 must not pin watered cells at the +15=2
-    hut stay band (0x83 stay 0…3).
+    EXE does not skip housing. A villa +8 r=2 must land on the 1×1 that
+    shares an edge (20260924 (41,58) vs (42,60)). ``skip_own`` /
+    ``skip_housing`` stay opt-in for probes, not the 40695 painter.
     """
     if size <= 0 or bonus == 0:
         return
@@ -1296,7 +1327,9 @@ def paint_plus14_security(tiles: bytearray, y0: int, n: int) -> int:
     return painted
 
 
-def paint_land_value(tiles: bytearray, y0: int, n: int) -> int:
+def paint_land_value(
+    tiles: bytearray, y0: int, n: int, *, land_adj: int = 0
+) -> int:
     """FUN_00040695 — radiate signed +15 from buildings / gardens / fountain.
 
     Plaza ``0x7C–0x7E`` is stamped with FLAG_PAD (``+1=0x20``). The road
@@ -1308,6 +1341,11 @@ def paint_land_value(tiles: bytearray, y0: int, n: int) -> int:
     Worship ``0xA2–0xAD`` (shrine / temple / basilica) uses LUT ``0x9645d``
     from the origin only (``+5&0xF`` already skipped). Oracle is not a
     building — Forum advisor only.
+
+    Civic (forum / baths / C.Max / hospital / theatre…) uses the 40695
+    LUTs. ``6da0e`` does not skip housing — a palace cluster stacks.
+    ``land_adj`` is ``[0x102ad4]`` (SavChunk 139): added to the house
+    bonus; villas also add 2× / palaces 4× on the origin tile.
     """
     painted = 0
     for y in range(y0, min(MAP_H, y0 + n)):
@@ -1334,31 +1372,46 @@ def paint_land_value(tiles: bytearray, y0: int, n: int) -> int:
                 if ID_HOUSING_LO <= hid <= ID_HOUSING_HI:
                     grade = hid - ID_HOUSING_LO
                     bonus, rad = _HOUSE_LV[grade]
+                    bonus += land_adj
+                    if grade >= 30:
+                        extra = 4 * land_adj
+                    elif grade >= 26:
+                        extra = 2 * land_adj
+                    else:
+                        extra = 0
+                    if extra:
+                        cur = i8(tiles[off + 15]) + extra
+                        if cur > 64:
+                            cur = 64
+                        elif cur < -64:
+                            cur = -64
+                        tiles[off + 15] = cur & 0xFF
                     add_land_value(
-                        tiles,
-                        x,
-                        y,
-                        HOUSE_SIZE[grade],
-                        rad,
-                        bonus,
-                        skip_own=True,
-                        skip_housing=True,
+                        tiles, x, y, HOUSE_SIZE[grade], rad, bonus
                     )
                     painted += 1
-                elif ID_FOUNTAIN_LO <= hid <= ID_FOUNTAIN_HI:
-                    add_land_value(tiles, x, y, 1, 2, 2)
+                elif hid in _CIVIC_LV:
+                    bonus, rad, size, wet = _CIVIC_LV[hid]
+                    if wet and not (tiles[off + 13] & 4):
+                        continue
+                    add_land_value(tiles, x, y, size, rad, bonus)
                     painted += 1
-                elif hid == ID_PREFECTURE:
-                    add_land_value(tiles, x, y, 1, 2, 3)
-                    painted += 1
-                elif hid == ID_BARRACKS:
-                    add_land_value(tiles, x, y, 3, 2, 3)
+                elif 0xAE <= hid <= 0xB9:
+                    bonus, rad, size = _FORUM_LV[hid - 0xAE]
+                    add_land_value(tiles, x, y, size, rad, bonus)
                     painted += 1
                 elif ID_WORSHIP_LO <= hid <= ID_WORSHIP_HI:
                     idx = hid - ID_WORSHIP_LO
                     bonus, rad = _WORSHIP_LV[idx]
                     size = 1 if idx < 4 else (2 if idx < 8 else 3)
                     add_land_value(tiles, x, y, size, rad, bonus)
+                    painted += 1
+                elif hid == ID_FACTORY:
+                    stock = (tiles[off + 9] & 0xF0) >> 4
+                    if stock <= 4:
+                        add_land_value(tiles, x, y, 3, 1, 2)
+                    else:
+                        add_land_value(tiles, x, y, 3, 2, 4)
                     painted += 1
             elif flags & 0x18:
                 tiles[off + 15] = 0
@@ -1507,14 +1560,16 @@ def service_target_lv(acc: int, cap: int) -> int:
     return acc
 
 
-def refresh_land_value(tiles: bytearray, *, population: int = 0) -> int:
+def refresh_land_value(
+    tiles: bytearray, *, population: int = 0, land_adj: int = 0
+) -> int:
     """Wipe +15, radiate 40695, then write the 40d08 service targets.
 
     Place/clear of plaza or garden must rebuild immediately. Otherwise Query
     keeps last month's capped +15=20 until phases 0x52 / 0x76–0x8D run.
     """
     wipe_lane(tiles, 15)
-    paint_land_value(tiles, 0, MAP_H)
+    paint_land_value(tiles, 0, MAP_H, land_adj=land_adj)
     return cap_housing_plus15(tiles, 0, MAP_H, population=population)
 
 
