@@ -19,9 +19,15 @@ footprints are not stretched.
   fitted into the 162 px INT_CITY strip). Never pasted onto the iso well
   — that left a painting stuck at ~ (292, 32).
 * **Iso 0xFB only:** one blit on the origin (``+5&0xF==0``), fitted to
-  the 3×3 iso diamond-union AABB (zoom 0 = 174×90). Skip leftover
-  ``BUILD1B[86–94]``. Barracks ``0xE4`` is ``HOUSES1[81–89]``.
-  Do **not** write HOUSES1[86–89] — that is four barracks leftovers.
+  the union of the nine tall BUILD1B[86–94] sprite dests (zoom 0 =
+  **174×143**, not the 174×90 ground diamonds). Grass under the 3×3;
+  leftover PL8 skipped. Barracks ``0xE4`` is ``HOUSES1[81–89]``.
+
+Export spec for ``images_new/AHOSPIT.png``: one isometric painting for
+the whole 3×3 (not nine tiles); transparent alpha background (flat
+green/black plate is not required and is keyed out if present); match
+the C2 iso camera — the building is tall (174×143 at zoom 0). Higher
+res is OK; the host scales into that AABB.
 
 Drop more files as ``images_new/{STEM}.png`` using the 8.3 stem
 (``ABATHS``, ``AHOUSE``, ``AWELL``, …). PNGs are gitignored.
@@ -255,9 +261,40 @@ def override_stamp(
         return (stem.upper(), str(hit), 0)
 
 
+# Classic sprite keys. Keep real alpha; punch only these plates.
+_KEY_RGB: tuple[tuple[int, int, int], ...] = (
+    (0, 0, 0),
+    (255, 0, 255),
+    (0, 255, 0),
+)
+_KEY_TOL = 12
+
+
+def key_sprite_plate(img: Image.Image) -> Image.Image:
+    """Keep PNG alpha; treat flat black / magenta / lime as transparent."""
+    src = img.convert("RGBA")
+    out: list[tuple[int, int, int, int]] = []
+    punched = False
+    for r, g, b, a in src.getdata():
+        if a and any(
+            abs(r - kr) <= _KEY_TOL
+            and abs(g - kg) <= _KEY_TOL
+            and abs(b - kb) <= _KEY_TOL
+            for kr, kg, kb in _KEY_RGB
+        ):
+            out.append((r, g, b, 0))
+            punched = True
+        else:
+            out.append((r, g, b, a))
+    if not punched:
+        return src
+    src.putdata(out)
+    return src
+
+
 def fit_to_dest(img: Image.Image, dest_w: int, dest_h: int) -> Image.Image:
     """Fit ``img`` into dest, keep aspect, letterbox. Do not stretch."""
-    src = img.convert("RGBA")
+    src = key_sprite_plate(img)
     if dest_w < 1 or dest_h < 1:
         return src
     if src.size == (dest_w, dest_h):
@@ -391,7 +428,7 @@ def attach_ahospit_source(
         sheets.pop(AHOSPIT_SHEET_KEY, None)
         return []
     try:
-        src = Image.open(hit).convert("RGBA")
+        src = key_sprite_plate(Image.open(hit).convert("RGBA"))
     except OSError:
         return []
     sheets[AHOSPIT_SHEET_KEY] = [src]
@@ -428,7 +465,7 @@ def hospital_iso_sprite(
     srcs = sheets.get(AHOSPIT_SHEET_KEY)
     if not srcs:
         return None
-    return fit_to_dest(srcs[0], dest_w, dest_h)
+    return fit_to_dest(key_sprite_plate(srcs[0]), dest_w, dest_h)
 
 
 def blit_tool_still(
@@ -550,14 +587,29 @@ def selftest(game: Path | None = None) -> list[str]:
             CityMap,
             hospital_diamond_aabb,
             hospital_override_dest,
+            hospital_sprite_aabb,
             tile_iso_xy,
         )
 
-        ax, ay, aw, ah = hospital_diamond_aabb(10, 10)
-        if (aw, ah) != (174, 90):
-            lines.append(f"FAIL  3x3 diamond AABB {aw}x{ah} want 174x90")
+        gx, gy, gw, gh = hospital_diamond_aabb(10, 10)
+        ax, ay, aw, ah = hospital_sprite_aabb(10, 10, sheets)
+        if (gw, gh) != (174, 90):
+            lines.append(f"FAIL  ground diamond AABB {gw}x{gh} want 174x90")
+        elif (aw, ah) != (174, 143):
+            lines.append(f"FAIL  tall BUILD1B AABB {aw}x{ah} want 174x143 (not 174x90)")
         else:
-            lines.append("ok    dest rect = 3x3 iso diamond union (174x90 @ z0)")
+            lines.append("ok    dest rect = BUILD1B[86-94] union 174x143 (not 174x90)")
+        plate = Image.new("RGBA", (8, 8), (0, 255, 0, 255))
+        plate.putpixel((3, 3), (200, 40, 40, 255))
+        plate.putpixel((0, 0), (255, 0, 255, 255))
+        plate.putpixel((7, 7), (0, 0, 0, 255))
+        keyed = key_sprite_plate(plate)
+        if keyed.getpixel((1, 1))[3] != 0 or keyed.getpixel((3, 3))[3] != 255:
+            lines.append(f"FAIL  chroma key {keyed.getpixel((1, 1))} mid={keyed.getpixel((3, 3))}")
+        elif keyed.getpixel((0, 0))[3] != 0 or keyed.getpixel((7, 7))[3] != 0:
+            lines.append("FAIL  magenta/black plate not keyed")
+        else:
+            lines.append("ok    chroma keys lime/magenta/black; building stays")
         pin_city = CityMap()
         dests: list[tuple[int, int, int, int]] = []
         for ox, oy in ((10, 10), (20, 14)):

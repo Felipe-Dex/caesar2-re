@@ -342,7 +342,7 @@ def overlay_stamp_ghost(
     """One N×N stamp: translucent building sprites, or a single footprint bbox."""
     from app.city_map import (
         building_sprite_image,
-        hospital_diamond_aabb,
+        hospital_sprite_aabb,
         iso_sprite_dest,
         iso_tile_size,
         tile_iso_xy,
@@ -360,7 +360,9 @@ def overlay_stamp_ghost(
     if sheets and cells and preview.tool == TOOL_HOSPITAL and hospital_has_override(sheets):
         ox = min(c[0] for c in preview.cells)
         oy = min(c[1] for c in preview.cells)
-        ax, ay, aw, ah = hospital_diamond_aabb(ox, oy, zoom=zoom, facing=facing)
+        ax, ay, aw, ah = hospital_sprite_aabb(
+            ox, oy, sheets, zoom=zoom, facing=facing
+        )
         spr = hospital_iso_sprite(sheets, aw, ah)
         if spr is not None:
             ghost = _as_ghost(spr, refuse=bool(preview.refuse))

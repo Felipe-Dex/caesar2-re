@@ -109,6 +109,23 @@ ID_PREFECTURE = 0xE3
 ID_BARRACKS = 0xE4
 ID_HOSPITAL = 0xFB
 HOSPITAL_FOOT = 3
+HOSPITAL_DRAW = 0x08
+# Stamp +4 (facing-0). LUT identity → BUILD1B[86–94].
+HOSPITAL_VARIANTS: tuple[int, ...] = (
+    0x56, 0x58, 0x5B, 0x57, 0x5A, 0x5D, 0x59, 0x5C, 0x5E
+)
+# Zoom-0 piece sizes when BUILD1B is not loaded (pin / ghost fallback).
+_HOSPITAL_Z0_WH: dict[int, tuple[int, int]] = {
+    0x56: (58, 83),
+    0x57: (58, 87),
+    0x58: (58, 74),
+    0x59: (58, 88),
+    0x5A: (58, 30),
+    0x5B: (58, 30),
+    0x5C: (58, 30),
+    0x5D: (58, 30),
+    0x5E: (58, 30),
+}
 # FUN_0003fef7 wet +4 (LUT 0x94f6c[id]+1). Dry fountain is 0x0C/0x0E/0x5F/0x61.
 _FOUNTAIN_WET_VAR = frozenset({0x0D, 0x0F, 0x60, 0x62})
 FLAG_RIVER = 0x10
@@ -543,7 +560,7 @@ def hospital_diamond_aabb(
     width: int = MAP_W,
     height: int = MAP_H,
 ) -> tuple[int, int, int, int]:
-    """Canvas AABB of the 3×3 iso diamond union (not nine sprite dests)."""
+    """Canvas AABB of the 3×3 ground diamonds (174×90 at zoom 0)."""
     tw, th = iso_tile_size(zoom)
     x0 = y0 = 10**9
     x1 = y1 = -(10**9)
@@ -559,6 +576,56 @@ def hospital_diamond_aabb(
             )
             x0, y0 = min(x0, sx), min(y0, sy)
             x1, y1 = max(x1, sx + tw), max(y1, sy + th)
+    return x0, y0, max(1, x1 - x0), max(1, y1 - y0)
+
+
+def hospital_piece_size(
+    variant: int,
+    sheets: dict[str, Sequence[Image.Image]] | None,
+    *,
+    zoom: int = 0,
+) -> tuple[int, int]:
+    """One BUILD1B leftover dest (tall extra_rows sit above the diamond)."""
+    tw, th = iso_tile_size(zoom)
+    frames = None if sheets is None else sheets.get(PL8_BUILD1B)
+    if frames:
+        spr = building_sprite_image(ID_HOSPITAL, HOSPITAL_DRAW, variant, sheets, zoom=zoom)
+        if spr is not None:
+            return spr.size
+    if zoom == 0:
+        return _HOSPITAL_Z0_WH.get(variant, (tw, th))
+    return tw, th
+
+
+def hospital_sprite_aabb(
+    origin_wx: int,
+    origin_wy: int,
+    sheets: dict[str, Sequence[Image.Image]] | None = None,
+    *,
+    zoom: int = 0,
+    facing: int = 0,
+    width: int = MAP_W,
+    height: int = MAP_H,
+    city: CityMap | None = None,
+) -> tuple[int, int, int, int]:
+    """Union of the nine BUILD1B sprite dests (174×143 at zoom 0), not 174×90."""
+    tw, th = iso_tile_size(zoom)
+    x0 = y0 = 10**9
+    x1 = y1 = -(10**9)
+    for row in range(HOSPITAL_FOOT):
+        for col in range(HOSPITAL_FOOT):
+            wx, wy = origin_wx + col, origin_wy + row
+            if city is not None:
+                variant = iso_paint_tile(city, wx, wy, facing).variant
+            else:
+                variant = HOSPITAL_VARIANTS[row * HOSPITAL_FOOT + col]
+            sx, sy = tile_iso_xy(
+                wx, wy, zoom=zoom, facing=facing, width=width, height=height
+            )
+            sw, sh = hospital_piece_size(variant, sheets, zoom=zoom)
+            px, py = iso_sprite_dest(sx, sy, sh, th)
+            x0, y0 = min(x0, px), min(y0, py)
+            x1, y1 = max(x1, px + sw), max(y1, py + sh)
     return x0, y0, max(1, x1 - x0), max(1, y1 - y0)
 
 
@@ -581,13 +648,15 @@ def hospital_override_rects(
             if t.terrain_id != ID_HOSPITAL or (t.spawn_packed & 0xF) != 0:
                 continue
             out.append(
-                hospital_diamond_aabb(
+                hospital_sprite_aabb(
                     x,
                     y,
+                    sheets,
                     zoom=zoom,
                     facing=facing,
                     width=city.width,
                     height=city.height,
+                    city=city,
                 )
             )
     return out
@@ -619,11 +688,61 @@ def hospital_override_dest(
         return None
     if (tile.spawn_packed & 0xF) != 0:
         return None
-    ax, ay, aw, ah = hospital_diamond_aabb(
-        wx, wy, zoom=zoom, facing=facing, width=width, height=height
+    ax, ay, aw, ah = hospital_sprite_aabb(
+        wx,
+        wy,
+        sheets,
+        zoom=zoom,
+        facing=facing,
+        width=width,
+        height=height,
     )
     cx, cy = tile_iso_xy(wx, wy, zoom=zoom, facing=facing, width=width, height=height)
     return ax - cx + sx, ay - cy + sy, aw, ah
+
+
+def _hospital_blit_grass(
+    img: Image.Image,
+    ox: int,
+    oy: int,
+    sx: int,
+    sy: int,
+    wx: int,
+    wy: int,
+    cityfixt: Sequence[Image.Image] | None,
+    *,
+    tile_w: int,
+    tile_h: int,
+    zoom: int,
+    facing: int,
+    width: int,
+    height: int,
+) -> None:
+    """CITYFIXT grass under the 3×3 so skipped leftovers are not ISO_BG holes."""
+    if cityfixt is None:
+        return
+    grass_idx = 8 + CITYFIXT_TERRAIN_BIAS
+    cx, cy = tile_iso_xy(wx, wy, zoom=zoom, facing=facing, width=width, height=height)
+    for row in range(HOSPITAL_FOOT):
+        for col in range(HOSPITAL_FOOT):
+            tx, ty = tile_iso_xy(
+                ox + col,
+                oy + row,
+                zoom=zoom,
+                facing=facing,
+                width=width,
+                height=height,
+            )
+            _blit_iso(
+                img,
+                cityfixt,
+                grass_idx,
+                tx - cx + sx,
+                ty - cy + sy,
+                tile_w=tile_w,
+                tile_h=tile_h,
+                lift=0,
+            )
 
 
 def _hospital_try_override(
@@ -640,6 +759,10 @@ def _hospital_try_override(
     width: int,
     height: int,
     painted: set[tuple[int, int]] | None,
+    cityfixt: Sequence[Image.Image] | None = None,
+    tile_w: int = ISO_W,
+    tile_h: int = ISO_H,
+    city: CityMap | None = None,
 ) -> bool:
     """Blit AHOSPIT once per origin. True = skip BUILD1B[86–94] PL8."""
     from app.image_override import hospital_has_override, hospital_iso_sprite
@@ -656,8 +779,31 @@ def _hospital_try_override(
         painted.add(key)
     elif (tile.spawn_packed & 0xF) != 0:
         return True
-    ax, ay, aw, ah = hospital_diamond_aabb(
-        ox, oy, zoom=zoom, facing=facing, width=width, height=height
+    _hospital_blit_grass(
+        img,
+        ox,
+        oy,
+        sx,
+        sy,
+        wx,
+        wy,
+        cityfixt,
+        tile_w=tile_w,
+        tile_h=tile_h,
+        zoom=zoom,
+        facing=facing,
+        width=width,
+        height=height,
+    )
+    ax, ay, aw, ah = hospital_sprite_aabb(
+        ox,
+        oy,
+        sheets,
+        zoom=zoom,
+        facing=facing,
+        width=width,
+        height=height,
+        city=city,
     )
     cx, cy = tile_iso_xy(wx, wy, zoom=zoom, facing=facing, width=width, height=height)
     spr = hospital_iso_sprite(sheets, aw, ah)
@@ -1957,8 +2103,9 @@ def _paint_iso_tile(
     keeps the facing-0 piece). Factory CITYTOP stays on the world tile
     and is replayed after terrain so south extra_rows do not bury jugs.
 
-    Hospital ``0xFB`` + AHOSPIT.png is one AABB over the 3×3 diamond
-    union, anchored on ``+5&0xF==0``. Leftover BUILD1B[86–94] skip.
+    Hospital ``0xFB`` + AHOSPIT.png is one AABB over the nine tall
+    BUILD1B dests (174×143 at zoom 0), anchored on ``+5&0xF==0``.
+    Grass under the 3×3; leftover BUILD1B[86–94] skip.
     """
     if _hospital_try_override(
         img,
@@ -1973,6 +2120,9 @@ def _paint_iso_tile(
         width=map_w,
         height=map_h,
         painted=hospital_painted,
+        cityfixt=cityfixt,
+        tile_w=tile_w,
+        tile_h=tile_h,
     ):
         return
     art = sprite_tile if sprite_tile is not None else tile
@@ -2450,13 +2600,15 @@ def blit_water_tiles(
 
             if hospital_has_override(sheets):
                 hox, hoy = hospital_origin_xy(x, y, world)
-                ax, ay, aw, ah = hospital_diamond_aabb(
+                ax, ay, aw, ah = hospital_sprite_aabb(
                     hox,
                     hoy,
+                    sheets,
                     zoom=z,
                     facing=facing,
                     width=city.width,
                     height=city.height,
+                    city=city,
                 )
                 clear_rects.append((ax, ay, ax + aw, ay + ah))
         overlay = factory_overlay_dest_box(
