@@ -137,7 +137,11 @@ _FB = {
     },
     97: {
         0: "No Denarii!",
-        1: "You have exhausted the funds in your treasury.",
+        1: (
+            "You have exhausted the funds in your treasury.  The Emperor will "
+            "cover your accounts for some time, but you must return to a "
+            "surplus of funds soon."
+        ),
     },
     100: {
         0: "Insufficient Plebs",
@@ -1097,6 +1101,28 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  broke {got}")
     else:
         lines.append("ok    No Denarii! when treasury < 0")
+    broke_msg = peek_message(sim)
+    if (
+        broke_msg is None
+        or broke_msg.slot != 97
+        or broke_msg.title != "No Denarii!"
+        or "Emperor will cover your accounts" not in broke_msg.body
+    ):
+        lines.append(f"FAIL  [97] body {broke_msg}")
+    else:
+        lines.append("ok    [97] fires on crossing 0, not every overspend")
+    if "broke" in scan_city_messages(sim, tiles3):
+        lines.append("FAIL  [97] re-fired while still negative")
+    else:
+        lines.append("ok    still-broke scan does not post [97] again")
+
+    from app.forum import treasurer_captions
+
+    caps_neg = treasurer_captions(SimState(city_only=1, treasury=-12, year_raw=-123))
+    if caps_neg["treasury"] != "Treasury -12 Dn":
+        lines.append(f"FAIL  treasurer neg {caps_neg['treasury']!r}")
+    else:
+        lines.append("ok    Treasurer [28]+12 city funds shows minus (0x5d535)")
 
     msg = pop_message(sim)
     if msg is None or msg.slot not in (7, 35, 79, 81, 82, 84, 86, 88, 97, 100, 103, 114):

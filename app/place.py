@@ -62,7 +62,7 @@ the same NESW mask as roads (does not write the map). Gate ``+4`` LUT
 Does **not** write road ``0x52–0x5C`` and must **not** run road retile —
 that was turning neighbour grass+``FLAG_PAD`` into a fake road. River
 refused except the documented road→bridge case. Drag-rect for 1×1 civics
-is treasury-atomic.
+may drive signed chunk 28 negative (EXE 0x30B2C).
 
 Click-drag (host): commit on mouse-up only. Road / Wall / Aqueduct =
 axis-aligned straight line (dominant |dx|≥|dy| → horizontal at start y,
@@ -72,7 +72,8 @@ Stamp tools (Barracks 3×3, Reservoir 1×1, any N×N): one footprint follows
 the cursor; ghost overlay; release places once. Place uses dirty iso (no
 full-map flush — that thumbnailed the canvas and looked like a zoom pop).
 Clear of a tall building still sets ``flush_iso``. Tent / civic-rect drag
-is **atomic** if treasury < cost×N. N×N>1×1 (forum / temple / theater /
+does **not** refuse when treasury < cost×N — 0x30B2C still subtracts.
+N×N>1×1 (forum / temple / theater /
 barracks / …) is stamp-follow and refuses the whole footprint if any
 cell is occupied (EXE ``69cfc`` / ``69f26``: ``+1&0xE7`` / river /
 walker — same-id 0xE4 is occupied, not a join). Circus 6×3 EW (0xEB+0xEC) / 3×6 NS
@@ -714,11 +715,15 @@ def _clear_bridge(city: CityMap, x: int, y: int) -> int:
 
 
 def _debit(sim: SimState | None, cost: int) -> str | None:
-    """Treasury −cost and YTD constructions +cost (EXE 0x30B2C / 0x2F3FB)."""
+    """Treasury −cost and YTD constructions +cost (EXE 0x30B2C / 0x2F3FB).
+
+    0x30B2C is ``sub [0x102AAC], ebp`` with no funds compare — the signed
+    SavChunk 28 dword may go negative. [97] No Denarii! is 0x54dc5
+    (calendar, EAX=0x62) when treasury < 0 and broke_left == 0, not a
+    place refuse.
+    """
     if cost <= 0 or sim is None:
         return None
-    if sim.treasury < cost:
-        return f"tesouro {sim.treasury} < custo {cost}"
     sim.treasury -= cost
     # 0x30B2C sub [0x102AAC]; 0x2F3FB add [0x102A2C], pending. Books only —
     # WRAP does not debit construction again (0x56D39 ESTIMATE / 0x56C1C).
@@ -3008,7 +3013,11 @@ def preview_span(
     treasury: int = 0,
     facing: int = 0,
 ) -> DragPreview:
-    """Classify a rubber-band without writing tiles or debiting."""
+    """Classify a rubber-band without writing tiles or debiting.
+
+    ``treasury`` stays in the signature for callers; EXE 0x30B2C does not refuse.
+    """
+    _ = treasury
     cells = span_cells(tool, x0, y0, x1, y1, facing)
     xa, xb = (min(x0, x1), max(x0, x1))
     ya, yb = (min(y0, y1), max(y0, y1))
@@ -3054,13 +3063,7 @@ def preview_span(
                 skip.append((x, y))
         cost = COST_TENT * len(stamp)
         refuse = None
-        if stamp and treasury < cost:
-            refuse = (
-                f"tesouro {treasury} < {cost} ({len(stamp)} tendas) - "
-                f"arrasto recusado (tudo ou nada)"
-            )
-            message = f"Housing {width}x{height}  {refuse}"
-        elif not stamp:
+        if not stamp:
             message = f"Housing {width}x{height}  nenhuma tenda nova"
         else:
             message = f"Housing {width}x{height} = {len(stamp)}  custo {cost}"
@@ -3115,12 +3118,6 @@ def preview_span(
         refuse = None
         if not stamp:
             message = f"Wall {width}x{height}  nenhum novo"
-        elif treasury < cost:
-            refuse = (
-                f"tesouro {treasury} < {cost} ({len(stamp)}) - "
-                f"arrasto recusado (tudo ou nada)"
-            )
-            message = f"Wall {len(stamp)}  {refuse}"
         else:
             extra = f"  {n_gate} gate" if n_gate else ""
             message = f"Wall {len(stamp)}{extra}  custo {cost}"
@@ -3145,9 +3142,6 @@ def preview_span(
             message = refuse
         elif not stamp:
             message = f"já {label} em ({x1},{y1})"
-        elif unit and treasury < cost:
-            refuse = f"tesouro {treasury} < {cost}"
-            message = f"{label} {w}x{h}  {refuse}"
         else:
             paid = f"  custo {cost}" if cost else ""
             message = f"{label} {w}x{h} NO ({x1},{y1}){paid}"
@@ -3176,13 +3170,7 @@ def preview_span(
         cost = unit * len(stamp)
         label = _tool_label(tool)
         refuse = None
-        if stamp and unit and treasury < cost:
-            refuse = (
-                f"tesouro {treasury} < {cost} ({len(stamp)}) - "
-                f"arrasto recusado (tudo ou nada)"
-            )
-            message = f"{label} {width}x{height}  {refuse}"
-        elif not stamp:
+        if not stamp:
             message = f"{label} {width}x{height}  nenhum novo"
         else:
             extra = f"  custo {cost}" if cost else ""
@@ -3205,7 +3193,7 @@ def try_place_span(
     sim: SimState | None = None,
     facing: int = 0,
 ) -> PlaceResult:
-    """Commit a rubber-band on mouse-up. Tent / civic drag is treasury-atomic."""
+    """Commit a rubber-band on mouse-up. Overspend still stamps (0x30B2C)."""
     if tool == TOOL_QUERY:
         return try_place(city, x1, y1, tool, sim, facing=facing)
     if tool in STAMP_TOOLS:
@@ -3391,10 +3379,13 @@ def selftest() -> list[str]:
 
     sim.treasury = 5
     r = try_place(city, 11, 10, TOOL_TENT, sim)
-    if r.ok or sim.treasury != 5:
-        lines.append(f"FAIL  tent should refuse treasury {sim.treasury}")
+    if not r.ok or sim.treasury != 5 - COST_TENT or city.tiles[city.offset(11, 10)] != ID_TENT:
+        lines.append(f"FAIL  tent overspend {r.message} treas={sim.treasury}")
     else:
-        lines.append("ok    tent refuse if treasury < 6")
+        lines.append("ok    tent places when tesouro < 6 (signed chunk 28)")
+    city.tiles[city.offset(11, 10)] = 0x14
+    city.tiles[city.offset(11, 10) + 1] = 0
+    city.tiles[city.offset(11, 10) + 15] = 0
 
     sim.treasury = 20
     city.tiles[city.offset(10, 11)] = 0x14
@@ -3596,12 +3587,19 @@ def selftest() -> list[str]:
         city.tiles[city.offset(x, y)] = 0x14
     sim = SimState(treasury=10)
     r = try_place_span(city, 10, 10, 12, 11, TOOL_TENT, sim)
-    if r.ok or sim.treasury != 10:
-        lines.append(f"FAIL  tent span atomic {r.message} treas={sim.treasury}")
-    elif any(city.tiles[city.offset(x, y)] == ID_TENT for x, y in rect_cells(10, 10, 12, 11)):
-        lines.append("FAIL  tent span atomic wrote tiles")
+    n_tents = sum(
+        1
+        for x, y in rect_cells(10, 10, 12, 11)
+        if city.tiles[city.offset(x, y)] == ID_TENT
+    )
+    if not r.ok or sim.treasury != 10 - 36 or n_tents != 6:
+        lines.append(f"FAIL  tent span overspend {r.message} treas={sim.treasury} n={n_tents}")
     else:
-        lines.append("ok    Housing arrasto atomico (10 < 36) - nada escrito")
+        lines.append("ok    Housing arrasto places when tesouro < custo (10-36)")
+    for x, y in ((10, 10), (11, 10), (12, 10), (10, 11), (11, 11), (12, 11)):
+        city.tiles[city.offset(x, y)] = 0x14
+        city.tiles[city.offset(x, y) + 1] = 0
+        city.tiles[city.offset(x, y) + 15] = 0
 
     sim.treasury = 20
     r = try_place_span(city, 10, 10, 11, 10, TOOL_TENT, sim)
@@ -3684,10 +3682,13 @@ def selftest() -> list[str]:
     city.tiles[city.offset(15, 15)] = 0x14
     sim = SimState(treasury=50)
     r = try_place(city, 15, 15, TOOL_RESERVOIR, sim)
-    if r.ok or sim.treasury != 50:
-        lines.append(f"FAIL  reservoir treasury {r.message} treas={sim.treasury}")
+    if not r.ok or sim.treasury != 50 - COST_RESERVOIR:
+        lines.append(f"FAIL  reservoir overspend {r.message} treas={sim.treasury}")
     else:
-        lines.append("ok    Reservoir recusa tesouro < 51")
+        lines.append("ok    Reservoir places when tesouro < 51")
+    for dx, dy in ((0, 0), (1, 0), (0, 1), (1, 1)):
+        city.tiles[city.offset(15 + dx, 15 + dy)] = 0x14
+        city.tiles[city.offset(15 + dx, 15 + dy) + 1] = 0
     sim.treasury = 51
     r = try_place(city, 15, 15, TOOL_RESERVOIR, sim)
     t = city.tile(15, 15)
@@ -4600,10 +4601,12 @@ def selftest() -> list[str]:
     city.tiles[city.offset(51, 50)] = 0x14
     sim.treasury = 4
     r = try_place_span(city, 50, 50, 51, 50, TOOL_GARDEN, sim)
-    if r.ok or sim.treasury != 4:
-        lines.append(f"FAIL  garden span atomic {r.message} treas={sim.treasury}")
+    if not r.ok or sim.treasury != 4 - 6:
+        lines.append(f"FAIL  garden span overspend {r.message} treas={sim.treasury}")
     else:
-        lines.append("ok    Gardens arrasto atómico (4 < 6)")
+        lines.append("ok    Gardens arrasto places when tesouro < 6")
+    city.tiles[city.offset(50, 50)] = 0x14
+    city.tiles[city.offset(51, 50)] = 0x14
     sim.treasury = 6
     r = try_place_span(city, 50, 50, 51, 50, TOOL_GARDEN, sim)
     ga, va = garden_from_step(0)
@@ -5726,13 +5729,19 @@ def selftest() -> list[str]:
         )
     else:
         lines.append("ok    Arena 0xE7 3x3 custo 700 +4 LUT 0x2C +12 bits 2-3")
+    _grass_block(50, 2, 3, 3)
     sim.treasury = 50
     ytd1 = sim.construct_ytd
     r_broke = try_place(city, 50, 2, TOOL_ARENA, sim)
-    if r_broke.ok or sim.construct_ytd != ytd1:
-        lines.append(f"FAIL  arena broke {r_broke.message} ytd={sim.construct_ytd}")
+    if (
+        not r_broke.ok
+        or city.tiles[city.offset(50, 2)] != ID_ARENA
+        or sim.treasury != 50 - COST_ARENA
+        or sim.construct_ytd != ytd1 + COST_ARENA
+    ):
+        lines.append(f"FAIL  arena overspend {r_broke.message} ytd={sim.construct_ytd}")
     else:
-        lines.append("ok    Arena recusa tesouro < 700")
+        lines.append("ok    Arena places when tesouro < 700 (chunk 28 signed)")
 
     _grass_block(22, 6, 3, 3)
     sim.treasury = 500
