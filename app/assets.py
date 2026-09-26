@@ -282,6 +282,9 @@ def load_city_map_sheets(
         except (OSError, ValueError):
             continue
         out[key] = frames
+    from app.image_override import apply_ahospit_iso
+
+    apply_ahospit_iso(out, game)
     return out
 
 

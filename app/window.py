@@ -112,7 +112,7 @@ from app.city_overlay import (
     place_dialog_contains,
     query_place,
 )
-from app.image_override import blit_tool_still, still_stem_for_tool
+from app.image_override import blit_tool_still, override_stamp, still_stem_for_tool
 from app.palette import PaletteState, action_for_tool
 from app.title import (
     ACTION_CAREER,
@@ -911,6 +911,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
     pl8_zooms = assets.available_map_zooms(game)
     chrome = CityChrome.load(game)
     still_cache: dict = {}
+    sheet_override_stamp: dict[int, tuple] = {}
     palette = PaletteState()
     menu_open: int | None = None
     minimap_rect: tuple[int, int, int, int] | None = None
@@ -1339,10 +1340,16 @@ def show(ctx: BootContext, *, game: Path) -> None:
         use_pl8 = at_zoom in pl8_zooms
         zoom_used_pl8[at_zoom] = use_pl8
         remember_rivers()
-        if use_pl8 and at_zoom not in pl8_sheets:
+        stamp = override_stamp(game, "AHOSPIT")
+        need = use_pl8 and (
+            at_zoom not in pl8_sheets or sheet_override_stamp.get(at_zoom) != stamp
+        )
+        if need:
             sheets = assets.load_city_map_sheets(game, zoom=at_zoom)
             pl8_sheets[at_zoom] = sheets
+            sheet_override_stamp[at_zoom] = stamp
             ctx.n_sprites = sum(len(v) for v in sheets.values())
+            _invalidate_live()
         map_ready = True
         return pl8_sheets.get(at_zoom)
 

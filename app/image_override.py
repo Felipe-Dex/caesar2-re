@@ -13,10 +13,14 @@ the advisor dest (320×152). Here the dest is the original sprite 0 rect.
 Scale with LANCZOS, keep aspect, letterbox (transparent pad) so isometric
 footprints are not stretched.
 
-``AHOSPIT`` is the hospital **build-menu still** (one blit, 182×132, own
-``.256``). It is **not** the iso hospital: tile ``0xFB`` draws
-``HOUSES1`` LUT variants ``0x56–0x5E`` (``tile[+3]&0x1C`` sheet 0).
-One PNG replaces that single still, not a sprite sheet.
+``AHOSPIT`` is both:
+
+* the hospital **build-menu still** (one blit, dest **182×132**)
+* the **visible iso hospital** on the map: tile ``0xFB`` origin is
+  ``HOUSES1[86]`` (zoom 0 dest **58×56**, type 4 extra_rows 26). Leftover
+  pieces ``87–89`` are 58×30. ``AHOSPIT.png`` is fitted into those frame
+  dests so placing / looking at the 3×3 shows the override. Variants
+  ``0x5A–0x5E`` LUT to sprite 0 — do **not** replace ``HOUSES1[0]``.
 
 Drop more files as ``images_new/{STEM}.png`` using the 8.3 stem
 (``ABATHS``, ``AHOUSE``, ``AWELL``, …). PNGs are gitignored.
@@ -129,6 +133,11 @@ TOOL_STILL_STEM: dict[str, str] = {
 
 DEFAULT_A_STILL = (182, 132)
 
+# HOUSES1 LUT identity for hospital +4 0x56–0x59 (origin + three leftovers).
+# Zoom 0 dest: [86]=58×56 (the building you see), [87–89]=58×30.
+HOSPITAL_ISO_FRAMES: tuple[int, ...] = (86, 87, 88, 89)
+HOSPITAL_ISO_KEY = "HOUSES1"
+
 
 def pl8_stem(pl8_name: str) -> str:
     """``AHOSPIT.PL8`` / ``ahospit.pl8`` → ``AHOSPIT``."""
@@ -205,7 +214,11 @@ def resolve_image_png(
     *,
     roots: list[Path] | None = None,
 ) -> Path | None:
-    """``images_new/{stem}.png`` or None. Does not look at the PL8."""
+    """``images_new/{stem}.png`` or None. Does not look at the PL8.
+
+    Uses ``REPO_ROOT`` (this file's checkout), not ``cwd``. city-only.bat
+    cds to the repo, but the resolver still works if launched from elsewhere.
+    """
     if not stem:
         return None
     name = f"{stem}.png"
@@ -218,6 +231,20 @@ def resolve_image_png(
         if hit is not None:
             return hit
     return None
+
+
+def override_stamp(
+    game: Path | None, stem: str, *, roots: list[Path] | None = None
+) -> tuple[str, str | None, int]:
+    """Identity of the current PNG (path + mtime). Changes when a file is dropped."""
+    hit = resolve_image_png(game, stem, roots=roots)
+    if hit is None:
+        return (stem.upper(), None, 0)
+    try:
+        mtime = int(hit.stat().st_mtime_ns)
+        return (stem.upper(), str(hit.resolve()), mtime)
+    except OSError:
+        return (stem.upper(), str(hit), 0)
 
 
 def fit_to_dest(img: Image.Image, dest_w: int, dest_h: int) -> Image.Image:
@@ -332,6 +359,38 @@ def still_screen_xy(
     return max(4, x), y
 
 
+def apply_ahospit_iso(
+    sheets: dict[str, list[Image.Image]],
+    game: Path | None,
+    *,
+    roots: list[Path] | None = None,
+) -> list[str]:
+    """Fit ``AHOSPIT.png`` into the hospital iso frames (the 3×3 you see).
+
+    One PNG is not nine diamonds — we replace the LUT frames the hospital
+    actually blits (``HOUSES1[86]`` is the tall origin). Dest is each
+    frame's native size (58×56 / 26×25 / 10×11 by zoom).
+    """
+    hit = resolve_image_png(game, "AHOSPIT", roots=roots)
+    if hit is None:
+        return []
+    houses = sheets.get(HOSPITAL_ISO_KEY)
+    if not houses:
+        return []
+    try:
+        src = Image.open(hit).convert("RGBA")
+    except OSError:
+        return []
+    applied: list[str] = []
+    for idx in HOSPITAL_ISO_FRAMES:
+        if idx >= len(houses):
+            continue
+        dw, dh = houses[idx].size
+        houses[idx] = fit_to_dest(src, dw, dh)
+        applied.append(f"{HOSPITAL_ISO_KEY}[{idx}]={dw}x{dh}")
+    return applied
+
+
 def blit_tool_still(
     frame: Image.Image,
     game: Path | None,
@@ -340,17 +399,23 @@ def blit_tool_still(
     ox: int = 0,
     cache: dict | None = None,
 ) -> Image.Image:
-    """Paste the selected-tool A* still over the iso well (front layer)."""
+    """Paste the selected-tool A* still over the iso well (front layer).
+
+    Cache is keyed by ``override_stamp`` so a PNG dropped after launch
+    replaces a PL8 surface on the next blit.
+    """
     stem = still_stem_for_tool(tool)
     if stem is None:
         return frame
+    stamp = override_stamp(game, stem)
     packed: tuple[Image.Image, Path, tuple[int, int]] | None
-    if cache is not None and stem in cache:
-        packed = cache[stem]
+    prev = cache.get(stem) if cache is not None else None
+    if prev is not None and prev[0] == stamp:
+        packed = prev[1]
     else:
         packed = load_still(game, stem)
         if cache is not None:
-            cache[stem] = packed
+            cache[stem] = (stamp, packed)
     if packed is None:
         return frame
     img, _path, dest = packed
@@ -383,7 +448,7 @@ def selftest(game: Path | None = None) -> list[str]:
     if dest != (182, 132):
         lines.append(f"FAIL  AHOSPIT dest {dest} want 182x132")
     else:
-        lines.append("ok    AHOSPIT dest 182x132 (hospital menu still, not HOUSES1 iso)")
+        lines.append("ok    AHOSPIT dest 182x132 menu still + HOUSES1[86] iso")
     if still_stem_for_tool("hospital") != "AHOSPIT":
         lines.append(f"FAIL  hospital stem {still_stem_for_tool('hospital')!r}")
     else:
@@ -425,6 +490,21 @@ def selftest(game: Path | None = None) -> list[str]:
             lines.append(f"FAIL  empty images_new still hit {miss}")
         else:
             lines.append("ok    without PNG, resolver misses (PL8 fallback)")
+        frames = [Image.new("RGBA", (58, 30), (10, 20, 30, 255)) for _ in range(90)]
+        frames[86] = Image.new("RGBA", (58, 56), (10, 20, 30, 255))
+        sheets = {HOSPITAL_ISO_KEY: frames}
+        applied = apply_ahospit_iso(sheets, game, roots=[root])
+        mid = frames[86].getpixel((29, 28))
+        if "HOUSES1[86]=58x56" not in applied or mid[0] < 180:
+            lines.append(f"FAIL  iso AHOSPIT {applied} mid={mid}")
+        else:
+            lines.append("ok    AHOSPIT.png replaces HOUSES1[86] 58x56 (iso hospital)")
+        stamp_a = override_stamp(game, "AHOSPIT", roots=[root])
+        stamp_b = override_stamp(game, "AHOSPIT", roots=[empty])
+        if stamp_a[1] is None or stamp_b[1] is not None or stamp_a == stamp_b:
+            lines.append(f"FAIL  stamp {stamp_a} {stamp_b}")
+        else:
+            lines.append("ok    override stamp changes when PNG appears")
 
     if game is not None:
         from app import assets
@@ -449,7 +529,35 @@ def selftest(game: Path | None = None) -> list[str]:
             if still is None or still[0].size != dest:
                 lines.append(f"FAIL  live AHOSPIT still {None if still is None else still[0].size}")
             else:
-                lines.append(f"ok    live images_new/{live.name} -> {dest[0]}x{dest[1]}")
+                lines.append(f"ok    resolve {live}")
+            raw, _pl8 = assets.load_pl8_frames(game, "HOUSES1.PL8")
+            sheets = assets.load_city_map_sheets(game, zoom=0)
+            iso = sheets.get(HOSPITAL_ISO_KEY)
+            if iso is None or len(iso) <= 86:
+                lines.append("FAIL  city sheets missing HOUSES1[86]")
+            else:
+                a = raw[86].getpixel((29, 28))
+                b = iso[86].getpixel((29, 28))
+                if iso[86].size != raw[86].size:
+                    lines.append(f"FAIL  iso dest {iso[86].size} vs PL8 {raw[86].size}")
+                elif a == b:
+                    lines.append(f"FAIL  HOUSES1[86] still PL8 pixel {a}")
+                else:
+                    lines.append(
+                        f"ok    city sheets HOUSES1[86] {iso[86].size} from {live.name}"
+                    )
+            import os
+
+            old = os.getcwd()
+            try:
+                os.chdir(Path(old).anchor)
+                again = resolve_image_png(game, "AHOSPIT")
+            finally:
+                os.chdir(old)
+            if again is None or again.resolve() != live.resolve():
+                lines.append(f"FAIL  resolve depends on cwd {again}")
+            else:
+                lines.append("ok    resolve ignores cwd (city-only.bat / REPO_ROOT)")
         else:
             still = load_still(game, "AHOSPIT")
             if still is None:
