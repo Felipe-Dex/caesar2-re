@@ -2007,6 +2007,8 @@ def show(ctx: BootContext, *, game: Path) -> None:
             forum_state.oracle_advice = None
             forum_state.oracle_sfx = ""
             forum_state.empire_pick = None
+            forum_state.empire_flavor = ""
+            forum_state.empire_sfx = ""
             forum_state.field_focus = ""
             forum_state.field_edit = ""
             blit(_eng_skip(ctx.eng, 28, 0, "CLEAR FORUM"))
@@ -3410,9 +3412,10 @@ def show(ctx: BootContext, *, game: Path) -> None:
                 eng=ctx.eng,
                 frame_size=(win_w, win_h),
             )
-            stem = forum_state.oracle_sfx
+            stem = forum_state.oracle_sfx or forum_state.empire_sfx
             if stem:
                 forum_state.oracle_sfx = ""
+                forum_state.empire_sfx = ""
                 sfx.play_raw(stem)
             if msg == "exit":
                 _sfx("click")

@@ -248,6 +248,22 @@ EMPIRE_HOTSPOTS: tuple[tuple[int, int], ...] = (
 EMPIRE_HIT_W = 36
 EMPIRE_HIT_H = 28
 EMPIRE_GERMANIA_EXTERIOR = 39  # [5] skip; dest (249, 88) — north, not the Med.
+EMPIRE_CRETA = 17
+# 0x5C621 dialog (ebx=x, ecx=y). Not a hover next to the stamp.
+EMPIRE_DLG_X, EMPIRE_DLG_Y = 0x70, 0x80
+EMPIRE_NAME_X, EMPIRE_NAME_Y = 0x90, 0x9C
+EMPIRE_STAT_X, EMPIRE_STAT_Y = 0x90, 0xC0
+EMPIRE_FLAVOR_X, EMPIRE_FLAVOR_Y = 0x90, 0xE0
+EMPIRE_FLAVOR_W, EMPIRE_FLAVOR_H = 0x160, 0x64
+EMPIRE_INK = (240, 228, 160, 255)
+EMPIRE_INK_DIM = (210, 200, 140, 255)
+# 0x135A4(skip+0x3A): table 0x93694. skip 1=B30, skip 2=C01 … skip 32=C31.
+EMPIRE_RAW_BASE = 0x3A
+# HELP.ENG: menus table 66+topic*58 with topic=skip+1148 → Creta island line.
+EMPIRE_HELP_TOPIC0 = 1148
+_HELP_MAGIC = b"Helpfile"
+_HELP_REC = 58
+_HELP_TABLE = 66
 
 _SLIDER_X = 220
 _SLIDER_W = 160
@@ -308,6 +324,8 @@ class ForumState:
     empire_map: Image.Image | None = None  # EMPIRE.PL8 640×480
     empire_parts: list = field(default_factory=list)  # E_PARTS2 (img,x,y)
     empire_pick: int | None = None  # [5] skip 1…44, chrome only
+    empire_flavor: str = ""  # HELP.ENG body from 0x57B48
+    empire_sfx: str = ""  # C-series stem, 0x135A4(skip+0x3A)
     field_focus: str = ""  # donate | gift | ""
     field_edit: str = ""
 
@@ -1428,6 +1446,12 @@ def click_forum(
         skip = _empire_hit(state, mx, my)
         if skip is not None:
             state.empire_pick = skip
+            state.empire_flavor = empire_flavor_text(skip)
+            state.empire_sfx = empire_raw_stem(skip)
+        else:
+            state.empire_pick = None
+            state.empire_flavor = ""
+            state.empire_sfx = ""
         return ""
 
     hit = button_at(mx, my)
@@ -1900,6 +1924,8 @@ def _clear_forum_focus(state: ForumState) -> None:
     state.oracle_advice = None
     state.oracle_sfx = ""
     state.empire_pick = None
+    state.empire_flavor = ""
+    state.empire_sfx = ""
     state.field_focus = ""
     state.field_edit = ""
 
@@ -1923,6 +1949,78 @@ def empire_circa_title(year_raw: int, eng=None) -> str:
     """[33]+2 + abs(year) + BC/AD. ``_eng`` rstrip ate the trailing space."""
     prefix = _eng(eng, 33, 2, "Roman empire circa ")
     return f"{prefix.rstrip()} {_year_label(year_raw)}"
+
+
+def empire_raw_stem(skip: int) -> str:
+    """0x5C621 → ``0x135A4(skip+0x3A)``. Table 0x93694 is ``cNN.raw`` inline."""
+    n = int(skip)
+    if n <= 1:
+        return "B30"
+    if 2 <= n <= 44:
+        return f"C{n - 1:02d}"
+    return ""
+
+
+def empire_status_text(eng=None) -> str:
+    """City Only: every map hit is [47]+9. No career conquer year."""
+    return _eng(eng, 47, 9, "As yet unconquered.")
+
+
+def empire_flavor_text(skip: int, game: Path | None = None) -> str:
+    """HELP.ENG topic skip+1148 (0x57B48). Body is the dialog output."""
+    n = int(skip)
+    fallback = _EMPIRE_FLAVOR_FALLBACK.get(n, "")
+    if game is None:
+        try:
+            from app.config import resolve_game_dir
+
+            game, _how = resolve_game_dir()
+        except (OSError, ValueError, FileNotFoundError):
+            return fallback
+    try:
+        from app.config import find_file
+
+        path = find_file(game, "HELP.ENG") if game is not None else None
+        if path is None:
+            return fallback
+        data = path.read_bytes()
+    except OSError:
+        return fallback
+    if not data.startswith(_HELP_MAGIC):
+        return fallback
+    topic = n + EMPIRE_HELP_TOPIC0
+    pos = _HELP_TABLE + topic * _HELP_REC
+    if pos + 4 > len(data):
+        return fallback
+    off = struct.unpack_from("<I", data, pos)[0]
+    if off <= 0 or off >= len(data):
+        return fallback
+    end = data.find(b"\x00", off)
+    if end < 0:
+        end = min(len(data), off + 400)
+    text = data[off:end].decode("latin-1", errors="replace").replace("\r", " ")
+    return " ".join(text.split()) or fallback
+
+
+_EMPIRE_FLAVOR_FALLBACK = {
+    1: "All roads lead here...",
+    17: (
+        "This island is small, yet rich in farmland and minerals.  "
+        "However, the populace may be troublesome."
+    ),
+    32: (
+        "This northern province contains a large barbarian presence, "
+        "but its resources seem worth the danger."
+    ),
+    34: (
+        "Resources are scarce on this small island, and the people look "
+        "to be difficult to manage.  Maintain vigilance."
+    ),
+    39: (
+        "We've beaten back those upstart barbarians, and these lands are "
+        "bereft of minerals.  Perhaps it's best to leave sleeping dogs lie?"
+    ),
+}
 
 
 def industry_rows(sim: SimState) -> list[tuple[int, str, int, int, int, int]]:
@@ -2326,21 +2424,35 @@ def _blit_empire_native(state: ForumState, sim: SimState, *, eng=None) -> Image.
     pick = state.empire_pick
     if pick and 1 <= pick <= len(EMPIRE_HOTSPOTS):
         name = _eng(eng, 5, pick, "Unknown Province")
-        status = _eng(eng, 47, 9, "As yet unconquered.")
+        status = empire_status_text(eng)
+        flavor = state.empire_flavor or empire_flavor_text(pick)
         hx, hy = EMPIRE_HOTSPOTS[pick - 1]
-        box_w, box_h = 260, 56
-        tx = hx + EMPIRE_HIT_W + 8 if hx < 360 else hx - box_w - 8
-        ty = hy - 8 if hy > 80 else hy + EMPIRE_HIT_H + 8
-        tx = max(8, min(tx, FORUM_NATIVE_W - box_w - 8))
-        ty = max(40, min(ty, 390))
-        draw.rectangle((tx, ty, tx + box_w, ty + box_h), fill=(8, 40, 16, 220), outline=(200, 220, 160))
-        draw.text((tx + 8, ty + 6), name, fill=(220, 240, 200, 255), font=small)
-        draw.text((tx + 8, ty + 26), status, fill=(200, 220, 180, 255), font=small)
         draw.ellipse(
             (hx - 4, hy - 4, hx + EMPIRE_HIT_W + 4, hy + EMPIRE_HIT_H + 4),
             outline=(200, 32, 24, 255),
             width=2,
         )
+        # 0x59ff8 / 0x57f48 — fixed dialog, not a stamp-side hover.
+        panel = (
+            EMPIRE_DLG_X,
+            EMPIRE_DLG_Y,
+            EMPIRE_FLAVOR_X + EMPIRE_FLAVOR_W + 8,
+            EMPIRE_FLAVOR_Y + EMPIRE_FLAVOR_H + 8,
+        )
+        draw.rectangle(panel, fill=(8, 36, 16, 235), outline=(200, 220, 140, 255))
+        draw.text((EMPIRE_NAME_X, EMPIRE_NAME_Y), name, fill=EMPIRE_INK, font=font)
+        draw.text((EMPIRE_STAT_X, EMPIRE_STAT_Y), status, fill=EMPIRE_INK_DIM, font=small)
+        box = (
+            EMPIRE_FLAVOR_X,
+            EMPIRE_FLAVOR_Y,
+            EMPIRE_FLAVOR_X + EMPIRE_FLAVOR_W,
+            EMPIRE_FLAVOR_Y + EMPIRE_FLAVOR_H,
+        )
+        draw.rectangle(box, fill=(4, 28, 12, 255), outline=(180, 200, 120, 255))
+        fy = EMPIRE_FLAVOR_Y + 6
+        for line in _wrap_oracle_text(flavor, 46)[:6]:
+            draw.text((EMPIRE_FLAVOR_X + 8, fy), line, fill=EMPIRE_INK, font=small)
+            fy += 14
     return out.convert("RGB")
 
 
@@ -3240,6 +3352,44 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  empire mouse→640×480 {mapped.empire_pick}")
     else:
         lines.append("ok    Empire hits use 0x95cbb after window→FB map")
+    if empire_raw_stem(1) != "B30" or empire_raw_stem(17) != "C16" or empire_raw_stem(32) != "C31":
+        lines.append(
+            f"FAIL  empire RAW {empire_raw_stem(1)} {empire_raw_stem(17)} {empire_raw_stem(32)}"
+        )
+    else:
+        lines.append("ok    Empire VO C16/C31 from 0x135A4(skip+0x3A)")
+    creta = ForumState(kind=KIND_EMPIRE)
+    cx, cy = EMPIRE_HOTSPOTS[EMPIRE_CRETA - 1]
+    click_forum(creta, cx + 4, cy + 4, SimState(city_only=1))
+    if creta.empire_pick != EMPIRE_CRETA or creta.empire_sfx != "C16":
+        lines.append(f"FAIL  Creta pick/sfx {creta.empire_pick} {creta.empire_sfx!r}")
+    elif "island" not in creta.empire_flavor.lower():
+        lines.append(f"FAIL  Creta flavor {creta.empire_flavor[:60]!r}")
+    else:
+        lines.append("ok    Creta dialog flavor + C16.RAW")
+    click_forum(creta, 180, 280, SimState(city_only=1))
+    if creta.empire_pick is not None or creta.empire_flavor:
+        lines.append(f"FAIL  sea does not dismiss dialog {creta.empire_pick}")
+    else:
+        lines.append("ok    miss click clears Empire dialog")
+    creta.empire_pick = EMPIRE_CRETA
+    creta.empire_flavor = empire_flavor_text(EMPIRE_CRETA)
+    dframe = blit_forum((640, 480), creta, SimState(city_only=1, year_raw=-289))
+    gold = False
+    for yy in range(EMPIRE_FLAVOR_Y + 4, EMPIRE_FLAVOR_Y + 22):
+        for xx in range(EMPIRE_FLAVOR_X + 8, EMPIRE_FLAVOR_X + 80):
+            pix = dframe.getpixel((xx, yy))
+            if pix[0] > 180 and pix[1] > 160:
+                gold = True
+                break
+        if gold:
+            break
+    if not gold:
+        lines.append("FAIL  flavor invisible in green frame")
+    elif "Govern this Province" in creta.empire_flavor:
+        lines.append("FAIL  career Govern this Province leaked")
+    else:
+        lines.append("ok    flavor ink inside 0x57f48 green frame")
     sim_g = SimState(city_only=1)
     goods = bytearray(768)
     struct.pack_into("<i", goods, 1 * 48 + 8, 2)
