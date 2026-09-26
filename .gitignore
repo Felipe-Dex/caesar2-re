@@ -30,6 +30,8 @@ videos/*.png
 videos/*.PNG
 videos_new/*.mp4
 videos_new/*.MP4
+images_new/*.png
+images_new/*.PNG
 video/*.mp4
 video/*.MP4
 

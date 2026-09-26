@@ -112,6 +112,7 @@ from app.city_overlay import (
     place_dialog_contains,
     query_place,
 )
+from app.image_override import blit_tool_still, still_stem_for_tool
 from app.palette import PaletteState, action_for_tool
 from app.title import (
     ACTION_CAREER,
@@ -909,6 +910,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
     tool: str | None = None
     pl8_zooms = assets.available_map_zooms(game)
     chrome = CityChrome.load(game)
+    still_cache: dict = {}
     palette = PaletteState()
     menu_open: int | None = None
     minimap_rect: tuple[int, int, int, int] | None = None
@@ -1224,6 +1226,9 @@ def show(ctx: BootContext, *, game: Path) -> None:
                 )
             if build_flyout:
                 frame = palette.blit(frame, selected=tool, ox=ox)
+            frame = blit_tool_still(
+                frame, game, tool, ox=ox, cache=still_cache
+            )
             if place_dlg is not None:
                 frame = blit_place_dialog(frame, place_dlg)
             # Query stays in front. Non-disaster banners wait; disasters
@@ -1263,17 +1268,19 @@ def show(ctx: BootContext, *, game: Path) -> None:
             host.coords(well_item, wx0, wy0)
             _set_layer(ui_item, ui_cache, "ui")
             _set_layer(well_item, well, "well")
+            layer = Image.new("RGBA", (win_w, win_h), (0, 0, 0, 0))
             if build_flyout:
                 # Flyout sits left of the 162 px chrome, over the iso well.
                 # Keep it on front so Play can still dirty the well only.
-                layer = Image.new("RGBA", (win_w, win_h), (0, 0, 0, 0))
+                layer = palette.blit(layer, selected=tool, ox=ox)
+            layer = blit_tool_still(
+                layer, game, tool, ox=ox, cache=still_cache
+            )
+            has_front = build_flyout or still_stem_for_tool(tool) is not None
+            if has_front:
                 host.coords(front_item, 0, 0)
                 host.tag_raise(front_item)
-                _set_layer(
-                    front_item,
-                    palette.blit(layer, selected=tool, ox=ox),
-                    "front",
-                )
+                _set_layer(front_item, layer, "front")
             else:
                 _set_layer(front_item, None, "front")
         _prof_note(t0)

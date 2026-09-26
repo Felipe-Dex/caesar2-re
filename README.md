@@ -24,6 +24,7 @@ This repository **does not include** original game files or decoded sprites. You
 - `tools/decode_smk.py` — `.SMK` inventory + ffmpeg remux (Smacker → MP4); does not reimplement the codec
 - `sound/` — local previews only (`*.wav`, `*_waveform.png`, `*_spec.png`); gitignored, do not publish
 - `images/` — local PL8 previews (`{stem}.png` or `{stem}_sheet.png`); gitignored, do not publish
+- `images_new/` — optional higher-res PNG overrides (`{stem}.png`, 8.3 name like `AHOSPIT`); fitted into the native dest; gitignored, do not publish
 - `videos/` — local Smacker previews (`{stem}.mp4`, `{stem}_frame0.png`); gitignored, do not publish
 
 ## Decoder

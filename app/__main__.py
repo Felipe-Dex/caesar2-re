@@ -387,6 +387,17 @@ def main(argv: list[str] | None = None) -> int:
         if vid_fail:
             print("FAILED        : advisor video selftest")
             return 1
+        from app.image_override import selftest as image_override_selftest
+
+        print("-- images_new selftest --")
+        img_fail = 0
+        for line in image_override_selftest(game):
+            print(f"  {line}")
+            if "FAIL" in line:
+                img_fail += 1
+        if img_fail:
+            print("FAILED        : images_new selftest")
+            return 1
         from app.audio import selftest as audio_selftest
 
         print("-- city sfx selftest --")
