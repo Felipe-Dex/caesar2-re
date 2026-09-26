@@ -701,48 +701,70 @@ def hospital_override_dest(
     return ax - cx + sx, ay - cy + sy, aw, ah
 
 
-def _hospital_blit_grass(
-    img: Image.Image,
-    ox: int,
-    oy: int,
-    sx: int,
-    sy: int,
-    wx: int,
-    wy: int,
-    cityfixt: Sequence[Image.Image] | None,
+def hospital_front_xy(
+    origin_wx: int,
+    origin_wy: int,
     *,
-    tile_w: int,
-    tile_h: int,
-    zoom: int,
-    facing: int,
-    width: int,
-    height: int,
-) -> None:
-    """CITYFIXT grass under the 3×3 so skipped leftovers are not ISO_BG holes."""
-    if cityfixt is None:
-        return
-    grass_idx = 8 + CITYFIXT_TERRAIN_BIAS
-    cx, cy = tile_iso_xy(wx, wy, zoom=zoom, facing=facing, width=width, height=height)
+    facing: int = 0,
+    width: int = MAP_W,
+    height: int = MAP_H,
+) -> tuple[int, int]:
+    """World cell of the 3×3 with max iso depth (south corner at facing 0)."""
+    best = (origin_wx, origin_wy)
+    best_key = (-1, -1)
     for row in range(HOSPITAL_FOOT):
         for col in range(HOSPITAL_FOOT):
-            tx, ty = tile_iso_xy(
-                ox + col,
-                oy + row,
+            wx, wy = origin_wx + col, origin_wy + row
+            dx, dy = world_to_draw(wx, wy, facing, width=width, height=height)
+            key = (dx + dy, dx)
+            if key > best_key:
+                best_key = key
+                best = (wx, wy)
+    return best
+
+
+def blit_hospital_overrides(
+    img: Image.Image,
+    city: CityMap,
+    sheets: dict[str, Sequence[Image.Image]] | None,
+    *,
+    zoom: int = 0,
+    facing: int = 0,
+    ox: int = 0,
+    oy: int = 0,
+) -> int:
+    """One AHOSPIT per 0xFB origin, after terrain, before CITYTOP / walkers.
+
+    Origin-time blit loses to later south/east grass (tall AABB). Pasting
+    here is the iso depth of the front-most leftover plus overlapping
+    neighbour diamonds.
+    """
+    from app.image_override import hospital_has_override, hospital_iso_sprite
+
+    if not hospital_has_override(sheets):
+        return 0
+    n = 0
+    for y in range(city.height):
+        for x in range(city.width):
+            t = city.tile(x, y)
+            if t.terrain_id != ID_HOSPITAL or (t.spawn_packed & 0xF) != 0:
+                continue
+            ax, ay, aw, ah = hospital_sprite_aabb(
+                x,
+                y,
+                sheets,
                 zoom=zoom,
                 facing=facing,
-                width=width,
-                height=height,
+                width=city.width,
+                height=city.height,
+                city=city,
             )
-            _blit_iso(
-                img,
-                cityfixt,
-                grass_idx,
-                tx - cx + sx,
-                ty - cy + sy,
-                tile_w=tile_w,
-                tile_h=tile_h,
-                lift=0,
-            )
+            spr = hospital_iso_sprite(sheets, aw, ah)
+            if spr is None:
+                continue
+            img.paste(spr, (ax + ox, ay + oy), spr)
+            n += 1
+    return n
 
 
 def _hospital_try_override(
@@ -752,64 +774,26 @@ def _hospital_try_override(
     sy: int,
     sheets: dict[str, Sequence[Image.Image]] | None,
     *,
-    wx: int | None,
-    wy: int | None,
-    zoom: int,
-    facing: int,
-    width: int,
-    height: int,
-    painted: set[tuple[int, int]] | None,
     cityfixt: Sequence[Image.Image] | None = None,
     tile_w: int = ISO_W,
     tile_h: int = ISO_H,
-    city: CityMap | None = None,
 ) -> bool:
-    """Blit AHOSPIT once per origin. True = skip BUILD1B[86–94] PL8."""
-    from app.image_override import hospital_has_override, hospital_iso_sprite
+    """Grass under this 0xFB cell; skip BUILD1B[86–94]. PNG is later."""
+    from app.image_override import hospital_has_override
 
     if tile.terrain_id != ID_HOSPITAL or not hospital_has_override(sheets):
         return False
-    if wx is None or wy is None:
-        return True
-    ox, oy = hospital_origin_xy(wx, wy, tile)
-    key = (ox, oy)
-    if painted is not None:
-        if key in painted:
-            return True
-        painted.add(key)
-    elif (tile.spawn_packed & 0xF) != 0:
-        return True
-    _hospital_blit_grass(
-        img,
-        ox,
-        oy,
-        sx,
-        sy,
-        wx,
-        wy,
-        cityfixt,
-        tile_w=tile_w,
-        tile_h=tile_h,
-        zoom=zoom,
-        facing=facing,
-        width=width,
-        height=height,
-    )
-    ax, ay, aw, ah = hospital_sprite_aabb(
-        ox,
-        oy,
-        sheets,
-        zoom=zoom,
-        facing=facing,
-        width=width,
-        height=height,
-        city=city,
-    )
-    cx, cy = tile_iso_xy(wx, wy, zoom=zoom, facing=facing, width=width, height=height)
-    spr = hospital_iso_sprite(sheets, aw, ah)
-    if spr is None:
-        return False
-    img.paste(spr, (ax - cx + sx, ay - cy + sy), spr)
+    if cityfixt is not None:
+        _blit_iso(
+            img,
+            cityfixt,
+            8 + CITYFIXT_TERRAIN_BIAS,
+            sx,
+            sy,
+            tile_w=tile_w,
+            tile_h=tile_h,
+            lift=0,
+        )
     return True
 
 
@@ -2091,7 +2075,6 @@ def _paint_iso_tile(
     wy: int | None = None,
     map_w: int = MAP_W,
     map_h: int = MAP_H,
-    hospital_painted: set[tuple[int, int]] | None = None,
 ) -> None:
     """Blit this cell's LUT sprite at ``(sx, sy)``.
 
@@ -2103,9 +2086,9 @@ def _paint_iso_tile(
     keeps the facing-0 piece). Factory CITYTOP stays on the world tile
     and is replayed after terrain so south extra_rows do not bury jugs.
 
-    Hospital ``0xFB`` + AHOSPIT.png is one AABB over the nine tall
-    BUILD1B dests (174×143 at zoom 0), anchored on ``+5&0xF==0``.
-    Grass under the 3×3; leftover BUILD1B[86–94] skip.
+    Hospital ``0xFB`` + AHOSPIT.png: grass under each cell here;
+    leftover BUILD1B[86–94] skip. The PNG is pasted after terrain
+    (``blit_hospital_overrides``) so south grass cannot cover it.
     """
     if _hospital_try_override(
         img,
@@ -2113,13 +2096,6 @@ def _paint_iso_tile(
         sx,
         sy,
         sheets,
-        wx=wx,
-        wy=wy,
-        zoom=zoom,
-        facing=facing,
-        width=map_w,
-        height=map_h,
-        painted=hospital_painted,
         cityfixt=cityfixt,
         tile_w=tile_w,
         tile_h=tile_h,
@@ -2330,7 +2306,6 @@ def render_iso(
         cityfixt = sprites
 
     overlays: list[tuple[int, int, int, int]] = []
-    hospital_painted: set[tuple[int, int]] = set()
     for dy in range(city.height):
         for dx in range(city.width):
             wx, wy = draw_to_world(dx, dy, facing, width=city.width, height=city.height)
@@ -2358,10 +2333,10 @@ def render_iso(
                 wy=wy,
                 map_w=city.width,
                 map_h=city.height,
-                hospital_painted=hospital_painted,
             )
             if world.terrain_id == 0xFA and world.draw & 0x80:
                 overlays.append((wx, wy, sx, sy))
+    blit_hospital_overrides(img, city, sheets, zoom=zoom, facing=facing)
     blit_factory_overlays(img, city, overlays, zoom=zoom, sheets=sheets)
     return img
 
@@ -2408,7 +2383,6 @@ def render_iso_view(
         return img, cx, cy
     tall = _MAX_SPRITE_H[z]
     overlays: list[tuple[int, int, int, int]] = []
-    hospital_painted: set[tuple[int, int]] = set()
     for dy in range(ty0, ty1 + 1):
         for dx in range(tx0, tx1 + 1):
             wx, wy = draw_to_world(dx, dy, facing, width=city.width, height=city.height)
@@ -2438,10 +2412,12 @@ def render_iso_view(
                 wy=wy,
                 map_w=city.width,
                 map_h=city.height,
-                hospital_painted=hospital_painted,
             )
             if world.terrain_id == 0xFA and world.draw & 0x80:
                 overlays.append((wx, wy, sx, sy))
+    blit_hospital_overrides(
+        img, city, sheets, zoom=z, facing=facing, ox=paste_ox, oy=paste_oy
+    )
     blit_factory_overlays(img, city, overlays, zoom=z, sheets=sheets)
     return img, cx, cy
 
@@ -2673,7 +2649,6 @@ def blit_water_tiles(
     ordered = sorted(members, key=lambda p: (p[1], p[0]))
     n = 0
     overlays: list[tuple[int, int, int, int]] = []
-    hospital_painted: set[tuple[int, int]] = set()
     for dx, dy in ordered:
         wx, wy = draw_to_world(dx, dy, facing, width=city.width, height=city.height)
         wx, wy = int(round(wx)), int(round(wy))
@@ -2700,11 +2675,13 @@ def blit_water_tiles(
             wy=wy,
             map_w=city.width,
             map_h=city.height,
-            hospital_painted=hospital_painted,
         )
         if world.terrain_id == 0xFA and world.draw & 0x80:
             overlays.append((wx, wy, sx - x0, sy - y0))
         n += 1
+    blit_hospital_overrides(
+        crop, city, sheets, zoom=z, facing=facing, ox=-x0, oy=-y0
+    )
     blit_factory_overlays(crop, city, overlays, zoom=z, sheets=sheets)
     img.paste(crop, (x0, y0))
     return n

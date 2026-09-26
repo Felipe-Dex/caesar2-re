@@ -18,10 +18,11 @@ footprints are not stretched.
 * **Sidebar card** while the Hospital tool is selected (native 182×132,
   fitted into the 162 px INT_CITY strip). Never pasted onto the iso well
   — that left a painting stuck at ~ (292, 32).
-* **Iso 0xFB only:** one blit on the origin (``+5&0xF==0``), fitted to
-  the union of the nine tall BUILD1B[86–94] sprite dests (zoom 0 =
-  **174×143**, not the 174×90 ground diamonds). Grass under the 3×3;
-  leftover PL8 skipped. Barracks ``0xE4`` is ``HOUSES1[81–89]``.
+* **Iso 0xFB only:** one blit after terrain (front iso depth of the
+  3×3, before CITYTOP / walkers), fitted to the union of the nine tall
+  BUILD1B[86–94] sprite dests (zoom 0 = **174×143**, not the 174×90
+  ground diamonds). Grass under each leftover; PL8 skipped. Barracks
+  ``0xE4`` is ``HOUSES1[81–89]``.
 
 Export spec for ``images_new/AHOSPIT.png``: one isometric painting for
 the whole 3×3 (not nine tiles); transparent alpha background (flat
@@ -632,6 +633,32 @@ def selftest(game: Path | None = None) -> list[str]:
             lines.append(f"FAIL  hospital dests {len(dests)} unique={len(unique)} want 2")
         else:
             lines.append("ok    one blit per 0xFB origin (not 9)")
+        from app.city_map import hospital_front_xy, render_iso
+
+        if hospital_front_xy(10, 10) != (12, 12):
+            lines.append(f"FAIL  front cell {hospital_front_xy(10, 10)} want (12, 12)")
+        else:
+            lines.append("ok    front-most 0xFB cell is south corner (12, 12)")
+        grass = [Image.new("RGBA", (58, 30), (0, 200, 0, 255)) for _ in range(50)]
+        sheets["CITYFIXT"] = grass
+        sheets[AHOSPIT_SHEET_KEY] = [Image.new("RGBA", (174, 143), (220, 30, 30, 255))]
+        for y in range(pin_city.height):
+            for x in range(pin_city.width):
+                if pin_city.tile(x, y).terrain_id != ID_HOSPITAL:
+                    pin_city.tiles[pin_city.offset(x, y)] = 0x14
+        world = render_iso(pin_city, sheets=sheets, zoom=0)
+        gax, gay, gaw, gah = hospital_sprite_aabb(10, 10, sheets)
+        gsx, gsy = tile_iso_xy(10, 13)
+        ox0, oy0 = max(gax, gsx), max(gay, gsy)
+        ox1, oy1 = min(gax + gaw, gsx + 58), min(gay + gah, gsy + 30)
+        if ox1 <= ox0 or oy1 <= oy0:
+            lines.append("FAIL  south grass does not overlap hospital AABB")
+        else:
+            pix = world.getpixel(((ox0 + ox1) // 2, (oy0 + oy1) // 2))
+            if pix[0] < 180 or pix[1] > 80:
+                lines.append(f"FAIL  south grass covered PNG {pix}")
+            else:
+                lines.append("ok    grass south of 0xFB does not cover the PNG")
         card = still_card_size((182, 132))
         cx, cy = still_screen_xy(card, ox=0)
         if cx < SIDEBAR_X or cx + card[0] > SIDEBAR_X + SIDEBAR_W:
