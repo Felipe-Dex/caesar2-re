@@ -226,13 +226,28 @@ ORACLE_INK_DIM = (12, 140, 12, 255)
 ORACLE_LIVE_IDS = (1, 2, 3, 4, 5, 6, 9, 10, 11, 12, 13, 14, 15, 16)
 ORACLE_RAW_EAX0 = 0x1F
 
-# Native C2 Forum overlay. Integer-upscaled to the city well (left of the
-# 162 px INT_CITY strip — same as city_chrome.SIDEBAR_W). At 640×480 the
-# overlay is full-window; the sidebar is never stretched.
+# Native C2 Forum overlay. Compose at 640×480, then integer-upscale and
+# letterbox into the window (same rule as the city well). Never stretch
+# X independently of Y — that fattened RAT_FRON / EMPIRE.PL8 on widescreen.
 FORUM_NATIVE_W = 640
 FORUM_NATIVE_H = 480
-_FORUM_SIDEBAR_W = 162
 _FORUM_LETTERBOX = (12, 16, 28)
+# 0x33C3D dest table at 0x95cbb / 0x95cbd (ecx*4, i16 x/y). Skip = ecx+1.
+# E_PARTS2 sprite xy is decorative — using it put Germania Exterior on the sea.
+EMPIRE_HOTSPOTS: tuple[tuple[int, int], ...] = (
+    (250, 241), (279, 264), (226, 202), (267, 307), (230, 253),
+    (176, 198), (188, 315), (118, 226), (91, 264), (72, 215),
+    (157, 193), (83, 309), (286, 223), (142, 166), (329, 255),
+    (345, 292), (371, 331), (202, 155), (412, 352), (337, 352),
+    (473, 327), (141, 101), (239, 351), (484, 289), (388, 276),
+    (435, 273), (413, 246), (478, 244), (365, 224), (332, 208),
+    (280, 184), (241, 169), (216, 137), (454, 315), (512, 203),
+    (520, 267), (117, 98), (142, 45), (249, 88), (264, 147),
+    (317, 165), (372, 171), (428, 169), (466, 168),
+)
+EMPIRE_HIT_W = 36
+EMPIRE_HIT_H = 28
+EMPIRE_GERMANIA_EXTERIOR = 39  # [5] skip; dest (249, 88) — north, not the Med.
 
 _SLIDER_X = 220
 _SLIDER_W = 160
@@ -303,6 +318,22 @@ def _eng(eng, slot: int, skip: int, fallback: str) -> str:
         if got:
             return got.rstrip()
     return fallback
+
+
+def _fit_forum_native(src: Image.Image, fill=(12, 16, 28, 255)) -> Image.Image:
+    """Paste ``src`` into 640×480 without stretching (aspect + letterbox)."""
+    im = src.convert("RGBA")
+    if im.size == (FORUM_NATIVE_W, FORUM_NATIVE_H):
+        return im
+    canvas = Image.new("RGBA", (FORUM_NATIVE_W, FORUM_NATIVE_H), fill)
+    fitted = im.copy()
+    fitted.thumbnail((FORUM_NATIVE_W, FORUM_NATIVE_H), Image.Resampling.NEAREST)
+    canvas.paste(
+        fitted,
+        ((FORUM_NATIVE_W - fitted.width) // 2, (FORUM_NATIVE_H - fitted.height) // 2),
+        fitted,
+    )
+    return canvas
 
 
 def _off(x: int, y: int) -> int:
@@ -1199,19 +1230,17 @@ def open_forum(sim: SimState, tiles: bytearray, game: Path | None = None) -> For
 
 
 def forum_layout(win_w: int, win_h: int) -> tuple[int, int, int]:
-    """Integer nearest-neighbor scale + origin for the 640×480 Forum overlay.
+    """Integer nearest-neighbor scale + centered origin for the 640×480 FB.
 
-    ``scale = max(1, min(well_w // 640, well_h // 480))``. The well is the
-    iso area left of the 162 px chrome when the window is wider than 640;
-    at native size Forum is full-window so the sidebar is not reserved.
-    Origin is the well's top-left (0, 0) — HUD still paints on top.
+    ``scale = max(1, min(win_w // 640, win_h // 480))``. Same rule as the
+    city well: never stretch X independently of Y. Widescreen letterboxes.
     """
     w = max(1, int(win_w))
     h = max(1, int(win_h))
-    well_w = w - _FORUM_SIDEBAR_W if w > FORUM_NATIVE_W else w
-    well_h = h
-    scale = max(1, min(well_w // FORUM_NATIVE_W, well_h // FORUM_NATIVE_H))
-    return scale, 0, 0
+    scale = max(1, min(w // FORUM_NATIVE_W, h // FORUM_NATIVE_H))
+    ox = (w - FORUM_NATIVE_W * scale) // 2
+    oy = (h - FORUM_NATIVE_H * scale) // 2
+    return scale, ox, oy
 
 
 def forum_to_native(mx: int, my: int, win_w: int, win_h: int) -> tuple[int, int]:
@@ -1736,13 +1765,9 @@ def _blit_oracle_columns(out: Image.Image, column: Image.Image | None, ratings: 
 def _blit_oracle_native(state: ForumState, sim: SimState, *, eng=None) -> Image.Image:
     """Full-screen Your Ratings — no 4×3 chrome. Right-click returns."""
     if state.oracle_back is not None:
-        out = state.oracle_back.resize(
-            (FORUM_NATIVE_W, FORUM_NATIVE_H), Image.Resampling.NEAREST
-        ).convert("RGBA")
+        out = _fit_forum_native(state.oracle_back, (40, 56, 72, 255))
     elif state.bg is not None:
-        out = state.bg.resize(
-            (FORUM_NATIVE_W, FORUM_NATIVE_H), Image.Resampling.NEAREST
-        ).convert("RGBA")
+        out = _fit_forum_native(state.bg, (40, 56, 72, 255))
     else:
         out = Image.new("RGBA", (FORUM_NATIVE_W, FORUM_NATIVE_H), (40, 56, 72, 255))
     e, p, pr, c, avg = _oracle_ratings(sim)
@@ -1895,11 +1920,9 @@ def favor_quote_skip(favor: int) -> int:
 
 
 def empire_circa_title(year_raw: int, eng=None) -> str:
-    """[33]+2 + abs(year) + BC/AD."""
+    """[33]+2 + abs(year) + BC/AD. ``_eng`` rstrip ate the trailing space."""
     prefix = _eng(eng, 33, 2, "Roman empire circa ")
-    if prefix and not prefix.endswith(" "):
-        prefix = f"{prefix} "
-    return f"{prefix}{_year_label(year_raw)}"
+    return f"{prefix.rstrip()} {_year_label(year_raw)}"
 
 
 def industry_rows(sim: SimState) -> list[tuple[int, str, int, int, int, int]]:
@@ -2054,11 +2077,16 @@ def type_forum_key(state: ForumState, sim: SimState, key: str, char: str) -> boo
 
 
 def _empire_hit(state: ForumState, mx: int, my: int) -> int | None:
-    """E_PARTS2 sprites 0…43 → [5] skip 1…44. Caption plates 44+ ignored."""
-    for i, item in enumerate(state.empire_parts[:44]):
-        _im, x, y = item[0], item[1], item[2]
-        w, h = _im.size
-        if x <= mx < x + w and y <= my < y + h:
+    """0x33C3D: dest (0x95cbb) AABB in 640×480. First ecx 0…0x2B wins.
+
+    ``state`` is unused (parts are stamps, not the hit table). Mouse must
+    already be native — ``click_forum`` maps window→FB first.
+    """
+    del state
+    if not (0 <= mx < FORUM_NATIVE_W and 0 <= my < FORUM_NATIVE_H):
+        return None
+    for i, (x, y) in enumerate(EMPIRE_HOTSPOTS):
+        if x <= mx < x + EMPIRE_HIT_W and y <= my < y + EMPIRE_HIT_H:
             return i + 1
     return None
 
@@ -2280,10 +2308,9 @@ def _draw_centurion(draw, font, sim: SimState, eng) -> None:
 def _blit_empire_native(state: ForumState, sim: SimState, *, eng=None) -> Image.Image:
     """Kind 6 — EMPIRE.PL8 full screen. No crowd, no 4×3 chrome."""
     if state.empire_map is not None:
-        out = state.empire_map.resize((FORUM_NATIVE_W, FORUM_NATIVE_H), Image.Resampling.NEAREST)
+        out = _fit_forum_native(state.empire_map, (48, 40, 28, 255))
     else:
-        out = Image.new("RGB", (FORUM_NATIVE_W, FORUM_NATIVE_H), (48, 40, 28))
-    out = out.convert("RGBA")
+        out = Image.new("RGBA", (FORUM_NATIVE_W, FORUM_NATIVE_H), (48, 40, 28, 255))
     draw = ImageDraw.Draw(out)
     font = _serif_font(16)
     small = _serif_font(13)
@@ -2297,17 +2324,23 @@ def _blit_empire_native(state: ForumState, sim: SimState, *, eng=None) -> Image.
     fw = draw.textlength(foot, font=small) if hasattr(draw, "textlength") else 260
     draw.text(((FORUM_NATIVE_W - int(fw)) // 2, 448), foot, fill=(240, 230, 200, 255), font=small)
     pick = state.empire_pick
-    if pick and 1 <= pick <= 44:
+    if pick and 1 <= pick <= len(EMPIRE_HOTSPOTS):
         name = _eng(eng, 5, pick, "Unknown Province")
         status = _eng(eng, 47, 9, "As yet unconquered.")
-        box = (20, 340, 280, 56)
-        draw.rectangle((box[0], box[1], box[0] + box[2], box[1] + box[3]), fill=(8, 40, 16, 220), outline=(200, 220, 160))
-        draw.text((box[0] + 8, box[1] + 6), name, fill=(220, 240, 200, 255), font=small)
-        draw.text((box[0] + 8, box[1] + 26), status, fill=(200, 220, 180, 255), font=small)
-        if pick - 1 < len(state.empire_parts):
-            _im, x, y = state.empire_parts[pick - 1]
-            w, h = _im.size
-            draw.ellipse((x - 3, y - 3, x + w + 3, y + h + 3), outline=(200, 32, 24, 255), width=2)
+        hx, hy = EMPIRE_HOTSPOTS[pick - 1]
+        box_w, box_h = 260, 56
+        tx = hx + EMPIRE_HIT_W + 8 if hx < 360 else hx - box_w - 8
+        ty = hy - 8 if hy > 80 else hy + EMPIRE_HIT_H + 8
+        tx = max(8, min(tx, FORUM_NATIVE_W - box_w - 8))
+        ty = max(40, min(ty, 390))
+        draw.rectangle((tx, ty, tx + box_w, ty + box_h), fill=(8, 40, 16, 220), outline=(200, 220, 160))
+        draw.text((tx + 8, ty + 6), name, fill=(220, 240, 200, 255), font=small)
+        draw.text((tx + 8, ty + 26), status, fill=(200, 220, 180, 255), font=small)
+        draw.ellipse(
+            (hx - 4, hy - 4, hx + EMPIRE_HIT_W + 4, hy + EMPIRE_HIT_H + 4),
+            outline=(200, 32, 24, 255),
+            width=2,
+        )
     return out.convert("RGB")
 
 
@@ -2804,27 +2837,28 @@ def selftest() -> list[str]:
         lines.append("ok    forum 640x480")
     if forum_layout(640, 480) != (1, 0, 0):
         lines.append(f"FAIL  forum scale 640 {forum_layout(640, 480)}")
-    elif forum_layout(640 * 2 + _FORUM_SIDEBAR_W, 480 * 2) != (2, 0, 0):
-        lines.append(f"FAIL  forum scale 2x {forum_layout(1442, 960)}")
-    elif forum_layout(640 * 3 + _FORUM_SIDEBAR_W, 480 * 3) != (3, 0, 0):
-        lines.append(f"FAIL  forum scale 3x {forum_layout(2082, 1440)}")
+    elif forum_layout(1280, 960) != (2, 0, 0):
+        lines.append(f"FAIL  forum scale 2x {forum_layout(1280, 960)}")
+    elif forum_layout(1920, 1080) != (2, 320, 60):
+        lines.append(f"FAIL  forum letterbox {forum_layout(1920, 1080)}")
     else:
-        lines.append("ok    forum scale 1/2/3 from well/640")
-    wide = (FORUM_NATIVE_W * 2 + _FORUM_SIDEBAR_W, FORUM_NATIVE_H * 2)
+        lines.append("ok    forum scale 1/2 + widescreen letterbox")
+    wide = (1920, 1080)
+    wscale, wox, woy = forum_layout(*wide)
     scaled = blit_forum(wide, state, sim)
     if scaled.size != wide:
         lines.append(f"FAIL  forum 2x blit {scaled.size}")
-    elif scaled.getpixel((10, 10)) == _FORUM_LETTERBOX:
+    elif scaled.getpixel((10, 10)) != _FORUM_LETTERBOX:
+        lines.append("FAIL  forum widescreen missing letterbox")
+    elif scaled.getpixel((wox + 10, woy + 10)) == _FORUM_LETTERBOX:
         lines.append("FAIL  forum 2x overlay empty")
-    elif scaled.getpixel((FORUM_NATIVE_W * 2 + 8, 10)) != _FORUM_LETTERBOX:
-        lines.append("FAIL  forum 2x stretched into sidebar")
     else:
-        lines.append("ok    forum 2x nearest well, sidebar 1:1 strip")
+        lines.append("ok    forum 2x nearest + centered letterbox")
     px, py, _pw, _ph = button_rect(11)
     exit_msg = click_forum(
         ForumState(kind=KIND_PLEBS, labor=labor),
-        px * 2 + 4,
-        py * 2 + 4,
+        wox + px * wscale + 4,
+        woy + py * wscale + 4,
         sim,
         frame_size=wide,
     )
@@ -2840,8 +2874,12 @@ def selftest() -> list[str]:
     )
     sim_s.labor_assigned = list(LABOR_ASSIGNED_INIT)
     state_s = ForumState(kind=KIND_PLEBS, labor=labor_s)
+
+    def _win(nx: int, ny: int) -> tuple[int, int]:
+        return wox + nx * wscale + 2, woy + ny * wscale + 2
+
     _wm, wp = _welfare_rects()
-    click_forum(state_s, wp[0] * 2 + 2, wp[1] * 2 + 2, sim_s, frame_size=wide)
+    click_forum(state_s, *_win(wp[0], wp[1]), sim_s, frame_size=wide)
     if labor_s.welfare != 9:
         lines.append(f"FAIL  scaled welfare+ {labor_s.welfare}")
     else:
@@ -2849,9 +2887,9 @@ def selftest() -> list[str]:
     minus0, bar0, plus0 = _slider_rects(0)
     before0 = labor_s.assigned[0]
     idle0 = labor_s.idle
-    click_forum(state_s, plus0[0] * 2 + 2, plus0[1] * 2 + 2, sim_s, frame_size=wide)
-    click_forum(state_s, minus0[0] * 2 + 2, minus0[1] * 2 + 2, sim_s, frame_size=wide)
-    click_forum(state_s, bar0[0] * 2 + 2, bar0[1] * 2 + 2, sim_s, frame_size=wide)
+    click_forum(state_s, *_win(plus0[0], plus0[1]), sim_s, frame_size=wide)
+    click_forum(state_s, *_win(minus0[0], minus0[1]), sim_s, frame_size=wide)
+    click_forum(state_s, *_win(bar0[0], bar0[1]), sim_s, frame_size=wide)
     if (
         labor_s.assigned[0] != CREW
         or labor_s.assigned[0] != before0
@@ -2864,7 +2902,7 @@ def selftest() -> list[str]:
         lines.append("ok    construction +/- do nothing, still 20 Need 20")
     fire_s = labor_s.assigned[1]
     minus1, _bar1, plus1 = _slider_rects(1)
-    click_forum(state_s, plus1[0] * 2 + 2, plus1[1] * 2 + 2, sim_s, frame_size=wide)
+    click_forum(state_s, *_win(plus1[0], plus1[1]), sim_s, frame_size=wide)
     if labor_s.assigned[0] != CREW or labor_s.assigned[1] != fire_s + 1:
         lines.append(f"FAIL  fire+ after locked construction {labor_s.assigned}")
     else:
@@ -2918,8 +2956,8 @@ def selftest() -> list[str]:
     else:
         lines.append("ok    Treasurer matches C2 ledger (year + Dn + two columns)")
     treas2 = ForumState(kind=KIND_TREASURER, labor=labor_w)
-    click_forum(treas2, tp[0] * 2 + 2, tp[1] * 2 + 2, sim_t, frame_size=wide)
-    click_forum(treas2, ip[0] * 2 + 2, ip[1] * 2 + 2, sim_t, frame_size=wide)
+    click_forum(treas2, *_win(tp[0], tp[1]), sim_t, frame_size=wide)
+    click_forum(treas2, *_win(ip[0], ip[1]), sim_t, frame_size=wide)
     if sim_t.tax_rate != 9 or sim_t.industrial_tax != 8:
         lines.append(
             f"FAIL  scaled treasurer hit {sim_t.tax_rate}/{sim_t.industrial_tax}"
@@ -3152,11 +3190,11 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  favor skip {favor_quote_skip(0)} {favor_quote_skip(50)}")
     else:
         lines.append("ok    favor quote [37]+3…+14")
-    circa = empire_circa_title(-228)
-    if "228 BC" not in circa or "circa" not in circa.lower():
+    circa = empire_circa_title(-290)
+    if "circa 290 BC" not in circa:
         lines.append(f"FAIL  empire title {circa!r}")
     else:
-        lines.append("ok    Roman empire circa <city year>")
+        lines.append("ok    Roman empire circa 290 BC (space after circa)")
     rframe = blit_forum((640, 480), ForumState(kind=KIND_ROME), SimState(city_only=1, savings=0))
     pframe = blit_forum((640, 480), ForumState(kind=KIND_PERSONAL), SimState(city_only=1, rank=0))
     cframe = blit_forum((640, 480), ForumState(kind=KIND_CENTURION), SimState(city_only=1))
@@ -3166,6 +3204,42 @@ def selftest() -> list[str]:
         lines.append("FAIL  new advisor blit size")
     else:
         lines.append("ok    Rome / Personal / Legion / Merchant / Empire blit 640x480")
+    fat = Image.new("RGB", (FORUM_NATIVE_W, FORUM_NATIVE_H), (90, 70, 50))
+    owide = blit_forum(
+        (1280, 720),
+        ForumState(kind=KIND_ORACLE, oracle_back=fat),
+        SimState(city_only=1),
+    )
+    osc, oox, ooy = forum_layout(1280, 720)
+    if osc != 1 or (oox, ooy) != (320, 120):
+        lines.append(f"FAIL  oracle widescreen layout {osc, oox, ooy}")
+    elif owide.getpixel((4, 4)) != _FORUM_LETTERBOX:
+        lines.append("FAIL  oracle widescreen stretched (no letterbox)")
+    elif owide.getpixel((oox + 8, ooy + 8)) == _FORUM_LETTERBOX:
+        lines.append("FAIL  oracle FB empty after letterbox")
+    else:
+        lines.append("ok    Oracle 640×480 integer scale + letterbox")
+    emp_st = ForumState(kind=KIND_EMPIRE)
+    gx, gy = EMPIRE_HOTSPOTS[EMPIRE_GERMANIA_EXTERIOR - 1]
+    click_forum(emp_st, gx + 4, gy + 4, SimState(city_only=1))
+    sea = ForumState(kind=KIND_EMPIRE)
+    click_forum(sea, 180, 280, SimState(city_only=1))
+    mapped = ForumState(kind=KIND_EMPIRE)
+    click_forum(
+        mapped,
+        oox + gx + 4,
+        ooy + gy + 4,
+        SimState(city_only=1),
+        frame_size=(1280, 720),
+    )
+    if emp_st.empire_pick != EMPIRE_GERMANIA_EXTERIOR:
+        lines.append(f"FAIL  Germania Exterior hotspot {emp_st.empire_pick}")
+    elif sea.empire_pick == EMPIRE_GERMANIA_EXTERIOR:
+        lines.append("FAIL  sea west of Italy hit Germania Exterior")
+    elif mapped.empire_pick != EMPIRE_GERMANIA_EXTERIOR:
+        lines.append(f"FAIL  empire mouse→640×480 {mapped.empire_pick}")
+    else:
+        lines.append("ok    Empire hits use 0x95cbb after window→FB map")
     sim_g = SimState(city_only=1)
     goods = bytearray(768)
     struct.pack_into("<i", goods, 1 * 48 + 8, 2)

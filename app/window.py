@@ -32,6 +32,8 @@ from app.city_chrome import (
 )
 from app.forum import (
     KIND_CHROME,
+    KIND_EMPIRE,
+    KIND_ORACLE,
     ForumState,
     blit_forum,
     blit_pause_square,
@@ -1071,15 +1073,21 @@ def show(ctx: BootContext, *, game: Path) -> None:
             extra_alert = False
         if forum_state is not None:
             frame = blit_forum((win_w, win_h), forum_state, ctx.sim, eng=ctx.eng)
-            frame = compose_city_hud(
-                frame,
-                ctx,
-                shown,
-                menu_open=menu_open,
-                options=options,
-                report=menu_report,
-                extra_alert=extra_alert,
-            )
+            # Oracle / Empire are the 640×480 FB. City HUD extra reused the
+            # chrome button name (leftover ORACLE / EMPIRE MAP strip).
+            if forum_state.kind in (KIND_ORACLE, KIND_EMPIRE):
+                if menu_report is not None:
+                    frame = blit_menu_report(frame, menu_report)
+            else:
+                frame = compose_city_hud(
+                    frame,
+                    ctx,
+                    shown,
+                    menu_open=menu_open,
+                    options=options,
+                    report=menu_report,
+                    extra_alert=extra_alert,
+                )
             _set_layer(well_item, None, "well")
             _set_layer(front_item, None, "front")
             _set_layer(ui_item, frame.convert("RGB"), "ui")

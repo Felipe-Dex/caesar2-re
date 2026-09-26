@@ -2569,10 +2569,16 @@ def selftest() -> list[str]:
     else:
         lines.append("ok    query OK / box hit native")
     wide = (1442, 960)
-    if not place_dialog_close_contains(ox * 2 + 2, oy * 2 + 2, qinfo, frame_size=wide):
+    qsc, qox, qoy = _query_layout(*wide)
+    if not place_dialog_close_contains(
+        qox + ox * qsc + 2, qoy + oy * qsc + 2, qinfo, frame_size=wide
+    ):
         lines.append("FAIL  query OK hit 2x Forum scale")
     elif not place_dialog_contains(
-        (_DLG_X + _DLG_W - 8) * 2, (_DLG_Y + 20) * 2, qinfo, frame_size=wide
+        qox + (_DLG_X + _DLG_W - 8) * qsc,
+        qoy + (_DLG_Y + 20) * qsc,
+        qinfo,
+        frame_size=wide,
     ):
         lines.append("FAIL  query box right edge 2x")
     elif place_dialog_contains(20, 50, qinfo, frame_size=wide):
