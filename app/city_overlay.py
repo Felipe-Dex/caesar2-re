@@ -683,8 +683,9 @@ def _block_or13(city: CityMap, x: int, y: int, size: int) -> int:
     return _block_or_lane(city, x, y, size, 13)
 
 
-# FUN_00062a59 / C2.ENG [60] housing status. +15 vs 0x96235 stay,
-# then first failing 40d08-style gate only if +15 equals that cap.
+# FUN_00062a59 / C2.ENG [60] housing status. +15 vs 0x96235 stay
+# (table at 0x96131[id*2]), then first failing 40d08-style gate only
+# if +15 equals that cap. Caller 0x627bf when [0x117a78] is 0x82–0xA1.
 _QUERY_EVOLVE_FB: dict[int, str] = {
     35: "This structure does not evolve.",
     60: "Local land value is too low to encourage this dwelling to grow any further.",
@@ -856,6 +857,13 @@ def query_evolve_lines(
         skip = housing_query_stall_skip(
             lv, splash, plus10, plus14, entertainment, security, hospital, library
         )
+        # 0xA1 stay 62..125 vs +15 cap 64: 0x62a59 never takes +87.
+        # A leftover evolve-to-next gate (library<100 @ cap 62) at lv==64
+        # is unparked and falls to [60]+60. Last house cannot grow; the
+        # 0x62eb5 terminal for lv>=0x40 is [60]+81. [60]+42 is forum 0xA5
+        # (id-0x7B), not housing.
+        if skip == 60 and grade == len(EVOLVE_MIN) - 1 and lv >= 64:
+            skip = 81
     out = [_eng_skip(eng, 60, skip, _QUERY_EVOLVE_FB[skip])]
     if lv < stay_lo:
         out.append(_eng_skip(eng, 60, 86, _QUERY_EVOLVE_FB[86]))
@@ -2504,6 +2512,53 @@ def selftest() -> list[str]:
         lines.append("FAIL  stall skip rhetor")
     else:
         lines.append("ok    0x62a59 education stalls → [60]+72 / +75")
+    pal_skip = query_evolve_lines(
+        housing=True,
+        grade=0xA1 - ID_HOUSING_LO,
+        lv=64,
+        splash=0x39,
+        plus10=0xFC,
+        plus14=0,
+        entertainment=9,
+        security=2,
+        hospital=100,
+        library=96,
+    )
+    pal_join = " ".join(pal_skip)
+    if _QUERY_EVOLVE_FB[81] not in pal_join or _QUERY_EVOLVE_FB[60] in pal_join:
+        lines.append(f"FAIL  query 0xA1 lv=64 library 96 {pal_skip}")
+    else:
+        lines.append("ok    Large Palace 0xA1 +15=64 → [60]+81 not +60")
+    mid_lv = query_evolve_lines(
+        housing=True,
+        grade=0x8B - ID_HOUSING_LO,
+        lv=20,
+        splash=0x39,
+        plus10=0xCC,
+        plus14=0,
+        entertainment=8,
+        security=2,
+        hospital=100,
+        library=100,
+    )
+    if _QUERY_EVOLVE_FB[60] not in " ".join(mid_lv):
+        lines.append(f"FAIL  query mid-tier low LV {mid_lv}")
+    else:
+        lines.append("ok    Improved House +15=20 still [60]+60")
+    pal = CityMap()
+    poff = pal.offset(4, 4)
+    pal.tiles[poff] = 0xA1
+    pal.tiles[poff + 10] = 0x0C | 0xC0 | 0x30
+    pal.tiles[poff + 12] = 0x3F
+    pal.tiles[poff + 13] = 0x01 | 0x08 | 0x10 | 0x20
+    pal.tiles[poff + 15] = 64
+    pal_q = " ".join(query_place(pal, 4, 4).lines)
+    if _QUERY_EVOLVE_FB[81] not in pal_q or _QUERY_EVOLVE_FB[60] in pal_q:
+        lines.append(f"FAIL  query_place 0xA1 {query_place(pal, 4, 4).lines}")
+    elif "Land Value is 64" not in pal_q:
+        lines.append(f"FAIL  query_place 0xA1 land {query_place(pal, 4, 4).lines}")
+    else:
+        lines.append("ok    Query Large Palace LV 64 footer is [60]+81")
     from app.city_sim import SimState as _QSim
 
     mid = CityMap()
