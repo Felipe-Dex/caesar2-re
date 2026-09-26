@@ -13,14 +13,14 @@ the advisor dest (320×152). Here the dest is the original sprite 0 rect.
 Scale with LANCZOS, keep aspect, letterbox (transparent pad) so isometric
 footprints are not stretched.
 
-``AHOSPIT`` is both:
+``AHOSPIT``:
 
-* the hospital **build-menu still** (one blit, dest **182×132**)
-* the **visible iso hospital** on the map: tile ``0xFB`` origin is
-  ``HOUSES1[86]`` (zoom 0 dest **58×56**, type 4 extra_rows 26). Leftover
-  pieces ``87–89`` are 58×30. ``AHOSPIT.png`` is fitted into those frame
-  dests so placing / looking at the 3×3 shows the override. Variants
-  ``0x5A–0x5E`` LUT to sprite 0 — do **not** replace ``HOUSES1[0]``.
+* **Sidebar card** while the Hospital tool is selected (native 182×132,
+  fitted into the 162 px INT_CITY strip). Never pasted onto the iso well
+  — that left a painting stuck at ~ (292, 32).
+* **Iso 0xFB only:** stamp ``draw=0x08`` → ``BUILD1B[86–94]`` (tall
+  pieces 58×83…88). Barracks ``0xE4`` is ``HOUSES1[81–89]`` (``draw=0x00``).
+  Do **not** write HOUSES1[86–89] — that is four barracks leftovers.
 
 Drop more files as ``images_new/{STEM}.png`` using the 8.3 stem
 (``ABATHS``, ``AHOUSE``, ``AWELL``, …). PNGs are gitignored.
@@ -33,7 +33,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from app.city_chrome import SIDEBAR_X, TOP_BAR_H
+from app.city_chrome import SIDEBAR_W, SIDEBAR_X, SIDEBAR_Y, TOP_BAR_H
 from app.config import REPO_ROOT
 
 _TOOLS = REPO_ROOT / "tools"
@@ -133,10 +133,17 @@ TOOL_STILL_STEM: dict[str, str] = {
 
 DEFAULT_A_STILL = (182, 132)
 
-# HOUSES1 LUT identity for hospital +4 0x56–0x59 (origin + three leftovers).
-# Zoom 0 dest: [86]=58×56 (the building you see), [87–89]=58×30.
-HOSPITAL_ISO_FRAMES: tuple[int, ...] = (86, 87, 88, 89)
-HOSPITAL_ISO_KEY = "HOUSES1"
+# Hospital 0xFB +3=0x08 → BUILD1B. +4 0x56–0x5E → sprites 86–94.
+# Barracks 0xE4 +3=0x00 → HOUSES1[81–89]. Shared *indices* 86–89, different sheet.
+ID_HOSPITAL = 0xFB
+ID_BARRACKS = 0xE4
+HOSPITAL_DRAW = 0x08
+BARRACKS_DRAW = 0x00
+HOSPITAL_ISO_KEY = "BUILD1B"
+HOSPITAL_ISO_FRAMES: tuple[int, ...] = (86, 87, 88, 89, 90, 91, 92, 93, 94)
+AHOSPIT_SHEET_KEY = "AHOSPIT"
+# Sidebar card: 182×132 fitted into the 162 px strip, above the 3×5.
+STILL_CARD_PAD = 2
 
 
 def pl8_stem(pl8_name: str) -> str:
@@ -349,14 +356,45 @@ def load_still(
     return fit_to_dest(img, dest[0], dest[1]), path, dest
 
 
+def still_card_size(native: tuple[int, int]) -> tuple[int, int]:
+    """Fit the 182×132 still into the sidebar (never the iso well)."""
+    nw, nh = native
+    max_w = max(1, SIDEBAR_W - STILL_CARD_PAD * 2)
+    max_h = max(1, SIDEBAR_Y - TOP_BAR_H - STILL_CARD_PAD * 2)
+    scale = min(max_w / max(1, nw), max_h / max(1, nh), 1.0)
+    return max(1, int(round(nw * scale))), max(1, int(round(nh * scale)))
+
+
 def still_screen_xy(
     dest: tuple[int, int], *, ox: int = 0
 ) -> tuple[int, int]:
-    """Host card: left of INT_CITY. AHOSPIT PL8 x/y is (0,0) — EXE dest is not in the record."""
-    dw, _dh = dest
-    x = SIDEBAR_X + int(ox) - dw - 4
-    y = TOP_BAR_H + 8
-    return max(4, x), y
+    """Sidebar card, above the 3×5. x is always ≥ SIDEBAR_X + ox."""
+    _dw, dh = dest
+    x = SIDEBAR_X + int(ox) + STILL_CARD_PAD
+    y = max(TOP_BAR_H + STILL_CARD_PAD, SIDEBAR_Y - dh - STILL_CARD_PAD)
+    return x, y
+
+
+def attach_ahospit_source(
+    sheets: dict[str, list[Image.Image]],
+    game: Path | None,
+    *,
+    roots: list[Path] | None = None,
+) -> list[str]:
+    """Park the PNG on ``sheets['AHOSPIT']``. Do not mutate HOUSES1 / BUILD1B.
+
+    ``city_map._tile_frames`` fits it onto ``terrain_id == 0xFB`` only.
+    """
+    hit = resolve_image_png(game, "AHOSPIT", roots=roots)
+    if hit is None:
+        sheets.pop(AHOSPIT_SHEET_KEY, None)
+        return []
+    try:
+        src = Image.open(hit).convert("RGBA")
+    except OSError:
+        return []
+    sheets[AHOSPIT_SHEET_KEY] = [src]
+    return [f"{AHOSPIT_SHEET_KEY} {src.size[0]}x{src.size[1]} -> 0xFB BUILD1B"]
 
 
 def apply_ahospit_iso(
@@ -365,30 +403,22 @@ def apply_ahospit_iso(
     *,
     roots: list[Path] | None = None,
 ) -> list[str]:
-    """Fit ``AHOSPIT.png`` into the hospital iso frames (the 3×3 you see).
+    """Back-compat name: attach source only (no HOUSES1 smash)."""
+    return attach_ahospit_source(sheets, game, roots=roots)
 
-    One PNG is not nine diamonds — we replace the LUT frames the hospital
-    actually blits (``HOUSES1[86]`` is the tall origin). Dest is each
-    frame's native size (58×56 / 26×25 / 10×11 by zoom).
-    """
-    hit = resolve_image_png(game, "AHOSPIT", roots=roots)
-    if hit is None:
-        return []
-    houses = sheets.get(HOSPITAL_ISO_KEY)
-    if not houses:
-        return []
-    try:
-        src = Image.open(hit).convert("RGBA")
-    except OSError:
-        return []
-    applied: list[str] = []
-    for idx in HOSPITAL_ISO_FRAMES:
-        if idx >= len(houses):
-            continue
-        dw, dh = houses[idx].size
-        houses[idx] = fit_to_dest(src, dw, dh)
-        applied.append(f"{HOSPITAL_ISO_KEY}[{idx}]={dw}x{dh}")
-    return applied
+
+def hospital_iso_sprite(
+    sheets: dict[str, list[Image.Image]] | None,
+    dest_w: int,
+    dest_h: int,
+) -> Image.Image | None:
+    """AHOSPIT.png fitted to one 0xFB piece dest, or None."""
+    if not sheets:
+        return None
+    srcs = sheets.get(AHOSPIT_SHEET_KEY)
+    if not srcs:
+        return None
+    return fit_to_dest(srcs[0], dest_w, dest_h)
 
 
 def blit_tool_still(
@@ -399,7 +429,7 @@ def blit_tool_still(
     ox: int = 0,
     cache: dict | None = None,
 ) -> Image.Image:
-    """Paste the selected-tool A* still over the iso well (front layer).
+    """Sidebar card only, while that tool is selected. Cleared when tool changes.
 
     Cache is keyed by ``override_stamp`` so a PNG dropped after launch
     replaces a PL8 surface on the next blit.
@@ -418,8 +448,12 @@ def blit_tool_still(
             cache[stem] = (stamp, packed)
     if packed is None:
         return frame
-    img, _path, dest = packed
-    x, y = still_screen_xy(dest, ox=ox)
+    native = packed[2]
+    card = still_card_size(native)
+    img = fit_to_dest(packed[0], card[0], card[1])
+    x, y = still_screen_xy(card, ox=ox)
+    if x < SIDEBAR_X + int(ox):
+        return frame
     out = frame.convert("RGBA")
     out.paste(img, (x, y), img)
     if frame.mode == "RGBA":
@@ -448,7 +482,7 @@ def selftest(game: Path | None = None) -> list[str]:
     if dest != (182, 132):
         lines.append(f"FAIL  AHOSPIT dest {dest} want 182x132")
     else:
-        lines.append("ok    AHOSPIT dest 182x132 menu still + HOUSES1[86] iso")
+        lines.append("ok    AHOSPIT dest 182x132 sidebar card / 0xFB BUILD1B iso")
     if still_stem_for_tool("hospital") != "AHOSPIT":
         lines.append(f"FAIL  hospital stem {still_stem_for_tool('hospital')!r}")
     else:
@@ -490,15 +524,24 @@ def selftest(game: Path | None = None) -> list[str]:
             lines.append(f"FAIL  empty images_new still hit {miss}")
         else:
             lines.append("ok    without PNG, resolver misses (PL8 fallback)")
-        frames = [Image.new("RGBA", (58, 30), (10, 20, 30, 255)) for _ in range(90)]
-        frames[86] = Image.new("RGBA", (58, 56), (10, 20, 30, 255))
-        sheets = {HOSPITAL_ISO_KEY: frames}
-        applied = apply_ahospit_iso(sheets, game, roots=[root])
-        mid = frames[86].getpixel((29, 28))
-        if "HOUSES1[86]=58x56" not in applied or mid[0] < 180:
-            lines.append(f"FAIL  iso AHOSPIT {applied} mid={mid}")
+        houses = [Image.new("RGBA", (58, 30), (10, 20, 30, 255)) for _ in range(90)]
+        houses[86] = Image.new("RGBA", (58, 56), (10, 20, 30, 255))
+        sheets = {"HOUSES1": houses, "BUILD1B": []}
+        applied = attach_ahospit_source(sheets, game, roots=[root])
+        over = hospital_iso_sprite(sheets, 58, 83)
+        mid = over.getpixel((29, 41)) if over is not None else (0, 0, 0, 0)
+        if not applied or over is None or over.size != (58, 83) or mid[0] < 180:
+            lines.append(f"FAIL  attach 0xFB {applied} {None if over is None else over.size} mid={mid}")
+        elif houses[86].getpixel((29, 28))[0] != 10:
+            lines.append("FAIL  HOUSES1[86] mutated (barracks leftover)")
         else:
-            lines.append("ok    AHOSPIT.png replaces HOUSES1[86] 58x56 (iso hospital)")
+            lines.append("ok    AHOSPIT attached for 0xFB; HOUSES1[86] untouched")
+        card = still_card_size((182, 132))
+        cx, cy = still_screen_xy(card, ox=0)
+        if cx < SIDEBAR_X or cx + card[0] > SIDEBAR_X + SIDEBAR_W:
+            lines.append(f"FAIL  still card leaves sidebar {cx},{cy} {card}")
+        else:
+            lines.append(f"ok    still card in sidebar {cx},{cy} {card[0]}x{card[1]}")
         stamp_a = override_stamp(game, "AHOSPIT", roots=[root])
         stamp_b = override_stamp(game, "AHOSPIT", roots=[empty])
         if stamp_a[1] is None or stamp_b[1] is not None or stamp_a == stamp_b:
@@ -530,22 +573,37 @@ def selftest(game: Path | None = None) -> list[str]:
                 lines.append(f"FAIL  live AHOSPIT still {None if still is None else still[0].size}")
             else:
                 lines.append(f"ok    resolve {live}")
-            raw, _pl8 = assets.load_pl8_frames(game, "HOUSES1.PL8")
+            from app.city_map import building_sprite_image
+
+            raw_h1, _p1 = assets.load_pl8_frames(game, "HOUSES1.PL8")
+            raw_b1b, _p2 = assets.load_pl8_frames(game, "BUILD1B.PL8")
             sheets = assets.load_city_map_sheets(game, zoom=0)
-            iso = sheets.get(HOSPITAL_ISO_KEY)
-            if iso is None or len(iso) <= 86:
+            h1 = sheets.get("HOUSES1")
+            if h1 is None or len(h1) <= 86:
                 lines.append("FAIL  city sheets missing HOUSES1[86]")
+            elif h1[86].getpixel((29, 28)) != raw_h1[86].getpixel((29, 28)):
+                lines.append("FAIL  HOUSES1[86] still smashed (barracks 0xE4)")
             else:
-                a = raw[86].getpixel((29, 28))
-                b = iso[86].getpixel((29, 28))
-                if iso[86].size != raw[86].size:
-                    lines.append(f"FAIL  iso dest {iso[86].size} vs PL8 {raw[86].size}")
-                elif a == b:
-                    lines.append(f"FAIL  HOUSES1[86] still PL8 pixel {a}")
-                else:
-                    lines.append(
-                        f"ok    city sheets HOUSES1[86] {iso[86].size} from {live.name}"
-                    )
+                lines.append("ok    HOUSES1[81-89] still retail (barracks 0xE4)")
+            hosp = building_sprite_image(ID_HOSPITAL, HOSPITAL_DRAW, 0x56, sheets)
+            retail_h = raw_b1b[86] if len(raw_b1b) > 86 else None
+            if hosp is None or retail_h is None:
+                lines.append("FAIL  0xFB BUILD1B[86] blit missing")
+            elif hosp.size != retail_h.size:
+                lines.append(f"FAIL  0xFB dest {hosp.size} vs BUILD1B[86] {retail_h.size}")
+            elif hosp.getpixel((29, hosp.size[1] // 2)) == retail_h.getpixel(
+                (29, retail_h.size[1] // 2)
+            ):
+                lines.append("FAIL  0xFB blit still retail BUILD1B")
+            else:
+                lines.append(f"ok    0xFB blit uses AHOSPIT dest {hosp.size}")
+            barr = building_sprite_image(ID_BARRACKS, BARRACKS_DRAW, 0x51, sheets)
+            if barr is None or barr.size != raw_h1[81].size:
+                lines.append(f"FAIL  0xE4 dest {None if barr is None else barr.size}")
+            elif barr.getpixel((29, 28)) != raw_h1[81].getpixel((29, 28)):
+                lines.append("FAIL  0xE4 barracks blit used AHOSPIT")
+            else:
+                lines.append("ok    0xE4 barracks blit stays HOUSES1 PL8")
             import os
 
             old = os.getcwd()

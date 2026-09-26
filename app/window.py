@@ -1278,6 +1278,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
                 layer, game, tool, ox=ox, cache=still_cache
             )
             has_front = build_flyout or still_stem_for_tool(tool) is not None
+            # Still lives in the sidebar strip; Space / other tool clears it.
             if has_front:
                 host.coords(front_item, 0, 0)
                 host.tag_raise(front_item)

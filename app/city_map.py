@@ -106,6 +106,8 @@ ID_FOUNTAIN_HI = 0xDE
 ID_BATH_LO = 0xDF
 ID_BATH_HI = 0xE2
 ID_PREFECTURE = 0xE3
+ID_BARRACKS = 0xE4
+ID_HOSPITAL = 0xFB
 # FUN_0003fef7 wet +4 (LUT 0x94f6c[id]+1). Dry fountain is 0x0C/0x0E/0x5F/0x61.
 _FOUNTAIN_WET_VAR = frozenset({0x0D, 0x0F, 0x60, 0x62})
 FLAG_RIVER = 0x10
@@ -1251,6 +1253,18 @@ def _tile_frames(
             idx = VAR_WALL_STRAIGHT_EW
         elif tile.terrain_id == ID_AQUEDUCT_WALL_NS:
             idx = VAR_WALL_STRAIGHT_NS
+    if (
+        tile.terrain_id == ID_HOSPITAL
+        and frames is not None
+        and idx is not None
+        and 0 <= idx < len(frames)
+        and sheets is not None
+    ):
+        from app.image_override import hospital_iso_sprite
+
+        over = hospital_iso_sprite(sheets, frames[idx].width, frames[idx].height)
+        if over is not None:
+            return (over,), 0
     if (
         frames is not None
         and idx is not None
