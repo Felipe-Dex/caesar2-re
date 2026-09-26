@@ -115,7 +115,8 @@ Host bug: `_civic_kind` returned **keep** on same-id tiles and **stamp** on the 
 - Player click dispatcher that **first** sets pad `+1 |= 0x20` (669C6 only retiles existing pad). Occupancy `≥ 0x7C` is pinned; the exact “refuse whole stroke vs skip cell” UI ding is not.
 - Road cost (city slot still unpinned).
 - Circus / C.Maximus **pair** wipe after `69483` (`0xE9–0xF0`).
-- Wall / gate / plaza stamp occupancy (plaza **is** `0x7C` — blocked for roads).
+- Wall / gate stamp occupancy.
+- Plaza place is **not** `69f26`. Tool 7 → `FUN_00068ad9`: per-cell skip when `+0 >= 0x1E` or (`+0 < 8` and `+3 & 0x80`); else write `0x7C` / `+4=0x74` / `+1 |= 0x20`. Grass `0x14` is OK. No road-adjacency gate. Host also keeps road→plaza.
 - Housing-on-road / garden-on-building beyond the civic skip already in `_civic_kind`.
 - Tent splash `+15` 2×2 (C.SAV).
 - Full aqueduct LUT `0xCF–0xD6` (only stub / NS / EW / junction ported).

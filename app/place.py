@@ -70,13 +70,15 @@ walker — same-id 0xE4 is occupied, not a join). Circus 6×3 EW (0xEB+0xEC) / 3
 (0xE9+0xEA) and C.Maximus 4×8 / 8×4 are one paired ghost — odd facing
 swaps the long axis. Paint remaps +4 along that W×H at facing 1–3
 (leftover pair at odd facing) so extra_rows still meet after rotate.
-Plaza is 1×1 rect on/next to a road. Wall is a road-style
+Plaza is 1×1 rect on grass (EXE ``FUN_00068ad9`` ``+0 < 0x1E``)
+or on a road (host keep). Wall is a road-style
 line (gate when the line hits a road) and retires ``0xC1``–``0xCA``
 from neighbours (wall / gate / tower).
 
 Not the full EXE stamp. Tent 6 is observed (sav_c), not C2MODEL. City
 road / aqueduct / Palatine have no pinned city-cost slot — do not invent;
-no debit. Arena ``0xE7`` is leftover (no SAV origin / +4) — not stamped.
+no debit. Arena ``0xE7`` is a real 3×3 stamp (EXE tool ``0x19``,
++4 base ``0x2C`` via LUT ``0x94230``, C2MODEL 700).
 """
 
 from __future__ import annotations
@@ -159,6 +161,7 @@ COST_AVENTINE = 100
 COST_JANICULAN = 400
 COST_THEATER = 300
 COST_ODEUM = 500
+COST_ARENA = 700
 COST_COLISEUM = 1000
 COST_CIRCUS = 1500
 COST_CMAXIMUS = 2500
@@ -206,6 +209,7 @@ ID_PREFECTURE = 0xE3
 ID_BARRACKS = 0xE4
 ID_THEATER = 0xE5
 ID_ODEUM = 0xE6
+ID_ARENA = 0xE7
 ID_COLISEUM = 0xE8
 ID_CIRCUS_A = 0xE9
 ID_CIRCUS_B = 0xEA
@@ -304,6 +308,7 @@ TOOL_JANICULAN = "janiculan"
 TOOL_PALATINE = "palatine"
 TOOL_THEATER = "theater"
 TOOL_ODEUM = "odeum"
+TOOL_ARENA = "arena"
 TOOL_COLISEUM = "coliseum"
 TOOL_CIRCUS = "circus"
 TOOL_CMAXIMUS = "cmaximus"
@@ -339,6 +344,7 @@ STAMP_TOOLS = frozenset(
         TOOL_PALATINE,
         TOOL_THEATER,
         TOOL_ODEUM,
+        TOOL_ARENA,
         TOOL_COLISEUM,
         TOOL_CIRCUS,
         TOOL_CMAXIMUS,
@@ -411,7 +417,7 @@ class StampSpec:
     """One city stamp. ``variants`` is raster y then x for the first (or only) block.
 
     ``tid2`` / ``variants2`` are the abutting half (Circus / C.Maximus).
-    ``need_road`` is Plaza: must touch a city road (or sit on one).
+    ``need_road`` is unused: EXE plaza ``68ad9`` has no road gate.
     """
 
     tool: str
@@ -468,6 +474,11 @@ _reg(StampSpec(TOOL_THEATER, "Theater", ID_THEATER, 2, 2, COST_THEATER, 0x01, 0x
                (0x24, 0x26, 0x25, 0x27), frozenset({0xE5})))
 _reg(StampSpec(TOOL_ODEUM, "Odeum", ID_ODEUM, 2, 2, COST_ODEUM, 0x01, 0x0C,
                (0x28, 0x2A, 0x29, 0x2B), frozenset({0xE6})))
+# EXE 0x30607 tool 0x19: push +4 base 0x2C, ECX sheet 0x0C, EBX 0xE7,
+# FUN_00069f26. +4 = 0x2C + LUT 0x94230[piece] (same 3x3 deltas as Coliseum).
+_reg(StampSpec(TOOL_ARENA, "Arena", ID_ARENA, 3, 3, COST_ARENA, 0x01, 0x0C,
+               (0x2C, 0x2E, 0x31, 0x2D, 0x30, 0x33, 0x2F, 0x32, 0x34),
+               frozenset({0xE7})))
 _reg(StampSpec(TOOL_COLISEUM, "Coliseum", ID_COLISEUM, 3, 3, COST_COLISEUM, 0x01, 0x0C,
                (0x35, 0x37, 0x3A, 0x36, 0x39, 0x3C, 0x38, 0x3B, 0x3D),
                frozenset({0xE8})))
@@ -522,7 +533,7 @@ _reg(StampSpec(TOOL_BARRACKS, "Barracks", ID_BARRACKS, 3, 3, COST_BARRACKS, 0x01
 _reg(StampSpec(TOOL_SHRINE, "Shrine", ID_SHRINE, 1, 1, COST_SHRINE, 0x01, 0x00,
                (0x3C,), frozenset(range(0xA2, 0xA6))))
 _reg(StampSpec(TOOL_PLAZA, "Plaza", ID_PLAZA, 1, 1, COST_PLAZA, FLAG_PAD, 0x04,
-               (0x74,), frozenset({0x7C, 0x7D, 0x7E}), need_road=True))
+               (0x74,), frozenset({0x7C, 0x7D, 0x7E})))
 
 _STAMP_SIZE.update({s.tool: s.w for s in _STAMPS.values() if s.w == s.h})
 _PAIR_SIBLING = {
@@ -689,6 +700,7 @@ _TALL_TOOLS = frozenset(
         TOOL_PALATINE,
         TOOL_THEATER,
         TOOL_ODEUM,
+        TOOL_ARENA,
         TOOL_COLISEUM,
         TOOL_CIRCUS,
         TOOL_CMAXIMUS,
@@ -2413,6 +2425,8 @@ def query_tile(city: CityMap, x: int, y: int) -> str:
         bits.append("Theater")
     if t.terrain_id == ID_ODEUM:
         bits.append("Odeum")
+    if t.terrain_id == ID_ARENA:
+        bits.append("Arena")
     if t.terrain_id == ID_COLISEUM:
         bits.append("Coliseum")
     if t.terrain_id in (ID_CIRCUS_A, ID_CIRCUS_B, ID_CIRCUS_C, ID_CIRCUS_D):
@@ -4287,19 +4301,46 @@ def selftest() -> list[str]:
     _grass_block(2, 6)
     sim.treasury = 12
     r = try_place(city, 2, 6, TOOL_PLAZA, sim)
-    if r.ok:
-        lines.append(f"FAIL  plaza sem estrada {r.message}")
-    else:
-        lines.append("ok    Plaza recusa sem estrada")
-    try_place(city, 3, 6, TOOL_ROAD, None)
-    r = try_place(city, 2, 6, TOOL_PLAZA, sim)
     if not r.ok or city.tiles[city.offset(2, 6)] != ID_PLAZA or sim.treasury != 0:
         lines.append(
-            f"FAIL  plaza junto à estrada {r.message} "
+            f"FAIL  plaza no mato {r.message} "
             f"{city.tiles[city.offset(2, 6)]:#x} treas={sim.treasury}"
         )
     else:
+        lines.append("ok    Plaza 0x7C 1×1 custo 12 no mato (EXE 68ad9 +0<0x1E)")
+    _grass_block(2, 7)
+    try_place(city, 3, 7, TOOL_ROAD, None)
+    sim.treasury = 12
+    r = try_place(city, 2, 7, TOOL_PLAZA, sim)
+    if not r.ok or city.tiles[city.offset(2, 7)] != ID_PLAZA or sim.treasury != 0:
+        lines.append(
+            f"FAIL  plaza junto à estrada {r.message} "
+            f"{city.tiles[city.offset(2, 7)]:#x} treas={sim.treasury}"
+        )
+    else:
         lines.append("ok    Plaza 0x7C 1×1 custo 12 junto à estrada")
+    _grass_block(4, 6)
+    try_place(city, 4, 6, TOOL_ROAD, None)
+    sim.treasury = 12
+    r = try_place(city, 4, 6, TOOL_PLAZA, sim)
+    if not r.ok or city.tiles[city.offset(4, 6)] != ID_PLAZA:
+        lines.append(f"FAIL  plaza na estrada {r.message}")
+    else:
+        lines.append("ok    Plaza 0x7C substitui estrada 0x52")
+    r = try_place(city, 40, 40, TOOL_PLAZA, sim)
+    if r.ok or city.tiles[city.offset(40, 40)] != ID_BARRACKS:
+        lines.append(f"FAIL  plaza no quartel {r.message}")
+    else:
+        lines.append("ok    Plaza recusa quartel 0xE4")
+    _grass_block(5, 6)
+    woff = city.offset(5, 6)
+    city.tiles[woff] = ID_WALL_EW
+    city.tiles[woff + 1] = 0x02
+    r = try_place(city, 5, 6, TOOL_PLAZA, sim)
+    if r.ok or city.tiles[woff] != ID_WALL_EW:
+        lines.append(f"FAIL  plaza na wall {r.message}")
+    else:
+        lines.append("ok    Plaza recusa wall 0xC2")
 
     lv_city = CityMap()
     lv_city.source = "place-plaza-lv"
@@ -4784,6 +4825,35 @@ def selftest() -> list[str]:
         )
     else:
         lines.append("ok    Theater 0xE5 +12 on adjacent hut")
+
+    _grass_block(40, 2, 5, 4)
+    city.tiles[city.offset(43, 2)] = ID_TENT
+    city.tiles[city.offset(43, 2) + 1] = 0x01
+    sim.treasury = 700
+    r = try_place(city, 40, 2, TOOL_ARENA, sim)
+    arena4 = [city.tiles[city.offset(40 + dx, 2 + dy) + 4] for dy in range(3) for dx in range(3)]
+    hut12 = city.tiles[city.offset(43, 2) + 12]
+    qent = " ".join(query_place(city, 43, 2).lines)
+    if (
+        not r.ok
+        or r.cost != COST_ARENA
+        or city.tiles[city.offset(40, 2)] != ID_ARENA
+        or arena4 != [0x2C, 0x2E, 0x31, 0x2D, 0x30, 0x33, 0x2F, 0x32, 0x34]
+        or not (hut12 & 0x0C)
+        or "Entertainment Level" not in qent
+    ):
+        lines.append(
+            f"FAIL  arena stamp {r.message} cost={r.cost} +4={arena4} "
+            f"+12={hut12:#x} query={qent}"
+        )
+    else:
+        lines.append("ok    Arena 0xE7 3x3 custo 700 +4 LUT 0x2C +12 bits 2-3")
+    sim.treasury = 50
+    r_broke = try_place(city, 50, 2, TOOL_ARENA, sim)
+    if r_broke.ok:
+        lines.append(f"FAIL  arena broke {r_broke.message}")
+    else:
+        lines.append("ok    Arena recusa tesouro < 700")
 
     _grass_block(22, 6, 3, 3)
     sim.treasury = 500
