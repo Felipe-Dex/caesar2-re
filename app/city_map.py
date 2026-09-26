@@ -88,10 +88,12 @@ ID_TOWER = 0xBF
 VAR_TOWER_ALONE = 0x80
 # Aqueduct-through-wall. 67a6a writes +3=0x08 +4=+9=3/7 (BUILD1B
 # end-caps). Blitting those punches a hole and hides the pipe. Host
-# keeps +4 at 3/7 (charge must not bump it) and blits wall straight
-# 4/0 plus the CITYFIXT arcade. +9 holds the pipe dry (LUT 0x94D8F
-# neighbour mask — not the wall axis), so a crossing uses 0xCF/0xD0
-# of the pipe, not a stub 0x79 on every cell.
+# keeps +4 at 3/7 (charge must not bump it) and blits the CITYFIXT
+# aqueduct from +9 — same frames as grass 0xCF/0xD0 — with wall
+# straight 4/0 under the diamond. A keyed overlay keeps the stone
+# but drops the grass diamond; on the wall walkway that reads as
+# isolated stubs (1c2e04e). +9 is the pipe dry (LUT 0x94D8F), not
+# the wall axis.
 ID_AQUEDUCT_WALL_EW = 0xBC
 ID_AQUEDUCT_WALL_NS = 0xBD
 VAR_WALL_STRAIGHT_NS = 0x00
@@ -122,6 +124,15 @@ def aqueduct_wall_pipe_dry(tile: Tile) -> int:
     if _AQ_PIPE_DRY_LO <= stored <= _AQ_PIPE_DRY_HI:
         return stored
     return _AQ_WALL_PIPE_DRY.get(tile.terrain_id, 0x79)
+
+
+def aqueduct_wall_cityfixt_index(tile: Tile) -> int:
+    """CITYFIXT frame for 0xBC/0xBD — wet +4 from +9, never BUILD1B 3/7."""
+    dry = aqueduct_wall_pipe_dry(tile)
+    var = aqueduct_wet_plus4(dry, tile.coverage & 3)
+    if var >= len(_LUT_CITYFIXT_BLD):
+        var = dry
+    return _LUT_CITYFIXT_BLD[var] + CITYFIXT_TERRAIN_BIAS
 
 
 ID_AQUEDUCT_STUB = 0xCB
@@ -1646,6 +1657,32 @@ def _tile_frames(
         ):
             return _water_interior_frames(cityfixt[idx]), int(water_frame) % WATER_FRAMES
         return cityfixt, idx
+    # 0xBC/0xBD: same CITYFIXT arcade as grass 0xCF/0xD0 (+9+charge).
+    # BUILD1B[3/7] are end-caps with holes. A keyed overlay on the wall
+    # strips the diamond and leaves stub-sized pieces — that is why
+    # 1c2e04e did not change the live City Only window.
+    if tile.terrain_id in (ID_AQUEDUCT_WALL_EW, ID_AQUEDUCT_WALL_NS):
+        aq_idx = aqueduct_wall_cityfixt_index(tile)
+        fixt = cityfixt
+        if fixt is None and sheets is not None:
+            fixt = sheets.get(PL8_CITYFIXT)
+        if fixt is not None and 0 <= aq_idx < len(fixt):
+            if tile_wants_water_anim(
+                tile.terrain_id,
+                tile.flags,
+                tile.coverage,
+                splash=tile.desirability,
+                variant=tile.variant,
+            ):
+                return _water_interior_frames(fixt[aq_idx]), int(water_frame) % WATER_FRAMES
+            return fixt, aq_idx
+        wall_idx = (
+            VAR_WALL_STRAIGHT_EW
+            if tile.terrain_id == ID_AQUEDUCT_WALL_EW
+            else VAR_WALL_STRAIGHT_NS
+        )
+        frames = sheets.get(PL8_BUILD1B) if sheets is not None else None
+        return frames, wall_idx
     spec = tile.building_sprite()
     if spec is None:
         return None, None
@@ -1661,34 +1698,6 @@ def _tile_frames(
         alone = _tower_standalone_sprite(frames)
         if alone is not None:
             return (alone,), 0
-    # 0xBC/0xBD store EXE +4=3/7 (end-caps). Wall straight + CITYFIXT arcade
-    # from +9 (pipe-neighbour dry), not the wall axis alone.
-    if name == PL8_BUILD1B and tile.terrain_id in (
-        ID_AQUEDUCT_WALL_EW,
-        ID_AQUEDUCT_WALL_NS,
-    ):
-        wall_idx = (
-            VAR_WALL_STRAIGHT_EW
-            if tile.terrain_id == ID_AQUEDUCT_WALL_EW
-            else VAR_WALL_STRAIGHT_NS
-        )
-        dry = aqueduct_wall_pipe_dry(tile)
-        charge = tile.coverage & 3
-        var = aqueduct_wet_plus4(dry, charge)
-        if var >= len(_LUT_CITYFIXT_BLD):
-            var = dry
-        aq_idx = _LUT_CITYFIXT_BLD[var] + CITYFIXT_TERRAIN_BIAS
-        aq_src = None
-        if cityfixt is not None and 0 <= aq_idx < len(cityfixt) and charge:
-            aq_src = _water_interior_frames(cityfixt[aq_idx])[
-                int(water_frame) % WATER_FRAMES
-            ]
-        combo = _aqueduct_wall_sprite(
-            frames, wall_idx, cityfixt, aq_idx, water_src=aq_src
-        )
-        if combo is not None:
-            return (combo,), 0
-        idx = wall_idx
     if (
         frames is not None
         and idx is not None
@@ -2292,8 +2301,30 @@ def _paint_iso_tile(
     # Aqueduct CITYFIXT diamonds have transparent arches. Without a grass
     # underlay the canvas ISO_BG (12,16,28) reads as a solid black box.
     # Reservoir / fountain stay opaque — do not paint under them.
+    # 0xBC/0xBD sit on the wall walkway: BUILD1B straight first, then the
+    # same CITYFIXT arcade as a grass 0xCF/0xD0 (no color-key overlay).
     avoid = hospital_masks if tile.is_terrain else None
-    if is_aqueduct_id(tile.terrain_id) and cityfixt is not None:
+    painted_wall = False
+    if art.terrain_id in (ID_AQUEDUCT_WALL_EW, ID_AQUEDUCT_WALL_NS) and sheets:
+        wall_idx = (
+            VAR_WALL_STRAIGHT_EW
+            if art.terrain_id == ID_AQUEDUCT_WALL_EW
+            else VAR_WALL_STRAIGHT_NS
+        )
+        painted_wall = _blit_iso(
+            img,
+            sheets.get(PL8_BUILD1B),
+            wall_idx,
+            sx,
+            sy,
+            tile_w=tile_w,
+            tile_h=tile_h,
+            under_hospital=avoid,
+        )
+    if (
+        is_aqueduct_id(tile.terrain_id)
+        or (art.terrain_id in (ID_AQUEDUCT_WALL_EW, ID_AQUEDUCT_WALL_NS) and not painted_wall)
+    ) and cityfixt is not None:
         grass_idx = 8 + CITYFIXT_TERRAIN_BIAS
         _blit_iso(
             img,
@@ -3540,39 +3571,38 @@ def selftest() -> list[str]:
             real_fixt, _p = load_pl8_frames(game, "CITYFIXT.PL8")
             raw_combo[0] = ID_AQUEDUCT_WALL_EW
             raw_combo[4] = 3
-            raw_combo[10] = 3
+            raw_combo[9] = 0x76
+            raw_combo[10] = 0
             combo_fr, combo_idx = _tile_frames(
                 Tile.unpack(bytes(raw_combo)),
                 0,
                 real_fixt,
                 {PL8_BUILD1B: real_b1b},
             )
-            wall_only = real_b1b[VAR_WALL_STRAIGHT_EW].convert("RGBA")
-            spr = combo_fr[combo_idx].convert("RGBA") if combo_fr else None
-            bright = 0
-            if spr is not None:
-                bright = sum(
-                    1
-                    for p in spr.getdata()
-                    if p[3] > 20 and p[0] + p[1] + p[2] >= 500
-                )
-            wall_bright = sum(
-                1
-                for p in wall_only.getdata()
-                if p[3] > 20 and p[0] + p[1] + p[2] >= 500
+            grass_d0 = bytearray(TILE_BYTES)
+            grass_d0[0] = 0xD0
+            grass_d0[3] = SHEET_CITYFIXT_BLD
+            grass_d0[4] = 0x76
+            grass_d0[9] = 0x76
+            grass_d0[10] = 0
+            d0_fr, d0_idx = _tile_frames(
+                Tile.unpack(bytes(grass_d0)),
+                0,
+                real_fixt,
+                {PL8_CITYFIXT: real_fixt},
             )
-            if spr is None or bright <= wall_bright:
+            want_ew = _LUT_CITYFIXT_BLD[0x76] + CITYFIXT_TERRAIN_BIAS
+            if combo_idx != want_ew or d0_idx != want_ew:
                 lines.append(
-                    f"FAIL  0xBC composite no pipe overlay bright={bright} wall={wall_bright}"
+                    f"FAIL  0xBC blit {combo_idx} vs 0xD0 {d0_idx} want {want_ew}"
                 )
             else:
-                lines.append(
-                    f"ok    0xBC composite wall+arcade (bright {bright} > wall {wall_bright})"
-                )
+                lines.append("ok    0xBC +9=0x76 blits same CITYFIXT as 0xD0")
             wet_raw = bytearray(TILE_BYTES)
             wet_raw[0] = ID_AQUEDUCT_WALL_EW
             wet_raw[3] = SHEET_BUILD1B
             wet_raw[4] = 3
+            wet_raw[9] = 0x76
             wet_raw[10] = 3
             wet_fr, wet_idx = _tile_frames(
                 Tile.unpack(bytes(wet_raw)),
@@ -3611,13 +3641,14 @@ def selftest() -> list[str]:
             bd_raw[3] = SHEET_BUILD1B
             bd_raw[4] = 7
             bd_raw[9] = 0x79
-            bd_raw[10] = 3
+            bd_raw[10] = 0
             bd_fr, bd_idx = _tile_frames(
                 Tile.unpack(bytes(bd_raw)),
                 0,
                 real_fixt,
                 {PL8_BUILD1B: real_b1b},
             )
+            want_ns = _LUT_CITYFIXT_BLD[0x79] + CITYFIXT_TERRAIN_BIAS
             bd_spr = bd_fr[bd_idx].convert("RGBA") if bd_fr else None
             bd_stone = (
                 sum(
@@ -3630,20 +3661,14 @@ def selftest() -> list[str]:
                 if bd_spr
                 else 0
             )
-            if bd_spr is None or bd_stone < 40:
+            if bd_idx != want_ns or bd_stone < 40:
                 lines.append(
-                    f"FAIL  0xBD +9=0x79 overlay lost NS arcade stone={bd_stone}"
+                    f"FAIL  0xBD +9=0x79 CITYFIXT idx={bd_idx} want {want_ns} stone={bd_stone}"
                 )
             else:
                 lines.append(
-                    f"ok    0xBD +9=0x79 keeps NS arcade stone ({bd_stone})"
+                    f"ok    0xBD +9=0x79 blits CITYFIXT NS arcade (stone {bd_stone})"
                 )
-            olive = (150, 160, 70, 255)
-            tan = (200, 180, 140, 255)
-            if not _is_cityfixt_aq_floor(olive) or _is_cityfixt_aq_floor(tan):
-                lines.append("FAIL  aq floor key olive/tan")
-            else:
-                lines.append("ok    aq floor keys olive grass, keeps tan stone")
         else:
             lines.append("ok    0xBC composite skipped (no game dir)")
     except Exception as exc:
