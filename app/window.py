@@ -139,6 +139,8 @@ from app.place import (
     DRAW_GARDEN,
     DRAW_GATE,
     DRAW_WALL,
+    ID_AQUEDUCT_WALL_EW,
+    ID_AQUEDUCT_WALL_NS,
     ID_GATE,
     ID_RUBBLE,
     SPAN_TOOLS,
@@ -445,7 +447,12 @@ def overlay_span_preview(
         th = iso_tile_size(zoom)[1]
         painted = False
         for tx, ty, tid, variant in piece_rows:
-            pdraw = DRAW_GATE if tid == ID_GATE else piece_draw
+            if tid == ID_GATE:
+                pdraw = DRAW_GATE
+            elif tid in (ID_AQUEDUCT_WALL_EW, ID_AQUEDUCT_WALL_NS):
+                pdraw = DRAW_WALL
+            else:
+                pdraw = piece_draw
             spr = building_sprite_image(tid, pdraw, variant, sheets, zoom=zoom)
             if spr is None:
                 continue

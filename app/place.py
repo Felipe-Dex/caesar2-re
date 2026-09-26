@@ -86,7 +86,9 @@ aqueduct (and aqueduct on a road) stamps over-road ``0xD5``/``0xD6``.
 Aqueduct on a wall (``0x67A6A`` ``+1&0x40|0x02``) and wall on an
 aqueduct (``0x67201`` ``0xCF``/``0xD0``) morph to ``0xBC`` (EW wall)
 / ``0xBD`` (NS wall): ``+1=0x42``, ``+3=0x08``, ``+4=3``/``7``.
-Order does not matter. Charge still walks ``+1&0xC0``.
+Order does not matter. Charge still walks ``+1&0xC0``. The combo
+keeps wall bit ``0x02`` so Security flood (``+1&0x1E``) cannot walk
+through. Iso remaps ``+4`` 3/7 (end-caps) to wall straights 0/4.
 
 Not the full EXE stamp. Tent 6 is observed (sav_c), not C2MODEL. City
 road / aqueduct / Palatine have no pinned city-cost slot — do not invent;
@@ -1213,7 +1215,7 @@ def _pipe_component(city: CityMap, seeds: list[tuple[int, int]]) -> list[tuple[i
 def _reset_pipe_tile(city: CityMap, x: int, y: int) -> None:
     off = city.offset(x, y)
     city.tiles[off + 10] &= ~3
-    # 0xBC/0xBD +4 is the wall-pipe sprite (3/7), not a dry aqueduct frame.
+    # 0xBC/0xBD +4 is EXE 3/7 (end-caps). Charge must not bump it.
     if city.tiles[off] in (ID_AQUEDUCT_WALL_EW, ID_AQUEDUCT_WALL_NS):
         return
     city.tiles[off + 4] = city.tiles[off + 9]
@@ -2583,7 +2585,9 @@ def try_place(
             dirty.extend(_retile_towers(city, ring))
             dirty.extend(_retile_walls(city, ring))
         if tool == TOOL_AQUEDUCT:
-            dirty.extend(_retile_aqueducts(city, [(x, y), *_neighbor_ring(x, y)]))
+            ring_aq = [(x, y), *_neighbor_ring(x, y)]
+            dirty.extend(_retile_aqueducts(city, ring_aq))
+            dirty.extend(_retile_walls(city, ring_aq))
         if tool in (TOOL_AQUEDUCT, TOOL_RESERVOIR):
             dirty.extend(_retile_reservoirs(city, [(x, y), *_neighbor_ring(x, y)]))
             dirty.extend(rebuild_pipe_charge(city, [(x, y)]))
@@ -3141,6 +3145,7 @@ def try_place_span(
             dirty.extend(_retile_walls(city, list(preview.stamp) + ring))
         if tool == TOOL_AQUEDUCT:
             dirty.extend(_retile_aqueducts(city, list(preview.stamp) + ring))
+            dirty.extend(_retile_walls(city, list(preview.stamp) + ring))
         if tool in (TOOL_AQUEDUCT, TOOL_RESERVOIR):
             dirty.extend(_retile_reservoirs(city, list(preview.stamp) + ring))
             dirty.extend(rebuild_pipe_charge(city, list(preview.stamp)))
@@ -4873,6 +4878,80 @@ def selftest() -> list[str]:
         )
     else:
         lines.append("ok    wall-on-D0 -> 0xBD +4=7")
+
+    # 5-tile EW wall, aqueduct through the middle: neighbors stay C2
+    # (not ends). Combo is a Security barrier; Gate 0xC0 is untouched.
+    from app.city_paint import is_security_barrier, tile_inside_walls
+
+    _grass_block(40, 30, 9, 5)
+    city.tiles[city.offset(42, 30)] = 0x1E
+    city.tiles[city.offset(42, 30) + 1] = FLAG_RIVER
+    sim.treasury = 200
+    try_place(city, 42, 31, TOOL_RESERVOIR, sim)
+    try_place(city, 42, 32, TOOL_AQUEDUCT, None)
+    try_place_span(city, 40, 33, 44, 33, TOOL_WALL, sim)
+    r_mid = try_place(city, 42, 33, TOOL_AQUEDUCT, None)
+    mid = city.tile(42, 33)
+    left = city.tiles[city.offset(41, 33)]
+    right = city.tiles[city.offset(43, 33)]
+    left_var = city.tiles[city.offset(41, 33) + 4]
+    right_var = city.tiles[city.offset(43, 33) + 4]
+    if (
+        not r_mid.ok
+        or mid.terrain_id != ID_AQUEDUCT_WALL_EW
+        or mid.flags != (FLAG_PIPE | FLAG_WALL)
+        or mid.variant != VAR_AQUEDUCT_WALL_EW
+        or (mid.coverage & 3) != 3
+        or left != ID_WALL_EW
+        or right != ID_WALL_EW
+        or left_var != 0x04
+        or right_var != 0x04
+        or not is_security_barrier(city.tiles, 42, 33)
+    ):
+        lines.append(
+            f"FAIL  3-tile wall+pipe mid={mid.terrain_id:#x}+1={mid.flags:#x}"
+            f"+4={mid.variant:#x}+10={mid.coverage:#x} "
+            f"L={left:#x}+4={left_var:#x} R={right:#x}+4={right_var:#x} "
+            f"{r_mid.message}"
+        )
+    else:
+        lines.append(
+            "ok    5-tile EW + aqueduct mid 0xBC +1=0x42; "
+            "neighbors C2 +4=4; barrier; carga 3"
+        )
+    # Closed ring with one 0xBC: External still holds (no door).
+    for i in range(5):
+        city.tiles[city.offset(50 + i, 40)] = ID_WALL_EW
+        city.tiles[city.offset(50 + i, 40) + 1] = FLAG_WALL
+        city.tiles[city.offset(50 + i, 44)] = ID_WALL_EW
+        city.tiles[city.offset(50 + i, 44) + 1] = FLAG_WALL
+        city.tiles[city.offset(50, 40 + i)] = ID_WALL_NS
+        city.tiles[city.offset(50, 40 + i) + 1] = FLAG_WALL
+        city.tiles[city.offset(54, 40 + i)] = ID_WALL_NS
+        city.tiles[city.offset(54, 40 + i) + 1] = FLAG_WALL
+    city.tiles[city.offset(52, 40)] = ID_AQUEDUCT_WALL_EW
+    city.tiles[city.offset(52, 40) + 1] = FLAG_PIPE | FLAG_WALL
+    if not tile_inside_walls(city.tiles, 52, 42):
+        lines.append("FAIL  0xBC door in 5x5 wall box")
+    else:
+        lines.append("ok    5x5 box with 0xBC still encloses")
+    # Road x wall is still Gate — combo path must not steal 0xC0.
+    _grass_block(60, 50, 3, 1)
+    try_place(city, 61, 50, TOOL_ROAD, None)
+    sim.treasury = 20
+    r_gate = try_place(city, 61, 50, TOOL_WALL, sim)
+    gate_t = city.tile(61, 50)
+    if (
+        not r_gate.ok
+        or gate_t.terrain_id != ID_GATE
+        or gate_t.flags != 0x24
+        or gate_t.draw != DRAW_GATE
+    ):
+        lines.append(
+            f"FAIL  Gate regress {gate_t.terrain_id:#x}+1={gate_t.flags:#x}"
+        )
+    else:
+        lines.append("ok    road x wall still Gate 0xC0")
 
     if (
         wall_id_for(0) != ID_WALL_END_N

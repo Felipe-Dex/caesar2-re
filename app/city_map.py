@@ -87,6 +87,13 @@ ID_RESERVOIR = 0xBE
 ID_TOWER = 0xBF
 # Lone 0xBF: BUILD1B 0x18–0x1B all bake a wall-cap. Host composite (not a LUT id).
 VAR_TOWER_ALONE = 0x80
+# Aqueduct-through-wall. EXE +4=3/7 are unused wall end-caps (BUILD1B
+# [3]/[7]) — a punched gap in the walkway. Iso remaps to the matching
+# wall straight so crenellation stays continuous. Tile +4 stays 3/7.
+ID_AQUEDUCT_WALL_EW = 0xBC
+ID_AQUEDUCT_WALL_NS = 0xBD
+VAR_WALL_STRAIGHT_NS = 0x00
+VAR_WALL_STRAIGHT_EW = 0x04
 ID_AQUEDUCT_STUB = 0xCB
 ID_AQUEDUCT_LO = 0xCB
 ID_AQUEDUCT_HI = 0xD6
@@ -1238,6 +1245,12 @@ def _tile_frames(
         alone = _tower_standalone_sprite(frames)
         if alone is not None:
             return (alone,), 0
+    # 0xBC/0xBD store EXE +4=3/7 (end-caps). Blit wall straights 4/0.
+    if name == PL8_BUILD1B:
+        if tile.terrain_id == ID_AQUEDUCT_WALL_EW:
+            idx = VAR_WALL_STRAIGHT_EW
+        elif tile.terrain_id == ID_AQUEDUCT_WALL_NS:
+            idx = VAR_WALL_STRAIGHT_NS
     if (
         frames is not None
         and idx is not None
@@ -2364,7 +2377,9 @@ def _minimap_color(tid: int, flags: int) -> tuple[int, int, int]:
         return _MINI_HOUSE
     if _ID_GARDEN_LO <= tid <= _ID_GARDEN_HI:
         return _MINI_GARDEN
-    if _ID_WALL_LO <= tid <= _ID_WALL_HI:
+    if tid in (ID_AQUEDUCT_WALL_EW, ID_AQUEDUCT_WALL_NS) or (
+        _ID_WALL_LO <= tid <= _ID_WALL_HI
+    ):
         return _MINI_WALL
     if tid == ID_RESERVOIR or ID_AQUEDUCT_LO <= tid <= ID_FOUNTAIN_HI:
         return _MINI_PIPE
@@ -2990,6 +3005,23 @@ def selftest() -> list[str]:
         lines.append("FAIL  render_iso_view ≠ crop of world iso")
     else:
         lines.append("ok    render_iso_view matches crop (no world bitmap)")
+    dummy_b1b = [Image.new("RGBA", (ISO_W, ISO_H), (0, 0, 0, 0)) for _ in range(12)]
+    raw_combo = bytearray(TILE_BYTES)
+    raw_combo[0] = ID_AQUEDUCT_WALL_EW
+    raw_combo[3] = SHEET_BUILD1B
+    raw_combo[4] = 3
+    _fr, idx_bc = _tile_frames(
+        Tile.unpack(bytes(raw_combo)), 0, None, {PL8_BUILD1B: dummy_b1b}
+    )
+    raw_combo[0] = ID_AQUEDUCT_WALL_NS
+    raw_combo[4] = 7
+    _fr, idx_bd = _tile_frames(
+        Tile.unpack(bytes(raw_combo)), 0, None, {PL8_BUILD1B: dummy_b1b}
+    )
+    if idx_bc != VAR_WALL_STRAIGHT_EW or idx_bd != VAR_WALL_STRAIGHT_NS:
+        lines.append(f"FAIL  0xBC/0xBD blit {idx_bc}/{idx_bd} (want 4/0)")
+    else:
+        lines.append("ok    0xBC/0xBD blit remaps +4 3/7 -> wall straight 4/0")
     if iso_sprite_dest(10, 40, 51, 30) != (10, 19):
         lines.append(f"FAIL  tall blit origin {iso_sprite_dest(10, 40, 51, 30)}")
     elif iso_sprite_dest(10, 40, 30, 30) != (10, 40):
@@ -3143,6 +3175,7 @@ def selftest() -> list[str]:
         (8, 0, 0x1C, 0, _MINI_EMPTY, "empty"),
         (9, 0, ID_RESERVOIR, 0, _MINI_PIPE, "reservoir"),
         (10, 0, 0xE3, 0, _MINI_BUILDING, "prefecture"),
+        (11, 0, ID_AQUEDUCT_WALL_EW, 0x42, _MINI_WALL, "aqueduct-wall"),
     )
     for x, y, tid, flags, color, name in samples:
         off = city.offset(x, y)

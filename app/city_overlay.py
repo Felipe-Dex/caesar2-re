@@ -2080,7 +2080,15 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  query +17 still internal {flood_q.lines}")
     else:
         lines.append("ok    query +17 flood without walls stays Internal")
-    from app.city_paint import ID_WALL_EW, ID_WALL_NS, tile_inside_walls
+    from app.city_paint import (
+        ID_AQUEDUCT_WALL_EW,
+        ID_WALL_EW,
+        ID_WALL_NS,
+        FLAG_WALL,
+        is_fortification_id,
+        is_security_barrier,
+        tile_inside_walls,
+    )
 
     def _box(ox: int, oy: int) -> None:
         for i in range(5):
@@ -2110,6 +2118,26 @@ def selftest() -> list[str]:
         )
     else:
         lines.append("ok    overlay enclosed house → External 0x90")
+    # Aqueduct-through-wall must stay a barrier (EXE +1=0x42 keeps 0x02).
+    # Id-only C1–CA would treat 0xBC as a door and External would leak in.
+    xoff = city.offset(42, 40)
+    city.tiles[xoff] = ID_AQUEDUCT_WALL_EW
+    city.tiles[xoff + 1] = 0x40 | FLAG_WALL
+    if (
+        not is_fortification_id(ID_AQUEDUCT_WALL_EW)
+        or not is_security_barrier(city.tiles, 42, 40)
+        or not tile_inside_walls(city.tiles, 42, 42)
+    ):
+        lines.append("FAIL  0xBC opened the Security enclosure")
+    elif overlay_pixel(city.tiles, xoff, OVERLAY_SECURITY) != 0:
+        lines.append(
+            f"FAIL  overlay paints flood on 0xBC "
+            f"{overlay_pixel(city.tiles, xoff, OVERLAY_SECURITY):#x}"
+        )
+    elif overlay_pixel(city.tiles, woff, OVERLAY_SECURITY) != 0x90:
+        lines.append("FAIL  enclosure leaked through 0xBC")
+    else:
+        lines.append("ok    0xBC keeps wall barrier (no Security hole)")
     goff = city.offset(41, 41)
     city.tiles[goff] = 0x14
     eoff = city.offset(43, 41)

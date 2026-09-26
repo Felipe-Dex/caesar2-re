@@ -74,10 +74,22 @@ ID_GATE = 0xC0
 ID_WALL_NS = 0xC1
 ID_WALL_EW = 0xC2
 ID_WALL_LO, ID_WALL_HI = 0xC1, 0xCA
+# Aqueduct-through-wall. EXE +1=0x42 (pipe|wall). Same barrier as 0xC1–0xCA.
+ID_AQUEDUCT_WALL_EW = 0xBC
+ID_AQUEDUCT_WALL_NS = 0xBD
+FLAG_WALL = 0x02
+FLAG_TOWER = 0x04
 # +1 bits 0x02/0x04 (wall / tower). Gate 0x24 includes 0x04.
 # Autotile pieces 0xC3–0xCA (corners / ends) are the same barrier family.
+# 0xBC/0xBD keep 0x02 — id-only C1–CA would open a door in the flood.
 FORTIFICATION_IDS = frozenset(
-    {ID_TOWER, ID_GATE} | set(range(ID_WALL_LO, ID_WALL_HI + 1))
+    {
+        ID_TOWER,
+        ID_GATE,
+        ID_AQUEDUCT_WALL_EW,
+        ID_AQUEDUCT_WALL_NS,
+    }
+    | set(range(ID_WALL_LO, ID_WALL_HI + 1))
 )
 
 # FUN_0004034b / tile_or_radius 0x6CD7E. extra grows +x/+y for the N×N origin.
@@ -874,13 +886,22 @@ def is_fortification_id(tid: int) -> bool:
 
 
 def is_security_barrier(tiles: bytearray | bytes, x: int, y: int) -> bool:
-    """Wall / gate / tower, or river (+1 0x10). Same +1&0x1E family as 0x430da."""
+    """Wall / gate / tower, or river (+1 0x10). Same +1&0x1E family as 0x430da.
+
+    EXE seeds ``+1&0x1E`` (wall 0x02, tower 0x04, river 0x10). Host also
+    accepts fortification ids so a wall box that only wrote ``+0`` still
+    encloses. ``0xBC``/``0xBD`` ``+1=0x42`` keeps ``0x02`` — without that
+    bit (or the combo ids) the security flood walks through the crossing.
+    """
     if not _in_map(x, y):
         return False
     off = _off(x, y)
+    flags = tiles[off + 1]
+    if flags & (FLAG_WALL | FLAG_TOWER):
+        return True
     if is_fortification_id(tiles[off]):
         return True
-    return bool(tiles[off + 1] & FLAG_RIVER)
+    return bool(flags & FLAG_RIVER)
 
 
 def security_enclosure_mask(tiles: bytearray | bytes) -> bytearray:
