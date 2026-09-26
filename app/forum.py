@@ -220,6 +220,7 @@ ORACLE_PROMPT_X, ORACLE_PROMPT_Y = 0x18, 0x19E
 ORACLE_BACK_X, ORACLE_BACK_Y = 0xCC, 0x1D0
 ORACLE_COL_Y0 = 0x12C  # 300 − 3*rating = capital Y
 ORACLE_COL_SCALE = 3
+ORACLE_COL_W, ORACLE_COL_H = 96, 337
 ORACLE_INK = (16, 176, 16, 255)
 ORACLE_INK_DIM = (12, 140, 12, 255)
 # 0x57450 live ids → EAX 0x1f…0x2c → raw_name_bank B02…B15.
@@ -249,12 +250,23 @@ EMPIRE_HIT_W = 36
 EMPIRE_HIT_H = 28
 EMPIRE_GERMANIA_EXTERIOR = 39  # [5] skip; dest (249, 88) — north, not the Med.
 EMPIRE_CRETA = 17
-# 0x5C621 dialog (ebx=x, ecx=y). Not a hover next to the stamp.
+# 0x5C621 dialog: 0x59ff8 frame at (0x70,0x80), 0x1A×0x10 tiles of 16.
+# Palette byte 0x11 = C2 blue chrome (not the green hover we painted).
 EMPIRE_DLG_X, EMPIRE_DLG_Y = 0x70, 0x80
+EMPIRE_DLG_TILES_W, EMPIRE_DLG_TILES_H = 0x1A, 0x10
+EMPIRE_DLG_W = EMPIRE_DLG_TILES_W * 16
+EMPIRE_DLG_H = EMPIRE_DLG_TILES_H * 16
 EMPIRE_NAME_X, EMPIRE_NAME_Y = 0x90, 0x9C
 EMPIRE_STAT_X, EMPIRE_STAT_Y = 0x90, 0xC0
 EMPIRE_FLAVOR_X, EMPIRE_FLAVOR_Y = 0x90, 0xE0
 EMPIRE_FLAVOR_W, EMPIRE_FLAVOR_H = 0x160, 0x64
+# 0x2ddad close/X: sprite 0x33, 24×24 (0x14dc4 / ebx=0x18). Top-right of frame.
+EMPIRE_CLOSE_W, EMPIRE_CLOSE_H = 24, 24
+EMPIRE_CLOSE_X = EMPIRE_DLG_X + EMPIRE_DLG_W - EMPIRE_CLOSE_W - 6
+EMPIRE_CLOSE_Y = EMPIRE_DLG_Y + 6
+EMPIRE_BLUE = (16, 44, 96, 240)
+EMPIRE_BLUE_INNER = (8, 28, 72, 255)
+EMPIRE_BLUE_EDGE = (180, 196, 230, 255)
 EMPIRE_INK = (240, 228, 160, 255)
 EMPIRE_INK_DIM = (210, 200, 140, 255)
 # 0x135A4(skip+0x3A): table 0x93694. skip 1=B30, skip 2=C01 … skip 32=C31.
@@ -1247,17 +1259,20 @@ def open_forum(sim: SimState, tiles: bytearray, game: Path | None = None) -> For
     return state
 
 
-def forum_layout(win_w: int, win_h: int) -> tuple[int, int, int]:
+def forum_layout(win_w: int, win_h: int, *, top: int = 0) -> tuple[int, int, int]:
     """Integer nearest-neighbor scale + centered origin for the 640×480 FB.
 
-    ``scale = max(1, min(win_w // 640, win_h // 480))``. Same rule as the
-    city well: never stretch X independently of Y. Widescreen letterboxes.
+    ``scale = max(1, min(well_w // 640, well_h // 480))``. ``top`` is the
+    File-menu strip (city ``TOP_BAR_H``) so Oracle/Empire are not squashed
+    into the chrome independently. Use canvas pixels, not the toplevel
+    HWND (title bar made the FB aspect drift).
     """
     w = max(1, int(win_w))
-    h = max(1, int(win_h))
+    inset = max(0, int(top))
+    h = max(1, int(win_h) - inset)
     scale = max(1, min(w // FORUM_NATIVE_W, h // FORUM_NATIVE_H))
     ox = (w - FORUM_NATIVE_W * scale) // 2
-    oy = (h - FORUM_NATIVE_H * scale) // 2
+    oy = inset + (h - FORUM_NATIVE_H * scale) // 2
     return scale, ox, oy
 
 
@@ -1443,6 +1458,11 @@ def click_forum(
             return ""
         return ""
     if state.kind == KIND_EMPIRE:
+        if state.empire_pick and _in_rect(mx, my, empire_close_rect()):
+            state.empire_pick = None
+            state.empire_flavor = ""
+            state.empire_sfx = ""
+            return ""
         skip = _empire_hit(state, mx, my)
         if skip is not None:
             state.empire_pick = skip
@@ -1769,6 +1789,23 @@ def _wrap_oracle_text(text: str, width: int = 72) -> list[str]:
     return lines
 
 
+def _lock_oracle_column(column: Image.Image) -> Image.Image:
+    """RAT_BACK[0] stays 96×337. Never stretch — that made chubby columns."""
+    col = column.convert("RGBA")
+    if col.size == (ORACLE_COL_W, ORACLE_COL_H):
+        return col
+    sx, sy = col.size
+    if sx >= ORACLE_COL_W and sy >= ORACLE_COL_H and sx % ORACLE_COL_W == 0 and sy % ORACLE_COL_H == 0:
+        kx, ky = sx // ORACLE_COL_W, sy // ORACLE_COL_H
+        if kx == ky:
+            return col.resize((ORACLE_COL_W, ORACLE_COL_H), Image.Resampling.NEAREST)
+    out = Image.new("RGBA", (ORACLE_COL_W, ORACLE_COL_H), (0, 0, 0, 0))
+    fitted = col.copy()
+    fitted.thumbnail((ORACLE_COL_W, ORACLE_COL_H), Image.Resampling.NEAREST)
+    out.paste(fitted, ((ORACLE_COL_W - fitted.width) // 2, 0), fitted)
+    return out
+
+
 def _blit_oracle_columns(out: Image.Image, column: Image.Image | None, ratings: tuple[int, ...]) -> None:
     """0x5eb1d: x = 32 + esi*160, y = clamp(300−3*rating, 0, 0x126). Sprite 0."""
     if column is None:
@@ -1779,7 +1816,7 @@ def _blit_oracle_columns(out: Image.Image, column: Image.Image | None, ratings: 
             draw.rectangle((x + 28, y + 12, x + 68, 340), fill=(196, 168, 96, 230))
             draw.rectangle((x + 16, y, x + 80, y + 18), fill=(210, 184, 110, 230))
         return
-    col = column.convert("RGBA")
+    col = _lock_oracle_column(column)
     for i, val in enumerate(ratings[:4]):
         x = 0x20 + i * ORACLE_COL_STRIDE
         y = max(0, min(0x126, _oracle_col_top(val)))
@@ -1964,6 +2001,11 @@ def empire_raw_stem(skip: int) -> str:
 def empire_status_text(eng=None) -> str:
     """City Only: every map hit is [47]+9. No career conquer year."""
     return _eng(eng, 47, 9, "As yet unconquered.")
+
+
+def empire_close_rect() -> tuple[int, int, int, int]:
+    """0x2ddad 24×24 X on the 0x59ff8 frame. Native 640×480."""
+    return (EMPIRE_CLOSE_X, EMPIRE_CLOSE_Y, EMPIRE_CLOSE_W, EMPIRE_CLOSE_H)
 
 
 def empire_flavor_text(skip: int, game: Path | None = None) -> str:
@@ -2403,6 +2445,16 @@ def _draw_centurion(draw, font, sim: SimState, eng) -> None:
     draw.text((_PANEL_X + 300, _PANEL_Y + 120), f"{cohort_s}  {rank_s}", fill=_ink(), font=font)
 
 
+def _draw_empire_close(draw) -> None:
+    """0x2ddad sprite 0x33 — 24×24 close/X on the blue frame."""
+    x, y, w, h = empire_close_rect()
+    draw.rectangle((x, y, x + w - 1, y + h - 1), fill=(32, 64, 120, 255), outline=EMPIRE_BLUE_EDGE)
+    draw.rectangle((x + 1, y + 1, x + w - 2, y + h - 2), outline=(240, 230, 180, 255))
+    pad = 6
+    draw.line((x + pad, y + pad, x + w - pad - 1, y + h - pad - 1), fill=EMPIRE_INK, width=2)
+    draw.line((x + w - pad - 1, y + pad, x + pad, y + h - pad - 1), fill=EMPIRE_INK, width=2)
+
+
 def _blit_empire_native(state: ForumState, sim: SimState, *, eng=None) -> Image.Image:
     """Kind 6 — EMPIRE.PL8 full screen. No crowd, no 4×3 chrome."""
     if state.empire_map is not None:
@@ -2432,14 +2484,14 @@ def _blit_empire_native(state: ForumState, sim: SimState, *, eng=None) -> Image.
             outline=(200, 32, 24, 255),
             width=2,
         )
-        # 0x59ff8 / 0x57f48 — fixed dialog, not a stamp-side hover.
+        # 0x59ff8 blue chrome (0x117a60=0x11) + 0x2ddad close/X.
         panel = (
             EMPIRE_DLG_X,
             EMPIRE_DLG_Y,
-            EMPIRE_FLAVOR_X + EMPIRE_FLAVOR_W + 8,
-            EMPIRE_FLAVOR_Y + EMPIRE_FLAVOR_H + 8,
+            EMPIRE_DLG_X + EMPIRE_DLG_W,
+            EMPIRE_DLG_Y + EMPIRE_DLG_H,
         )
-        draw.rectangle(panel, fill=(8, 36, 16, 235), outline=(200, 220, 140, 255))
+        draw.rectangle(panel, fill=EMPIRE_BLUE, outline=EMPIRE_BLUE_EDGE)
         draw.text((EMPIRE_NAME_X, EMPIRE_NAME_Y), name, fill=EMPIRE_INK, font=font)
         draw.text((EMPIRE_STAT_X, EMPIRE_STAT_Y), status, fill=EMPIRE_INK_DIM, font=small)
         box = (
@@ -2448,11 +2500,12 @@ def _blit_empire_native(state: ForumState, sim: SimState, *, eng=None) -> Image.
             EMPIRE_FLAVOR_X + EMPIRE_FLAVOR_W,
             EMPIRE_FLAVOR_Y + EMPIRE_FLAVOR_H,
         )
-        draw.rectangle(box, fill=(4, 28, 12, 255), outline=(180, 200, 120, 255))
+        draw.rectangle(box, fill=EMPIRE_BLUE_INNER, outline=EMPIRE_BLUE_EDGE)
         fy = EMPIRE_FLAVOR_Y + 6
         for line in _wrap_oracle_text(flavor, 46)[:6]:
             draw.text((EMPIRE_FLAVOR_X + 8, fy), line, fill=EMPIRE_INK, font=small)
             fy += 14
+        _draw_empire_close(draw)
     return out.convert("RGB")
 
 
@@ -3331,6 +3384,27 @@ def selftest() -> list[str]:
         lines.append("FAIL  oracle FB empty after letterbox")
     else:
         lines.append("ok    Oracle 640×480 integer scale + letterbox")
+    col_fat = Image.new("RGBA", (192, 337), (200, 160, 80, 255))
+    locked = _lock_oracle_column(col_fat)
+    if locked.size != (ORACLE_COL_W, ORACLE_COL_H):
+        lines.append(f"FAIL  oracle column lock {locked.size}")
+    else:
+        lines.append("ok    RAT_BACK column locked 96×337")
+    o2 = blit_forum(
+        (1280, 960),
+        ForumState(kind=KIND_ORACLE, oracle_column=col_fat),
+        SimState(city_only=1, rating_prosperity=40, rating_culture=10),
+    )
+    s2, x2, y2 = forum_layout(1280, 960)
+    col_y = max(0, min(0x126, _oracle_col_top(40)))
+    cx0 = x2 + (0x20 + 2 * ORACLE_COL_STRIDE) * s2
+    cy0 = y2 + col_y * s2
+    mid = o2.getpixel((cx0 + 8, cy0 + 8))
+    past = o2.getpixel((cx0 + ORACLE_COL_W * s2 + 8, cy0 + 8))
+    if s2 != 2 or mid[0] < 100 or past[0] > 80:
+        lines.append(f"FAIL  oracle 2x column still fat {s2} {mid} {past}")
+    else:
+        lines.append("ok    Oracle 2x columns stay 96×337 game pixels")
     emp_st = ForumState(kind=KIND_EMPIRE)
     gx, gy = EMPIRE_HOTSPOTS[EMPIRE_GERMANIA_EXTERIOR - 1]
     click_forum(emp_st, gx + 4, gy + 4, SimState(city_only=1))
@@ -3389,7 +3463,23 @@ def selftest() -> list[str]:
     elif "Govern this Province" in creta.empire_flavor:
         lines.append("FAIL  career Govern this Province leaked")
     else:
-        lines.append("ok    flavor ink inside 0x57f48 green frame")
+        lines.append("ok    flavor ink inside 0x57f48 blue frame")
+    creta.empire_pick = EMPIRE_CRETA
+    creta.empire_flavor = empire_flavor_text(EMPIRE_CRETA)
+    rx, ry, rw, rh = empire_close_rect()
+    click_forum(creta, rx + rw // 2, ry + rh // 2, SimState(city_only=1))
+    if creta.empire_pick is not None:
+        lines.append(f"FAIL  close X leaves pick {creta.empire_pick}")
+    else:
+        lines.append("ok    Empire dialog close/X (0x2ddad) dismisses")
+    creta.empire_pick = EMPIRE_CRETA
+    creta.empire_flavor = "island"
+    cbox = blit_forum((640, 480), creta, SimState(city_only=1))
+    xpix = cbox.getpixel((rx + 4, ry + 4))
+    if xpix[2] < 80:
+        lines.append(f"FAIL  close gadget not blue {xpix}")
+    else:
+        lines.append("ok    close gadget painted on blue frame")
     sim_g = SimState(city_only=1)
     goods = bytearray(768)
     struct.pack_into("<i", goods, 1 * 48 + 8, 2)

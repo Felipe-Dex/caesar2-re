@@ -1072,10 +1072,16 @@ def show(ctx: BootContext, *, game: Path) -> None:
             shown = f"{prev.message}  tesouro {ctx.sim.treasury}"
             extra_alert = False
         if forum_state is not None:
-            frame = blit_forum((win_w, win_h), forum_state, ctx.sim, eng=ctx.eng)
+            # Canvas pixels only — root HWND includes the title bar and
+            # made Oracle's 640×480 FB look fat when the image was shown
+            # in a shorter well.
+            fw = max(SCREEN_W, int(host.winfo_width() or win_w))
+            fh = max(SCREEN_H, int(host.winfo_height() or win_h))
+            frame = blit_forum((fw, fh), forum_state, ctx.sim, eng=ctx.eng)
             # Oracle / Empire are the 640×480 FB. City HUD extra reused the
             # chrome button name (leftover ORACLE / EMPIRE MAP strip).
             if forum_state.kind in (KIND_ORACLE, KIND_EMPIRE):
+                last_extra = None
                 if menu_report is not None:
                     frame = blit_menu_report(frame, menu_report)
             else:
@@ -3410,7 +3416,10 @@ def show(ctx: BootContext, *, game: Path) -> None:
                 event.y,
                 ctx.sim,
                 eng=ctx.eng,
-                frame_size=(win_w, win_h),
+                frame_size=(
+                    max(SCREEN_W, int(host.winfo_width() or win_w)),
+                    max(SCREEN_H, int(host.winfo_height() or win_h)),
+                ),
             )
             stem = forum_state.oracle_sfx or forum_state.empire_sfx
             if stem:
@@ -3556,12 +3565,22 @@ def show(ctx: BootContext, *, game: Path) -> None:
             set_zoom(zoom + 1)
 
     def on_resize(event: tk.Event) -> None:  # type: ignore[type-arg]
-        """Larger window → larger iso clip. Same PL8 zoom, same pan."""
+        """Larger window → larger iso clip. Same PL8 zoom, same pan.
+
+        Size the well from the canvas, not the toplevel. Root Configure
+        includes the title bar; using that HWND fattened Oracle columns.
+        """
         nonlocal win_w, win_h
-        if _in_blit or event.widget is not root:
+        if _in_blit:
             return
-        nw = max(SCREEN_W, int(event.width))
-        nh = max(SCREEN_H, int(event.height))
+        if event.widget is host:
+            nw = max(SCREEN_W, int(event.width))
+            nh = max(SCREEN_H, int(event.height))
+        elif event.widget is root:
+            nw = max(SCREEN_W, int(host.winfo_width() or event.width))
+            nh = max(SCREEN_H, int(host.winfo_height() or event.height))
+        else:
+            return
         if nw == win_w and nh == win_h:
             return
         win_w, win_h = nw, nh
@@ -3569,6 +3588,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
 
     root.bind("<Key>", on_key)
     root.bind("<Configure>", on_resize)
+    host.bind("<Configure>", on_resize)
     host.bind("<Button-1>", on_press)
     host.bind("<B1-Motion>", on_motion)
     host.bind("<ButtonRelease-1>", on_release)
