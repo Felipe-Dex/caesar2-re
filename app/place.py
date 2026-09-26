@@ -33,14 +33,15 @@ T/cross ``0xD5``/``0xD6`` (``+1=0x60``). Road ``0x52–0x5C`` is allowed
 (Gate analog): LUT ``0x94E37`` ×2 writes ``0xD5`` (NS pipe) / ``0xD6``
 (EW pipe), ``+1=0x60``, ``+3=0x90``. Dry ``+9`` from 20230610 / FELIPE.
 Charge (``rebuild_pipe_charge``) only from a river-fed reservoir
-(cardinal ``+1&0x18``). ``FUN_0002a498(3,1)`` writes charge 3 through
-the whole ``+1&0xC0`` / ``0xBE`` / ``0xCB–0xD6`` component — including
-through reservoirs — so inland tanks stay wet (Achea spines are all
-charge 3; a 4th ``0xBE`` on the same aqueduct stays charged). Decay
-hops ``(3,0)`` / ``(2,0)`` still run but skip tiles already at 3.
-A 4-connected ``0xBE`` blob is one node (multi-click 2×2 does not
-burn hops). Isolated / disconnected aqueduct stays dry. Load rebuilds
-charge (F4) so ``+10`` / wet ``+4`` survive a round-trip.
+(cardinal ``+1&0x18``). ``FUN_0002a498(3,1)`` writes charge 3 along
+aqueducts only (does not enter ``0x80``). ``2a498(3,0)`` / ``(2,0)``
+then write 2 then 1 and stop inside each next ``0xBE`` (``2a635``).
+First river-fed tank is 3 (``3fdd0`` r=6); each later tank on the
+same trail steps down (2 → r=5, 1 → r=4, then dry). Aqueduct length
+does not add hops. Achea spines stay 3 because each ``0xBE`` is
+river-fed. A 4-connected ``0xBE`` blob is one node. Isolated /
+disconnected aqueduct stays dry. Load rebuilds charge (F4) so
+``+10`` / wet ``+4`` survive a round-trip.
 Clear wipes grass ``0xCB–0xD6`` to rubble ``0x05``; road-combo
 (``+3&0x80``) restores the road. Reservoir ``+9`` from LUT ``0x94E7F``
 (inlet on the tank wall when a pipe is cardinal).
@@ -1290,17 +1291,16 @@ def _pipe_charge_hop(
     need: int,
     write: int,
     *,
-    through_reservoirs: bool = False,
+    enter_reservoirs: bool = False,
 ) -> None:
     """One ``FUN_0002a498`` pass.
 
     From every pipe whose ``+10&3 == need``, flood cardinal pipe
-    neighbours writing ``write``. ``2a498(3,1)`` sets
-    ``through_reservoirs`` so the first pass fills the component
-    (Achea: every connected ``0xBE`` is charge 3). Later hops follow
-    ``FUN_0002a635``: a reservoir blob takes the charge and stops that
-    ray. Skip when the tile already holds ``>= write``. Aqueduct length
-    does not add hops.
+    neighbours writing ``write``. ``2a498(3,1)`` does **not** enter
+    ``+1&0x80`` (aqueducts stay 3; the next tank is left for the decay
+    hops). ``2a498(3,0)`` / ``(2,0)`` write 2 then 1 and stop inside
+    the reservoir blob (``FUN_0002a635``). Skip when the tile already
+    holds ``>= write``. Aqueduct length does not add hops.
     """
     starts = [
         (x, y)
@@ -1314,11 +1314,13 @@ def _pipe_charge_hop(
         for nx, ny in _neighbor_ring(x, y):
             if (nx, ny) in seen or not is_pipe(city, nx, ny):
                 continue
+            if _is_reservoir_cell(city, nx, ny) and not enter_reservoirs:
+                continue
             if not _apply_pipe_charge(city, nx, ny, write):
                 seen.add((nx, ny))
                 continue
             seen.add((nx, ny))
-            if _is_reservoir_cell(city, nx, ny) and not through_reservoirs:
+            if _is_reservoir_cell(city, nx, ny):
                 _flood_reservoir_blob(city, nx, ny, write, seen)
                 continue
             stack.append((nx, ny))
@@ -1328,23 +1330,27 @@ def rebuild_pipe_charge(city: CityMap, seeds: list[tuple[int, int]]) -> list[tup
     """Place/Clear stand-in for FUN_00029e36.
 
     Dry every pipe in the component (``+4 = +9``), inject charge 3 only
-    on a river-fed reservoir (``FUN_0002a407`` + ``FUN_0002a18c``), then
-    the three EXE hops: ``2a498(3,1)`` write 3 *through* reservoirs,
-    ``2a498(3,0)`` write 2, ``2a498(2,0)`` write 1. Isolated or
-    disconnected aqueduct stays dry — do not seed from an aqueduct that
-    merely touches river.
+    on a river-fed reservoir blob (``FUN_0002a407`` + ``FUN_0002a18c``),
+    then the three EXE hops: ``2a498(3,1)`` write 3 on aqueducts only,
+    ``2a498(3,0)`` write 2 into the next tank and stop, ``2a498(2,0)``
+    write 1. Isolated or disconnected aqueduct stays dry — do not seed
+    from an aqueduct that merely touches river.
     """
     cells = _pipe_component(city, seeds)
     if not cells:
         return []
     for x, y in cells:
         _reset_pipe_tile(city, x, y)
+    seeded: set[tuple[int, int]] = set()
     for x, y in cells:
-        if _is_river_fed_reservoir(city, x, y):
-            _apply_pipe_charge(city, x, y, 3)
-    _pipe_charge_hop(city, cells, 3, 3, through_reservoirs=True)
-    _pipe_charge_hop(city, cells, 3, 2)
-    _pipe_charge_hop(city, cells, 2, 1)
+        if (x, y) in seeded or not _is_river_fed_reservoir(city, x, y):
+            continue
+        _apply_pipe_charge(city, x, y, 3)
+        seeded.add((x, y))
+        _flood_reservoir_blob(city, x, y, 3, seeded)
+    _pipe_charge_hop(city, cells, 3, 3, enter_reservoirs=False)
+    _pipe_charge_hop(city, cells, 3, 2, enter_reservoirs=True)
+    _pipe_charge_hop(city, cells, 2, 1, enter_reservoirs=True)
     return cells
 
 
@@ -4255,18 +4261,19 @@ def selftest() -> list[str]:
     if (
         not r.ok
         or not r2.ok
-        or (inland.coverage & 3) != 3
-        or inland.variant != 0x75
+        or (inland.coverage & 3) != 2
+        or inland.variant != (inland.overlay_anim + 2) & 0xFF
     ):
         lines.append(
             f"FAIL  inland fill aq={r.message} be={r2.message} "
             f"+10={inland.coverage:#x} +4={inland.variant:#x}"
+            f"+9={inland.overlay_anim:#x}"
         )
     else:
-        lines.append("ok    Reservoir interior enche via aqueduto")
+        lines.append("ok    Reservoir interior enche via aqueduto (carga 2)")
 
-    # FUN_00029e36: 2a498(3,1) fills the connected component (Achea all-3).
-    # Fourth 0xBE stays wet. Aqueduct length is not a hop.
+    # FUN_00029e36: first river-fed tank 3; each later 0xBE steps down.
+    # 2a498(3,1) keeps aqueducts at 3; length is not a hop.
     hop = CityMap()
     hop.source = "pipe-hops"
     # y=10: river, BE0, AQ×3, BE1, AQ, BE2, AQ, BE3, AQ, BE4
@@ -4287,15 +4294,36 @@ def selftest() -> list[str]:
             hop.tiles[off + 9] = 0x76
     rebuild_pipe_charge(hop, [(3, 10)])
     hop_got = [hop.tile(x, 10).coverage & 3 for x in chain_x]
-    if hop_got != [3, 3, 3, 3, 3]:
-        lines.append(f"FAIL  reservoir hops +10={hop_got} want [3,3,3,3,3]")
+    if hop_got != [3, 2, 1, 0, 0]:
+        lines.append(f"FAIL  reservoir hops +10={hop_got} want [3,2,1,0,0]")
     else:
-        lines.append("ok    Reservoir hops: componente inteiro carga 3 (4o molhado)")
+        lines.append("ok    Reservoir hops: 3→2→1→seco (2a635 stop no tanque)")
     long_aq = [hop.tile(x, 10).coverage & 3 for x in (4, 5, 6)]
     if long_aq != [3, 3, 3]:
         lines.append(f"FAIL  aqueduct length counted as hop +10={long_aq}")
     else:
         lines.append("ok    Aqueduct longo não gasta hop (carga 3 até o 2º)")
+    # Two tanks on one river-fed line: second is lower (3fdd0 r=6 then r=5).
+    pair = CityMap()
+    pair.source = "pipe-two-be"
+    pair.tiles[pair.offset(2, 20)] = 0x1E
+    pair.tiles[pair.offset(2, 20) + 1] = FLAG_RIVER
+    for x, tid, fl, dry in (
+        (3, ID_RESERVOIR, FLAG_RESERVOIR, VAR_RESERVOIR),
+        (4, 0xD0, FLAG_PIPE, 0x76),
+        (5, ID_RESERVOIR, FLAG_RESERVOIR, VAR_RESERVOIR),
+    ):
+        off = pair.offset(x, 20)
+        pair.tiles[off] = tid
+        pair.tiles[off + 1] = fl
+        pair.tiles[off + 4] = dry
+        pair.tiles[off + 9] = dry
+    rebuild_pipe_charge(pair, [(3, 20)])
+    pair_ch = [pair.tile(x, 20).coverage & 3 for x in (3, 5)]
+    if pair_ch != [3, 2]:
+        lines.append(f"FAIL  two 0xBE on one line +10={pair_ch} want [3,2]")
+    else:
+        lines.append("ok    two 0xBE on one aqueduct: first 3, second 2")
 
     # In-game path: try_place river 0xBE — AQ — 0xBE — AQ — 0xBE.
     three = CityMap()
@@ -4318,7 +4346,7 @@ def selftest() -> list[str]:
     three_ids = [three.tiles[three.offset(x, 8)] for x in (9, 10, 11, 12, 13)]
     if (
         not all(r.ok for r in placed)
-        or any(c == 0 for c in three_ch)
+        or three_ch != [3, 2, 1]
         or three_fl != [FLAG_RESERVOIR, FLAG_PIPE, FLAG_RESERVOIR, FLAG_PIPE, FLAG_RESERVOIR]
         or three_ids[0] != ID_RESERVOIR
         or not (ID_AQUEDUCT_LO <= three_ids[1] <= ID_AQUEDUCT_HI)
@@ -4332,7 +4360,7 @@ def selftest() -> list[str]:
             f"{[r.message for r in placed]}"
         )
     else:
-        lines.append("ok    try_place rio 0xBE—AQ—0xBE—AQ—0xBE todos carga>0")
+        lines.append("ok    try_place rio 0xBE—AQ—0xBE—AQ—0xBE carga 3→2→1")
 
     four = CityMap()
     four.source = "pipe-try-place-4"
@@ -4353,10 +4381,10 @@ def selftest() -> list[str]:
     ):
         try_place(four, x, 9, tool, sim4)
     four_ch = [four.tile(x, 9).coverage & 3 for x in (9, 11, 13, 15)]
-    if any(c == 0 for c in four_ch):
-        lines.append(f"FAIL  try_place 4 tanques +10={four_ch}")
+    if four_ch != [3, 2, 1, 0]:
+        lines.append(f"FAIL  try_place 4 tanques +10={four_ch} want [3,2,1,0]")
     else:
-        lines.append("ok    try_place 4o reservatório molhado (água até o quarto)")
+        lines.append("ok    try_place 4o reservatório seco (carga 3→2→1→0)")
 
     # Multi-click 2×2 tanks: blob is one hop node; three blobs stay wet.
     blob = CityMap()

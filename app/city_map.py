@@ -97,10 +97,22 @@ ID_AQUEDUCT_WALL_NS = 0xBD
 VAR_WALL_STRAIGHT_NS = 0x00
 VAR_WALL_STRAIGHT_EW = 0x04
 # Dry CITYFIXT +4 for the same-axis aqueduct (0xD0 EW / 0xCF NS).
+# 2a635 aqueduct bump: charge 3 → +2 (0x78 / 0x7B wet), else +1.
 _AQ_WALL_PIPE_DRY = {
     ID_AQUEDUCT_WALL_EW: 0x76,
     ID_AQUEDUCT_WALL_NS: 0x79,
 }
+
+
+def aqueduct_wet_plus4(dry: int, charge: int) -> int:
+    """CITYFIXT +4 from dry +9. Aqueduct: +2 if charge 3 else +1."""
+    if charge >= 3:
+        bump = 2
+    elif charge:
+        bump = 1
+    else:
+        bump = 0
+    return (dry + bump) & 0xFF
 ID_AQUEDUCT_STUB = 0xCB
 ID_AQUEDUCT_LO = 0xCB
 ID_AQUEDUCT_HI = 0xD6
@@ -866,7 +878,10 @@ def tile_wants_water_anim(
         return True
     if tid == ID_WELL:
         return True
-    if is_aqueduct_id(tid):
+    if is_aqueduct_id(tid) or tid in (
+        ID_AQUEDUCT_WALL_EW,
+        ID_AQUEDUCT_WALL_NS,
+    ):
         return bool(coverage & 3)
     if tid == ID_RESERVOIR and (coverage & 3):
         return True
@@ -1632,7 +1647,9 @@ def _tile_frames(
         )
         dry = _AQ_WALL_PIPE_DRY[tile.terrain_id]
         charge = tile.coverage & 3
-        var = dry + charge if dry + charge < len(_LUT_CITYFIXT_BLD) else dry
+        var = aqueduct_wet_plus4(dry, charge)
+        if var >= len(_LUT_CITYFIXT_BLD):
+            var = dry
         aq_idx = _LUT_CITYFIXT_BLD[var] + CITYFIXT_TERRAIN_BIAS
         aq_src = None
         if cityfixt is not None and 0 <= aq_idx < len(cityfixt) and charge:
@@ -3519,6 +3536,43 @@ def selftest() -> list[str]:
             else:
                 lines.append(
                     f"ok    0xBC composite wall+arcade (bright {bright} > wall {wall_bright})"
+                )
+            wet_raw = bytearray(TILE_BYTES)
+            wet_raw[0] = ID_AQUEDUCT_WALL_EW
+            wet_raw[3] = SHEET_BUILD1B
+            wet_raw[4] = 3
+            wet_raw[10] = 3
+            wet_fr, wet_idx = _tile_frames(
+                Tile.unpack(bytes(wet_raw)),
+                0,
+                real_fixt,
+                {PL8_BUILD1B: real_b1b},
+            )
+            dry_raw = bytearray(wet_raw)
+            dry_raw[10] = 0
+            dry_fr, dry_idx = _tile_frames(
+                Tile.unpack(bytes(dry_raw)),
+                0,
+                real_fixt,
+                {PL8_BUILD1B: real_b1b},
+            )
+            wet_n = (
+                sum(1 for p in wet_fr[wet_idx].getdata() if _is_water_rgba(p))
+                if wet_fr
+                else 0
+            )
+            dry_n = (
+                sum(1 for p in dry_fr[dry_idx].getdata() if _is_water_rgba(p))
+                if dry_fr
+                else 0
+            )
+            if wet_n < 20 or dry_n != 0:
+                lines.append(
+                    f"FAIL  0xBC wet channel water={wet_n} dry={dry_n}"
+                )
+            else:
+                lines.append(
+                    f"ok    0xBC charge 3 blits wet CITYFIXT 0x78 (water {wet_n})"
                 )
         else:
             lines.append("ok    0xBC composite skipped (no game dir)")
