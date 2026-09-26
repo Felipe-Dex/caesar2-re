@@ -3063,6 +3063,163 @@ def selftest() -> list[str]:
         f"+15={i8(tiles[hoff + 15])}"
     )
 
+    tiles = _blank_tiles()
+    tiles[hoff] = 0x8B
+    tiles[hoff + 1] = 0x01
+    soff = _off(21, 20)
+    tiles[soff] = 0xA2
+    tiles[soff + 1] = 0x01
+    paint_land_value(tiles, 20, 1)
+    shrine_raw = i8(tiles[hoff + 15])
+    tiles[_off(21, 21)] = 0xA2
+    tiles[_off(21, 21) + 1] = 0x01
+    wipe_lane(tiles, 15)
+    paint_land_value(tiles, 20, 2)
+    two_shrine = i8(tiles[hoff + 15])
+    ok = shrine_raw == 5 and two_shrine == 10
+    lines.append(
+        f"shrine 0xA2 +5 stacks: {'ok' if ok else 'FAIL'} "
+        f"one={shrine_raw} two={two_shrine}"
+    )
+    tiles = _blank_tiles()
+    tiles[hoff] = 0x8B
+    tiles[hoff + 1] = 0x01
+    for i, (dx, dy) in enumerate(((0, 0), (1, 0), (0, 1), (1, 1))):
+        o = _off(21 + dx, 20 + dy)
+        tiles[o] = 0xA6
+        tiles[o + 1] = 0x01
+        tiles[o + 5] = 0 if i == 0 else 1
+    paint_land_value(tiles, 20, 2)
+    temple_raw = i8(tiles[hoff + 15])
+    ok = temple_raw == 6
+    lines.append(
+        f"temple 0xA6 origin +6 once: {'ok' if ok else 'FAIL'} +15={temple_raw}"
+    )
+
+    ring = [
+        (dx, dy)
+        for dy in range(-2, 3)
+        for dx in range(-2, 3)
+        if (dx, dy) != (0, 0)
+    ]
+    tiles = _blank_tiles()
+    tiles[hoff] = 0x91
+    tiles[hoff + 1] = 0x01
+    for i, (dx, dy) in enumerate(ring[:8]):
+        o = _off(20 + dx, 20 + dy)
+        tiles[o] = 0xA2
+        tiles[o + 1] = 0x01
+    wipe_lane(tiles, 15)
+    paint_land_value(tiles, 18, 5)
+    eight_shrine = i8(tiles[hoff + 15])
+    ok = eight_shrine == 8 * 5
+    lines.append(
+        f"8 shrines in r=2 add 40: {'ok' if ok else 'FAIL'} +15={eight_shrine}"
+    )
+    ok = service_target_lv(eight_shrine, 60) == 40
+    lines.append(
+        f"acc>=20 keeps shrine splash (not 20+acc): {'ok' if ok else 'FAIL'} "
+        f"target={service_target_lv(eight_shrine, 60)}"
+    )
+    tiles = _blank_tiles()
+    tiles[hoff] = 0x91
+    tiles[hoff + 1] = 0x01
+    for dx, dy in ring[:10]:
+        o = _off(20 + dx, 20 + dy)
+        tiles[o] = 0x78
+        tiles[o + 1] = 0x01
+    wipe_lane(tiles, 15)
+    paint_land_value(tiles, 18, 5)
+    ten_garden = i8(tiles[hoff + 15])
+    ok = ten_garden == 10 * 2
+    lines.append(
+        f"10 gardens in r=2 add 20: {'ok' if ok else 'FAIL'} +15={ten_garden}"
+    )
+
+    tiles = _blank_tiles()
+    tiles[hoff] = 0x91
+    tiles[hoff + 1] = 0x01
+    tiles[hoff + 10] = 0x0C | 0xC0
+    tiles[hoff + 12] = 8
+    tiles[hoff + 13] = 0x01 | 0x08 | 0x10 | 0x20
+    n_plaza = n_g_in = 0
+    for dx in range(-2, 3):
+        o = _off(20 + dx, 21)
+        tiles[o] = 0x7C
+        tiles[o + 1] = FLAG_PAD
+        n_plaza += 1
+    for gy in (22, 23, 24):
+        for dx in range(-3, 4):
+            o = _off(20 + dx, gy)
+            tiles[o] = 0x78
+            tiles[o + 1] = 0x01
+            if max(abs(dx), gy - 20) <= 2:
+                n_g_in += 1
+    wipe_lane(tiles, 15)
+    paint_land_value(tiles, 18, 8)
+    yard_raw = i8(tiles[hoff + 15])
+    # Plaza r=1 only hits the 3 street tiles at d<=1. Garden r=2 hits
+    # the first courtyard row (5 tiles). Farther garden rows add 0.
+    want = 3 * 4 + n_g_in * 2
+    ok = n_g_in == 5 and yard_raw == 22 and want == 22
+    lines.append(
+        f"front-edge plaza+garden yard: {'ok' if ok else 'FAIL'} "
+        f"plazas_row={n_plaza} gardens_r2={n_g_in} raw={yard_raw}"
+    )
+    tiles = _blank_tiles()
+    tiles[hoff] = 0x91
+    tiles[hoff + 1] = 0x01
+    tiles[hoff + 10] = 0x0C | 0xC0
+    tiles[hoff + 12] = 8
+    tiles[hoff + 13] = 0x01 | 0x08 | 0x10 | 0x20
+    for dx in (-1, 0, 1):
+        o = _off(20 + dx, 21)
+        tiles[o] = 0x7C
+        tiles[o + 1] = FLAG_PAD
+    n_s_in = 0
+    for gy in (22, 23, 24):
+        for dx in range(-3, 4):
+            o = _off(20 + dx, gy)
+            tiles[o] = 0xA2
+            tiles[o + 1] = 0x01
+            if max(abs(dx), gy - 20) <= 2:
+                n_s_in += 1
+    wipe_lane(tiles, 15)
+    paint_land_value(tiles, 18, 8)
+    shrine_yard_raw = i8(tiles[hoff + 15])
+    ok = (
+        n_s_in == 5
+        and shrine_yard_raw == 37
+        and service_target_lv(shrine_yard_raw, 46) == 37
+    )
+    lines.append(
+        f"front-edge plaza+shrine yard: {'ok' if ok else 'FAIL'} "
+        f"shrines_r2={n_s_in} raw={shrine_yard_raw} "
+        f"target={service_target_lv(shrine_yard_raw, 46)}"
+    )
+    tiles = _blank_tiles()
+    tiles[hoff] = 0x91
+    tiles[hoff + 1] = 0x01
+    tiles[hoff + 10] = 0x0C | 0xC0
+    tiles[hoff + 12] = 8
+    tiles[hoff + 13] = 0x01 | 0x08 | 0x10 | 0x20
+    for dx in (-1, 0, 1):
+        o = _off(20 + dx, 21)
+        tiles[o] = 0x7C
+        tiles[o + 1] = FLAG_PAD
+    for dx in range(-3, 4):
+        o = _off(20 + dx, 23)
+        tiles[o] = 0x78
+        tiles[o + 1] = 0x01
+    wipe_lane(tiles, 15)
+    paint_land_value(tiles, 18, 8)
+    far_raw = i8(tiles[hoff + 15])
+    ok = far_raw == 12 and service_target_lv(12, 46) == 32
+    lines.append(
+        f"amenity row at d=3 ignored (floor 20+12): {'ok' if ok else 'FAIL'} "
+        f"raw={far_raw} target={service_target_lv(far_raw, 46)}"
+    )
+
     from app.messages import selftest as message_selftest
 
     lines.extend(message_selftest())

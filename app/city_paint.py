@@ -48,6 +48,13 @@ _HOUSE_LV: tuple[tuple[int, int], ...] = (
     (2, 1), (2, 1), (8, 2), (8, 2), (8, 2), (8, 2),
     (16, 2), (16, 2),
 )
+# EXE 0x9645d — id−0xA2. Size 1 / 2 / 3 (0x409e7 / 0x40a10).
+_WORSHIP_LV: tuple[tuple[int, int], ...] = (
+    (5, 2), (6, 2), (7, 3), (8, 3),
+    (6, 2), (7, 3), (8, 3), (9, 4),
+    (7, 3), (8, 3), (9, 4), (10, 4),
+)
+ID_WORSHIP_LO, ID_WORSHIP_HI = 0xA2, 0xAD
 
 ID_GARDEN_LO, ID_GARDEN_HI = 0x78, 0x7B
 ID_PLAZA_LO, ID_PLAZA_HI = 0x7C, 0x7E
@@ -1297,6 +1304,10 @@ def paint_land_value(tiles: bytearray, y0: int, n: int) -> int:
     falls through to ``0x40bcd`` and still applies plaza (LUT ``0x9658d``
     +4 r=1) or garden (``0x96595`` +2 r=2). Host used to keep those ids
     under ``flags&1``, so a real plaza never splashed.
+
+    Worship ``0xA2–0xAD`` (shrine / temple / basilica) uses LUT ``0x9645d``
+    from the origin only (``+5&0xF`` already skipped). Oracle is not a
+    building — Forum advisor only.
     """
     painted = 0
     for y in range(y0, min(MAP_H, y0 + n)):
@@ -1342,6 +1353,12 @@ def paint_land_value(tiles: bytearray, y0: int, n: int) -> int:
                     painted += 1
                 elif hid == ID_BARRACKS:
                     add_land_value(tiles, x, y, 3, 2, 3)
+                    painted += 1
+                elif ID_WORSHIP_LO <= hid <= ID_WORSHIP_HI:
+                    idx = hid - ID_WORSHIP_LO
+                    bonus, rad = _WORSHIP_LV[idx]
+                    size = 1 if idx < 4 else (2 if idx < 8 else 3)
+                    add_land_value(tiles, x, y, size, rad, bonus)
                     painted += 1
             elif flags & 0x18:
                 tiles[off + 15] = 0

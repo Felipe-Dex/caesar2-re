@@ -1435,8 +1435,12 @@ def is_plaza_id(tid: int) -> bool:
     return ID_PLAZA <= tid <= ID_PLAZA_STATUE
 
 
+def is_worship_id(tid: int) -> bool:
+    return ID_SHRINE <= tid <= 0xAD
+
+
 def is_lv_amenity_id(tid: int) -> bool:
-    return is_garden_id(tid) or is_plaza_id(tid)
+    return is_garden_id(tid) or is_plaza_id(tid) or is_worship_id(tid)
 
 
 def _refresh_plaza_garden_lv(city: CityMap, sim: SimState | None) -> None:
@@ -2604,7 +2608,7 @@ def try_place(
             dirty.extend(_retile_roads(city, _neighbor_ring(x, y)))
         if tool in _TALL_TOOLS:
             dirty = expand_iso_dirty(dirty, [(x, y)])
-        if tool in (TOOL_PLAZA, TOOL_GARDEN):
+        if tool in (TOOL_PLAZA, TOOL_GARDEN, TOOL_SHRINE, TOOL_TEMPLE, TOOL_BASILICA):
             _refresh_plaza_garden_lv(city, sim)
         return PlaceResult(
             True,
@@ -3164,7 +3168,7 @@ def try_place_span(
             dirty.extend(_retile_roads(city, ring))
         if tool in _TALL_TOOLS:
             dirty = expand_iso_dirty(dirty, list(preview.stamp))
-        if tool in (TOOL_PLAZA, TOOL_GARDEN):
+        if tool in (TOOL_PLAZA, TOOL_GARDEN, TOOL_SHRINE, TOOL_TEMPLE, TOOL_BASILICA):
             _refresh_plaza_garden_lv(city, sim)
         n = len(preview.stamp)
         paid = f"  -{preview.cost}" if preview.cost else ""
