@@ -424,6 +424,7 @@ def load_sim_from_sav(
         ind_tax_last=_chunk_i32(chunks, 35, 0),
         construct_last=_chunk_i32(chunks, 36, 0),
         operating_last=_chunk_i32(chunks, 37, 0),
+        construct_ytd=_chunk_i32(chunks, 155, 0),
         rating_empire=_chunk_i32(chunks, 286, 0),
         rating_peace=_chunk_i32(chunks, 287, 0),
         rating_prosperity=_chunk_i32(chunks, 288, 0),

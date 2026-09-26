@@ -2329,4 +2329,53 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  year wrap HISTORY {closed}")
     else:
         lines.append("ok    December wrap appends HISTORY rec")
+    from app.city_map import CityMap
+    from app.place import COST_ARENA, TOOL_ARENA, try_place
+
+    pin_city = CityMap()
+    pin_city.source = "treasurer-construct"
+    for dy in range(3):
+        for dx in range(3):
+            pin_city.tiles[pin_city.offset(40 + dx, 2 + dy)] = 0x14
+    pin_sim = SimState(city_only=1, treasury=800, tax_wealth=0, welfare=0, construct_ytd=0)
+    before = treasurer_estimate(pin_sim)
+    before_caps = treasurer_captions(pin_sim)
+    placed = try_place(pin_city, 40, 2, TOOL_ARENA, pin_sim)
+    after = treasurer_estimate(pin_sim)
+    after_caps = treasurer_captions(pin_sim)
+    if (
+        not placed.ok
+        or pin_sim.construct_ytd != COST_ARENA
+        or after.constructions != COST_ARENA
+        or after.surplus != before.surplus - COST_ARENA
+        or after_caps["estimate_rows"][2] != f"(-) {COST_ARENA} Dn   Constructions"
+        or before_caps["estimate_rows"][2] != "(-) 0 Dn   Constructions"
+    ):
+        lines.append(
+            f"FAIL  place 700 books constructions {placed.message} "
+            f"ytd={pin_sim.construct_ytd} {after} {after_caps.get('estimate_rows')}"
+        )
+    else:
+        lines.append("ok    Arena 700 → ESTIMATE Constructions / surplus −700")
+    wrap_ytd = SimState(
+        city_only=1,
+        year_raw=-299,
+        tax_ytd=0,
+        ind_tax_ytd=0,
+        construct_ytd=COST_ARENA,
+        operating_ytd=0,
+        history=bytearray(HIST_BYTES),
+    )
+    close_year_books(wrap_ytd)
+    if (
+        wrap_ytd.construct_last != COST_ARENA
+        or wrap_ytd.construct_ytd != 0
+        or wrap_ytd.surplus_last != -COST_ARENA
+    ):
+        lines.append(
+            f"FAIL  year books construct {wrap_ytd.construct_last} "
+            f"ytd={wrap_ytd.construct_ytd} surplus={wrap_ytd.surplus_last}"
+        )
+    else:
+        lines.append("ok    Dec wrap copies construct YTD → ACCOUNTS, zeros chunk 155")
     return lines

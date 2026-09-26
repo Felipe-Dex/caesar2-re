@@ -78,6 +78,7 @@ POP_CHUNK = 32
 GOODS_CHUNK = 339
 FACTORY_LABOR_CHUNK = 140
 PROVINCE_LINKS_CHUNK = 276
+CONSTRUCT_YTD_CHUNK = 155  # [0x102A2C] YTD constructions (0x30B2C / 0x2F3FB)
 
 # Named File→Save vs sav_year_end lastyear.sav (REVERSE.md / FELIPE vs LASTYEAR).
 _NAMED_FLAGS = (0, 4, 0, 0)
@@ -165,6 +166,7 @@ HOST_OWNED_CHUNKS: frozenset[int] = frozenset(
         36,
         37,
         46,
+        CONSTRUCT_YTD_CHUNK,
         LABOR_READY_CHUNK,
         WELFARE_CHUNK,
         LABOR_EST_CHUNK,
@@ -433,6 +435,7 @@ def owned_payloads(
         35: _i32(getattr(sim, "ind_tax_last", 0)),
         36: _i32(getattr(sim, "construct_last", 0)),
         37: _i32(getattr(sim, "operating_last", 0)),
+        CONSTRUCT_YTD_CHUNK: _i32(getattr(sim, "construct_ytd", 0)),
         46: _i32(getattr(sim, "rating_avg", 0)),
         LABOR_READY_CHUNK: _i32(getattr(sim, "plebs_ready", 0)),
         WELFARE_CHUNK: _i32(getattr(sim, "welfare", 0)),
@@ -589,6 +592,7 @@ def selftest() -> list[str]:
     fresh.sim.tax_rate = 7
     fresh.sim.industrial_tax = 4
     fresh.sim.treasury = 11900
+    fresh.sim.construct_ytd = 700
     fresh.sim.labor_assigned = [20, 13, 4, 4, 0, 0, 0]
     fresh.sim.welfare = 9
     if PLEBS_CHUNK_VA[LABOR_TABLE_CHUNK] != PLEBS_TABLE_VA:
@@ -672,6 +676,11 @@ def selftest() -> list[str]:
             )
         else:
             lines.append("ok    skill 16 / pid 223 / treasury 28")
+        ytd_raw = struct.unpack_from("<i", chunks[CONSTRUCT_YTD_CHUNK], 0)[0]
+        if sim.construct_ytd != 700 or ytd_raw != 700:
+            lines.append(f"FAIL  chunk 155 construct_ytd={sim.construct_ytd} raw={ytd_raw}")
+        else:
+            lines.append("ok    chunk 155 [0x102A2C] construct YTD 700")
         if city.tiles[off] != 0x82:
             lines.append("FAIL  tent origin not in reloaded map")
         owned_nonzero = 0

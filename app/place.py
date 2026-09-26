@@ -711,11 +711,15 @@ def _clear_bridge(city: CityMap, x: int, y: int) -> int:
 
 
 def _debit(sim: SimState | None, cost: int) -> str | None:
+    """Treasury −cost and YTD constructions +cost (EXE 0x30B2C / 0x2F3FB)."""
     if cost <= 0 or sim is None:
         return None
     if sim.treasury < cost:
         return f"tesouro {sim.treasury} < custo {cost}"
     sim.treasury -= cost
+    # 0x30B2C sub [0x102AAC]; 0x2F3FB add [0x102A2C], pending. Books only —
+    # WRAP does not debit construction again (0x56D39 ESTIMATE / 0x56C1C).
+    sim.construct_ytd = int(getattr(sim, "construct_ytd", 0)) + cost
     return None
 
 
@@ -5475,6 +5479,7 @@ def selftest() -> list[str]:
     city.tiles[city.offset(43, 2)] = ID_TENT
     city.tiles[city.offset(43, 2) + 1] = 0x01
     sim.treasury = 700
+    ytd0 = int(getattr(sim, "construct_ytd", 0))
     r = try_place(city, 40, 2, TOOL_ARENA, sim)
     arena4 = [city.tiles[city.offset(40 + dx, 2 + dy) + 4] for dy in range(3) for dx in range(3)]
     hut12 = city.tiles[city.offset(43, 2) + 12]
@@ -5486,17 +5491,19 @@ def selftest() -> list[str]:
         or arena4 != [0x2C, 0x2E, 0x31, 0x2D, 0x30, 0x33, 0x2F, 0x32, 0x34]
         or not (hut12 & 0x0C)
         or "Entertainment Level" not in qent
+        or sim.construct_ytd != ytd0 + COST_ARENA
     ):
         lines.append(
             f"FAIL  arena stamp {r.message} cost={r.cost} +4={arena4} "
-            f"+12={hut12:#x} query={qent}"
+            f"+12={hut12:#x} query={qent} ytd={sim.construct_ytd}"
         )
     else:
         lines.append("ok    Arena 0xE7 3x3 custo 700 +4 LUT 0x2C +12 bits 2-3")
     sim.treasury = 50
+    ytd1 = sim.construct_ytd
     r_broke = try_place(city, 50, 2, TOOL_ARENA, sim)
-    if r_broke.ok:
-        lines.append(f"FAIL  arena broke {r_broke.message}")
+    if r_broke.ok or sim.construct_ytd != ytd1:
+        lines.append(f"FAIL  arena broke {r_broke.message} ytd={sim.construct_ytd}")
     else:
         lines.append("ok    Arena recusa tesouro < 700")
 
