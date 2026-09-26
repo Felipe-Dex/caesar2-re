@@ -808,10 +808,13 @@ def _band20(phase: int, lo: int) -> tuple[int, int]:
     return start, 20
 
 
-# +3 bit7 + +16 countdown. Ignite 0x69A37 writes 10; overlay 0x3E8A2
-# paints +11 bits 4–5 (0x10/0x20/0x30). 445AF ignites when those bits
-# are 0x30. Collapse to host rubble 0x05 (Clear); leftover bit7 so
-# vigile state 9 can seek id<8 fires (4A716 / 4A57F).
+# +3 bit7 + +16 countdown. Ignite 0x69A37 writes 10. 41DD4 does not
+# start fires — only --+16 / 69334 spread / 691C4 collapse. Random
+# start is 44F87 (Fire rate [0x102738]) + 445AF lottery: prevention
+# [0x102730] = assigned×100/need (45200 / 28219); 100% or need 0 →
+# addend 0, target [0x10271c] stays 0xf423f. Overlay 0x3E8A2 paints
+# leftover +11 bits 4–5. Collapse to host rubble 0x05 (Clear);
+# leftover bit7 so vigile state 9 can seek id<8 fires (4A716 / 4A57F).
 ID_RUBBLE = 0x05
 DRAW_FIRE = 0x80
 FIRE_TIMER_IGNITE = 10
@@ -895,8 +898,9 @@ def debug_ignite_house(
 ) -> tuple[int, int, int]:
     """Disasters→Fire: 69A37 on a housing origin. Prefer no prefect.
 
-    Same paint as uncovered risk ignite (timer 10, +3 bit7). Skips an
-    already-burning leftover. Returns (x, y, n_tiles) or (-1, -1, 0).
+    Same 69A37 paint as a live fire (timer 10, +3 bit7). Ignores Fire
+    labour and prefect cover. Skips an already-burning leftover.
+    Returns (x, y, n_tiles) or (-1, -1, 0).
     """
     uncovered: list[tuple[int, int, int]] = []
     covered: list[tuple[int, int, int]] = []
@@ -937,8 +941,9 @@ def debug_infect_house(
 ) -> tuple[int, int, int]:
     """Disasters→Disease: +11 0x30 on a housing origin. No 69A37 fire.
 
-    0x448e2 / 0x44933: +11&0x30==0x30 latches [0x102900] then 58c87
-    EAX=0x51 [80] Disease!. CITYTOP[8] skull. Returns (x, y, 1) or (-1,-1,0).
+    Ignores hospital cover and baths. 0x448e2 / 0x44933: +11&0x30==0x30
+    latches [0x102900] then 58c87 EAX=0x51 [80] Disease!. CITYTOP[8]
+    skull. Returns (x, y, 1) or (-1,-1,0).
     """
     cells: list[tuple[int, int, int]] = []
     for y in range(MAP_H):
@@ -1024,25 +1029,6 @@ def fire_spread_housing(tiles: bytearray, x: int, y: int, facing: int) -> int:
     return tile_ignite_building(tiles, nx, ny)
 
 
-def _raise_fire_risk(tiles: bytearray, off: int) -> int:
-    """+11 bits 4–5: 0 → 0x10 → 0x20 → 0x30 (overlay 0x3E8A2)."""
-    bits = tiles[off + 11] & 0x30
-    if bits >= 0x30:
-        return 0x30
-    nxt = 0x10 if bits == 0 else 0x20 if bits == 0x10 else 0x30
-    tiles[off + 11] = (tiles[off + 11] & 0xCF) | nxt
-    return nxt
-
-
-def _lower_fire_risk(tiles: bytearray, off: int) -> int:
-    bits = tiles[off + 11] & 0x30
-    if bits == 0:
-        return 0
-    nxt = 0x20 if bits == 0x30 else 0x10 if bits == 0x20 else 0
-    tiles[off + 11] = (tiles[off + 11] & 0xCF) | nxt
-    return nxt
-
-
 def fire_tick_rows(
     tiles: bytearray,
     y0: int,
@@ -1051,7 +1037,11 @@ def fire_tick_rows(
 ) -> tuple[int, int, int]:
     """41DD4 fire slice. Rioter type-7 spawn is a sibling on this slot.
 
-    Returns (decremented, collapsed, ignited).
+    Does not climb +11 or 69A37 a cold house. EXE random start is
+    44F87 (Fire labour addend) + 445AF (10271c lottery / 691C4). At
+    assigned≥need the addend is 0. Disasters menu is the 69A37 cheat.
+
+    Returns (decremented, collapsed, ignited). ignited is 0 here.
     """
     if state is not None and y0 == 0:
         state.fire_ignited = 0
@@ -1065,58 +1055,27 @@ def fire_tick_rows(
             # villa stamp — not a 69A37 fire. Do not --+16 or spread.
             timer = tiles[off + 16]
             on_fire = bool(tiles[off + 3] & DRAW_FIRE) and timer != 0
-            if on_fire:
-                nxt = (timer - 1) & 0xFF
-                tiles[off + 16] = nxt
-                dec += 1
-                if tid < 8:
-                    if nxt == 0:
-                        tiles[off + 3] &= 0x7F
-                    else:
-                        # 69334 is one neighbor; host tries all four so a
-                        # road/reservoir facing cannot trap the blaze.
-                        for fac in (0, 2, 4, 6):
-                            fire_spread_housing(tiles, x, y, fac)
-                    continue
-                if ID_HOUSING_LO <= tid <= ID_HOUSING_HI:
-                    tiles[off + 11] &= 0xCF
-                    if nxt == 0:
-                        col += tile_collapse_rubble(tiles, x, y, leave_fire=True)
-                    elif nxt != 9:
-                        for fac in (0, 2, 4, 6):
-                            fire_spread_housing(tiles, x, y, fac)
+            if not on_fire:
                 continue
-            if not (ID_HOUSING_LO <= tid <= ID_HOUSING_HI):
+            nxt = (timer - 1) & 0xFF
+            tiles[off + 16] = nxt
+            dec += 1
+            if tid < 8:
+                if nxt == 0:
+                    tiles[off + 3] &= 0x7F
+                else:
+                    # 69334 is one neighbor; host tries all four so a
+                    # road/reservoir facing cannot trap the blaze.
+                    for fac in (0, 2, 4, 6):
+                        fire_spread_housing(tiles, x, y, fac)
                 continue
-            if tiles[off + 5] & 0xF:
-                continue
-            # Villa leftover 0x9E–0xA1 keeps +3 bit7 as a graphic, not fire.
-            if (
-                0x9E <= tid <= 0xA1
-                and (tiles[off + 3] & DRAW_FIRE)
-                and timer == 0
-            ):
-                continue
-            covered = bool(tiles[off + 10] & 0x30)
-            if covered:
-                _lower_fire_risk(tiles, off)
-                continue
-            # Overlay / illness leftover +11 0x30 is not a new raise.
-            # 69A37 only on this-tick 0x20 → 0x30 (EXE 693BB after climb).
-            prev = tiles[off + 11] & 0x30
-            if prev >= 0x30:
-                continue
-            risk = _raise_fire_risk(tiles, off)
-            if risk == 0x30 and (state is None or state.fire_ignited == 0):
-                n = tile_ignite_building(tiles, x, y)
-                ign += n
-                if (
-                    state is not None
-                    and n
-                    and (tiles[off + 3] & DRAW_FIRE)
-                    and tiles[off + 16] == FIRE_TIMER_IGNITE
-                ):
-                    state.fire_ignited = 1
+            if ID_HOUSING_LO <= tid <= ID_HOUSING_HI:
+                tiles[off + 11] &= 0xCF
+                if nxt == 0:
+                    col += tile_collapse_rubble(tiles, x, y, leave_fire=True)
+                elif nxt != 9:
+                    for fac in (0, 2, 4, 6):
+                        fire_spread_housing(tiles, x, y, fac)
     return dec, col, ign
 
 
@@ -2751,19 +2710,35 @@ def selftest() -> list[str]:
     hoff = _off(10, 10)
     tiles[hoff] = 0x82
     tiles[hoff + 1] = 0x01
-    st = SimState(phase=0x9E, year_raw=-300, month=0, city_only=1)
+    st = SimState(
+        phase=0x9E,
+        year_raw=-300,
+        month=0,
+        city_only=1,
+        labor_assigned=[20, 12, 4, 4, 0, 0, 0],
+        labor_need=[20, 12, 4, 4, 0, 0, 0],
+    )
     risks = []
     ignited = False
-    for step in range(4):
+    for _step in range(8):
         fire_tick_rows(tiles, 10, 1, st)
         risks.append(tiles[hoff + 11] & 0x30)
         if tiles[hoff + 3] & DRAW_FIRE:
             ignited = True
             break
-    ok = ignited and tiles[hoff + 16] == FIRE_TIMER_IGNITE
+    from app.forum import LABOR_FIRE, labor_percent
+
+    fire_pct = labor_percent(st.labor_assigned[LABOR_FIRE], st.labor_need[LABOR_FIRE])
+    ok = (
+        fire_pct == 100
+        and not ignited
+        and st.fire_ignited == 0
+        and all(r == 0 for r in risks)
+    )
     lines.append(
-        f"uncovered house ignites at +11 0x30: {'ok' if ok else 'FAIL'} "
-        f"risks={[hex(r) for r in risks]} +16={tiles[hoff + 16]}"
+        f"41DD4 no random ignite at 100% Fire labour: "
+        f"{'ok' if ok else 'FAIL'} "
+        f"pct={fire_pct} ign={int(ignited)} risks={[hex(r) for r in risks]}"
     )
 
     tiles = _blank_tiles()
@@ -2773,9 +2748,9 @@ def selftest() -> list[str]:
     tiles[hoff + 10] = 0x30
     tiles[hoff + 11] = 0x30
     fire_tick_rows(tiles, 10, 1)
-    ok = (tiles[hoff + 11] & 0x30) == 0x20 and not (tiles[hoff + 3] & DRAW_FIRE)
+    ok = (tiles[hoff + 11] & 0x30) == 0x30 and not (tiles[hoff + 3] & DRAW_FIRE)
     lines.append(
-        f"prefect +10 0x30 lowers fire risk: {'ok' if ok else 'FAIL'} "
+        f"41DD4 does not lower leftover +11 0x30: {'ok' if ok else 'FAIL'} "
         f"+11={tiles[hoff + 11] & 0x30:#x}"
     )
 
@@ -2831,22 +2806,17 @@ def selftest() -> list[str]:
     tiles[b] = 0x83
     tiles[b + 1] = 0x01
     st = SimState(phase=0x9E, year_raw=-300, month=0, city_only=1)
-    ignited = spread = collapsed = False
-    for _ in range(4):
-        fire_tick_rows(tiles, 10, 1, st)
-        if tiles[a + 3] & DRAW_FIRE and tiles[a + 16] == FIRE_TIMER_IGNITE:
-            ignited = True
-            break
-    if ignited:
-        tiles[a + 16] = 8
-        fire_tick_rows(tiles, 10, 1, st)
-        spread = bool(tiles[b + 3] & DRAW_FIRE) and tiles[b + 16] == FIRE_TIMER_IGNITE
-        tiles[a + 16] = 1
-        fire_tick_rows(tiles, 10, 1, st)
-        collapsed = tiles[a] == ID_RUBBLE and bool(tiles[a + 3] & DRAW_FIRE)
+    tile_ignite_building(tiles, 10, 10)
+    ignited = bool(tiles[a + 3] & DRAW_FIRE) and tiles[a + 16] == FIRE_TIMER_IGNITE
+    tiles[a + 16] = 8
+    fire_tick_rows(tiles, 10, 1, st)
+    spread = bool(tiles[b + 3] & DRAW_FIRE) and tiles[b + 16] == FIRE_TIMER_IGNITE
+    tiles[a + 16] = 1
+    fire_tick_rows(tiles, 10, 1, st)
+    collapsed = tiles[a] == ID_RUBBLE and bool(tiles[a + 3] & DRAW_FIRE)
     ok = ignited and spread and collapsed
     lines.append(
-        f"e2e risk-ignite-spread-collapse: {'ok' if ok else 'FAIL'} "
+        f"e2e 69A37-spread-collapse: {'ok' if ok else 'FAIL'} "
         f"ign={ignited} spread={spread} col={collapsed} id={tiles[a]:#x}"
     )
 
@@ -2907,6 +2877,44 @@ def selftest() -> list[str]:
     lines.append(
         f"Disasters Disease sets +11 0x30 not fire: {'ok' if ok else 'FAIL'} "
         f"xy=({dx},{dy}) +11={tiles[ioff + 11]:#x} ign={st.fire_ignited}"
+    )
+
+    tiles = _blank_tiles()
+    ioff = _off(12, 12)
+    tiles[ioff] = 0x82
+    tiles[ioff + 1] = 0x01
+    tiles[ioff + 13] = 0x08  # Near Baths
+    hop = _off(20, 20)
+    tiles[hop] = 0xFB
+    rim = _off(20, 19)
+    tiles[rim] = 0x52
+    tiles[rim + 1] = FLAG_PAD
+    tiles[rim + 10] = 0x0C
+    st = SimState(
+        phase=0x9E,
+        year_raw=-300,
+        month=0,
+        city_only=1,
+        population=50,
+    )
+    from app.city_paint import hospital_cover_percent
+
+    # pop<100 + one 0xFB origin → Query "Complete Hospital Cover" (45398).
+    hosp = hospital_cover_percent(tiles, population=50)
+    for _step in range(8):
+        fire_tick_rows(tiles, 12, 1, st)
+    sick = (tiles[ioff + 11] & 0x30) == 0x30
+    ok = (
+        hosp == 100
+        and not sick
+        and st.disease_infected == 0
+        and not (tiles[ioff + 3] & DRAW_FIRE)
+        and (tiles[ioff + 13] & 0x08)
+    )
+    lines.append(
+        f"41DD4 no disease at hospital/baths cover: {'ok' if ok else 'FAIL'} "
+        f"hosp={hosp} +11={tiles[ioff + 11] & 0x30:#x} "
+        f"sick={int(sick)} ign={st.fire_ignited}"
     )
 
     tiles = _blank_tiles()
