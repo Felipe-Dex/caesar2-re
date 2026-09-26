@@ -151,6 +151,7 @@ from app.place import (
     TOOL_CLEAR,
     TOOL_FOUNTAIN,
     TOOL_GARDEN,
+    TOOL_HOSPITAL,
     TOOL_PLAZA,
     TOOL_PREFECTURE,
     TOOL_QUERY,
@@ -341,10 +342,12 @@ def overlay_stamp_ghost(
     """One N×N stamp: translucent building sprites, or a single footprint bbox."""
     from app.city_map import (
         building_sprite_image,
+        hospital_diamond_aabb,
         iso_sprite_dest,
         iso_tile_size,
         tile_iso_xy,
     )
+    from app.image_override import hospital_has_override, hospital_iso_sprite
 
     overlay = Image.new("RGBA", view.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
@@ -354,7 +357,19 @@ def overlay_stamp_ghost(
     outline = (255, 255, 255, 200) if not preview.refuse else (255, 180, 160, 220)
     cells = [c for c in preview.cells if in_map(c[0], c[1])]
     painted = False
-    if sheets and cells:
+    if sheets and cells and preview.tool == TOOL_HOSPITAL and hospital_has_override(sheets):
+        ox = min(c[0] for c in preview.cells)
+        oy = min(c[1] for c in preview.cells)
+        ax, ay, aw, ah = hospital_diamond_aabb(ox, oy, zoom=zoom, facing=facing)
+        spr = hospital_iso_sprite(sheets, aw, ah)
+        if spr is not None:
+            ghost = _as_ghost(spr, refuse=bool(preview.refuse))
+            vx, vy = canvas_to_view(
+                ax, ay, cam_x, cam_y, canvas_w, canvas_h, screen_w=screen_w, screen_h=screen_h
+            )
+            overlay.paste(ghost, (vx, vy), ghost)
+            painted = True
+    if sheets and cells and not painted:
         ox = min(c[0] for c in preview.cells)
         oy = min(c[1] for c in preview.cells)
         th = iso_tile_size(zoom)[1]

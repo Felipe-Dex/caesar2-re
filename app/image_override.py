@@ -18,8 +18,9 @@ footprints are not stretched.
 * **Sidebar card** while the Hospital tool is selected (native 182×132,
   fitted into the 162 px INT_CITY strip). Never pasted onto the iso well
   — that left a painting stuck at ~ (292, 32).
-* **Iso 0xFB only:** stamp ``draw=0x08`` → ``BUILD1B[86–94]`` (tall
-  pieces 58×83…88). Barracks ``0xE4`` is ``HOUSES1[81–89]`` (``draw=0x00``).
+* **Iso 0xFB only:** one blit on the origin (``+5&0xF==0``), fitted to
+  the 3×3 iso diamond-union AABB (zoom 0 = 174×90). Skip leftover
+  ``BUILD1B[86–94]``. Barracks ``0xE4`` is ``HOUSES1[81–89]``.
   Do **not** write HOUSES1[86–89] — that is four barracks leftovers.
 
 Drop more files as ``images_new/{STEM}.png`` using the 8.3 stem
@@ -383,7 +384,7 @@ def attach_ahospit_source(
 ) -> list[str]:
     """Park the PNG on ``sheets['AHOSPIT']``. Do not mutate HOUSES1 / BUILD1B.
 
-    ``city_map._tile_frames`` fits it onto ``terrain_id == 0xFB`` only.
+    ``city_map`` blits it once per ``0xFB`` origin into the 3×3 AABB.
     """
     hit = resolve_image_png(game, "AHOSPIT", roots=roots)
     if hit is None:
@@ -407,12 +408,21 @@ def apply_ahospit_iso(
     return attach_ahospit_source(sheets, game, roots=roots)
 
 
+def hospital_has_override(
+    sheets: dict[str, list[Image.Image]] | None,
+) -> bool:
+    """True when AHOSPIT.png is parked on the city sheets."""
+    if not sheets:
+        return False
+    return bool(sheets.get(AHOSPIT_SHEET_KEY))
+
+
 def hospital_iso_sprite(
     sheets: dict[str, list[Image.Image]] | None,
     dest_w: int,
     dest_h: int,
 ) -> Image.Image | None:
-    """AHOSPIT.png fitted to one 0xFB piece dest, or None."""
+    """AHOSPIT.png fitted to dest (3×3 AABB or sidebar card), or None."""
     if not sheets:
         return None
     srcs = sheets.get(AHOSPIT_SHEET_KEY)
@@ -536,6 +546,40 @@ def selftest(game: Path | None = None) -> list[str]:
             lines.append("FAIL  HOUSES1[86] mutated (barracks leftover)")
         else:
             lines.append("ok    AHOSPIT attached for 0xFB; HOUSES1[86] untouched")
+        from app.city_map import (
+            CityMap,
+            hospital_diamond_aabb,
+            hospital_override_dest,
+            tile_iso_xy,
+        )
+
+        ax, ay, aw, ah = hospital_diamond_aabb(10, 10)
+        if (aw, ah) != (174, 90):
+            lines.append(f"FAIL  3x3 diamond AABB {aw}x{ah} want 174x90")
+        else:
+            lines.append("ok    dest rect = 3x3 iso diamond union (174x90 @ z0)")
+        pin_city = CityMap()
+        dests: list[tuple[int, int, int, int]] = []
+        for ox, oy in ((10, 10), (20, 14)):
+            for row in range(3):
+                for col in range(3):
+                    off = pin_city.offset(ox + col, oy + row)
+                    pin_city.tiles[off] = ID_HOSPITAL
+                    pin_city.tiles[off + 3] = HOSPITAL_DRAW
+                    pin_city.tiles[off + 4] = 0x56 + row * 3 + col
+                    pin_city.tiles[off + 5] = row * 3 + col
+                    t = pin_city.tile(ox + col, oy + row)
+                    sx, sy = tile_iso_xy(ox + col, oy + row)
+                    d = hospital_override_dest(
+                        t, sx, sy, ox + col, oy + row, sheets
+                    )
+                    if d is not None:
+                        dests.append(d)
+        unique = set(dests)
+        if len(dests) != 2 or len(unique) != 2:
+            lines.append(f"FAIL  hospital dests {len(dests)} unique={len(unique)} want 2")
+        else:
+            lines.append("ok    one blit per 0xFB origin (not 9)")
         card = still_card_size((182, 132))
         cx, cy = still_screen_xy(card, ox=0)
         if cx < SIDEBAR_X or cx + card[0] > SIDEBAR_X + SIDEBAR_W:
@@ -591,12 +635,12 @@ def selftest(game: Path | None = None) -> list[str]:
                 lines.append("FAIL  0xFB BUILD1B[86] blit missing")
             elif hosp.size != retail_h.size:
                 lines.append(f"FAIL  0xFB dest {hosp.size} vs BUILD1B[86] {retail_h.size}")
-            elif hosp.getpixel((29, hosp.size[1] // 2)) == retail_h.getpixel(
+            elif hosp.getpixel((29, hosp.size[1] // 2)) != retail_h.getpixel(
                 (29, retail_h.size[1] // 2)
             ):
-                lines.append("FAIL  0xFB blit still retail BUILD1B")
+                lines.append("FAIL  leftover BUILD1B[86] smashed (painter skips it)")
             else:
-                lines.append(f"ok    0xFB blit uses AHOSPIT dest {hosp.size}")
+                lines.append("ok    leftover BUILD1B[86] stays PL8 (one AABB blit)")
             barr = building_sprite_image(ID_BARRACKS, BARRACKS_DRAW, 0x51, sheets)
             if barr is None or barr.size != raw_h1[81].size:
                 lines.append(f"FAIL  0xE4 dest {None if barr is None else barr.size}")
