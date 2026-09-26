@@ -1297,22 +1297,30 @@ def compose_forum_native(state: ForumState, sim: SimState, *, eng=None) -> Image
     return _fit_forum_native(native, (*FORUM_LETTERBOX, 255)).convert("RGB")
 
 
-def letterbox_forum_fb(native: Image.Image, dest_w: int, dest_h: int) -> Image.Image:
-    """Integer nearest-neighbor scale of 640×480, centered in dest.
-
-    Shared by Oracle and Empire. Never ``resize((dest_w, dest_h))``.
-    """
+def scale_forum_fb(
+    native: Image.Image, dest_w: int, dest_h: int
+) -> tuple[Image.Image, int, int, int]:
+    """Integer-scale 640×480. Returns (fb, scale, ox, oy) — never dest-sized 16:9."""
     fb = native.convert("RGB")
     if fb.size != (FORUM_NATIVE_W, FORUM_NATIVE_H):
         fb = _fit_forum_native(fb, (*FORUM_LETTERBOX, 255)).convert("RGB")
-    w = max(1, int(dest_w))
-    h = max(1, int(dest_h))
-    scale, ox, oy = forum_layout(w, h)
+    scale, ox, oy = forum_layout(dest_w, dest_h)
     if scale > 1:
         fb = fb.resize(
             (FORUM_NATIVE_W * scale, FORUM_NATIVE_H * scale),
             Image.Resampling.NEAREST,
         )
+    return fb, scale, ox, oy
+
+
+def letterbox_forum_fb(native: Image.Image, dest_w: int, dest_h: int) -> Image.Image:
+    """Integer nearest-neighbor scale of 640×480, centered in dest.
+
+    Shared by Oracle and Empire. Never ``resize((dest_w, dest_h))``.
+    """
+    w = max(1, int(dest_w))
+    h = max(1, int(dest_h))
+    fb, _scale, ox, oy = scale_forum_fb(native, w, h)
     if fb.size == (w, h) and ox == 0 and oy == 0:
         return fb
     canvas = Image.new("RGB", (w, h), FORUM_LETTERBOX)
@@ -3437,6 +3445,11 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  compose_forum_native {forced.size}")
     else:
         lines.append("ok    compose_forum_native stays 640×480")
+    scaled_fb, s_fb, x_fb, y_fb = scale_forum_fb(forced, 1920, 1080)
+    if scaled_fb.size != (1280, 960) or (s_fb, x_fb, y_fb) != (2, 320, 60):
+        lines.append(f"FAIL  scale_forum_fb {scaled_fb.size} {s_fb, x_fb, y_fb}")
+    else:
+        lines.append("ok    scale_forum_fb stays 4:3 (not dest 16:9)")
     col_fat = Image.new("RGBA", (192, 337), (200, 160, 80, 255))
     locked = _lock_oracle_column(col_fat)
     if locked.size != (ORACLE_COL_W, ORACLE_COL_H):

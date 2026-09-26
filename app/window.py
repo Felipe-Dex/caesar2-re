@@ -41,8 +41,8 @@ from app.forum import (
     blit_pause_square,
     click_forum,
     compose_forum_native,
-    forum_layout,
     is_forum_building,
+    scale_forum_fb,
     open_forum,
     type_forum_key,
 )
@@ -889,9 +889,14 @@ def show(ctx: BootContext, *, game: Path) -> None:
     lb_s = host.create_rectangle(0, 0, 0, 0, fill=_lb_fill, outline="", tags="forum_lb")
     lb_w = host.create_rectangle(0, 0, 0, 0, fill=_lb_fill, outline="", tags="forum_lb")
     lb_e = host.create_rectangle(0, 0, 0, 0, fill=_lb_fill, outline="", tags="forum_lb")
+    # Oracle/Empire: Frame is the letterbox. Label is ONLY the 4:3 FB.
+    # Canvas create_image + pack(fill=BOTH) stretched PhotoImage to the HWND.
+    fb_cover = tk.Frame(root, bg=_lb_fill, highlightthickness=0, bd=0)
+    fb_shot = tk.Label(fb_cover, bd=0, highlightthickness=0, bg=_lb_fill)
     well_photo: ImageTk.PhotoImage | None = None
     ui_photo: ImageTk.PhotoImage | None = None
     front_photo: ImageTk.PhotoImage | None = None
+    fb_photo: ImageTk.PhotoImage | None = None
     win_w = SCREEN_W
     win_h = SCREEN_H
     _in_blit = False
@@ -1042,15 +1047,26 @@ def show(ctx: BootContext, *, game: Path) -> None:
         return (0, TOP_BAR_H, SIDEBAR_X + ox, win_h)
 
     def _forum_canvas_size() -> tuple[int, int]:
-        """Canvas client pixels — never the 640×480 requested size alone."""
+        """Widget client pixels — never the 640×480 requested canvas size alone."""
         try:
             host.update_idletasks()
         except tk.TclError:
             pass
-        return (
-            max(SCREEN_W, int(win_w), int(host.winfo_width() or 0)),
-            max(SCREEN_H, int(win_h), int(host.winfo_height() or 0)),
-        )
+        widths = [int(win_w), int(host.winfo_width() or 0), int(root.winfo_width() or 0)]
+        heights = [int(win_h), int(host.winfo_height() or 0)]
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            rect = wintypes.RECT()
+            for widget in (host, root):
+                hwnd = int(widget.winfo_id())
+                if ctypes.windll.user32.GetClientRect(hwnd, ctypes.byref(rect)):
+                    widths.append(int(rect.right - rect.left))
+                    heights.append(int(rect.bottom - rect.top))
+        except (AttributeError, OSError, ValueError, tk.TclError):
+            pass
+        return (max(SCREEN_W, max(widths)), max(SCREEN_H, max(heights)))
 
     def _forum_letterbox_mask(
         fw: int,
@@ -1073,6 +1089,33 @@ def show(ctx: BootContext, *, game: Path) -> None:
         host.coords(lb_w, 0, oy, ox, oy + bh)
         host.coords(lb_e, ox + bw, oy, fw, oy + bh)
         host.tag_raise("forum_lb")
+
+    def _hide_forum_fb() -> None:
+        nonlocal fb_photo
+        fb_cover.place_forget()
+        fb_shot.place_forget()
+        fb_shot.configure(image="")
+        fb_photo = None
+
+    def _show_forum_fb(native: Image.Image) -> tuple[int, int]:
+        """Same Oracle/Empire display: 4:3 Label, Frame bars. No image expand."""
+        nonlocal fb_photo, ui_photo
+        fw, fh = _forum_canvas_size()
+        shown, _scale, ox, oy = scale_forum_fb(native, fw, fh)
+        fb_photo = ImageTk.PhotoImage(shown.convert("RGB"), master=fb_shot)
+        fb_shot.configure(image=fb_photo)
+        fb_cover.place(x=0, y=0, relwidth=1, relheight=1)
+        # Intrinsic PhotoImage size only — never relwidth/relheight/width/height.
+        fb_shot.place(x=ox, y=oy)
+        host.itemconfig(ui_item, image="")
+        ui_photo = None
+        host.coords(ui_item, 0, 0)
+        _forum_letterbox_mask(fw, fh, 0, 0, fw, fh, show=False)
+        try:
+            fb_cover.lift()
+        except tk.TclError:
+            pass
+        return fw, fh
 
     def _set_layer(item: int, img: Image.Image | None, which: str) -> None:
         nonlocal well_photo, ui_photo, front_photo
@@ -1101,6 +1144,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
         if extra is not None:
             last_extra = extra
         if forum_state is None or forum_state.kind not in (KIND_ORACLE, KIND_EMPIRE):
+            _hide_forum_fb()
             host.coords(ui_item, 0, 0)
             _forum_letterbox_mask(win_w, win_h, 0, 0, win_w, win_h, show=False)
         ox = chrome_ox(win_w)
@@ -1117,37 +1161,19 @@ def show(ctx: BootContext, *, game: Path) -> None:
             shown = f"{prev.message}  tesouro {ctx.sim.treasury}"
             extra_alert = False
         if forum_state is not None:
-            # Same dest for Oracle and Empire. Do not use the 640×480
-            # requested canvas size — that early-returned a raw 4:3
-            # PhotoImage and the packed 16:9 HWND showed fat RAT_FRON.
             fw, fh = _forum_canvas_size()
             if forum_state.kind in (KIND_ORACLE, KIND_EMPIRE):
+                # One display path: Frame letterbox + 4:3 Label.
+                # Canvas PhotoImage was StretchBlt'd to the packed 16:9 HWND.
                 last_extra = None
                 native = compose_forum_native(forum_state, ctx.sim, eng=ctx.eng)
-                scale, ox, oy = forum_layout(fw, fh)
-                if scale > 1:
-                    shown_fb = native.resize(
-                        (FORUM_NATIVE_W * scale, FORUM_NATIVE_H * scale),
-                        Image.Resampling.NEAREST,
-                    )
-                else:
-                    shown_fb = native
                 if menu_report is not None:
-                    frame = blit_forum((fw, fh), forum_state, ctx.sim, eng=ctx.eng)
-                    frame = blit_menu_report(frame, menu_report)
-                    _set_layer(well_item, None, "well")
-                    _set_layer(front_item, None, "front")
-                    _set_layer(ui_item, frame.convert("RGB"), "ui")
-                    host.coords(ui_item, 0, 0)
-                    _forum_letterbox_mask(fw, fh, ox, oy, shown_fb.width, shown_fb.height, show=True)
-                else:
-                    _set_layer(well_item, None, "well")
-                    _set_layer(front_item, None, "front")
-                    _set_layer(ui_item, shown_fb.convert("RGB"), "ui")
-                    host.coords(ui_item, ox, oy)
-                    _forum_letterbox_mask(
-                        fw, fh, ox, oy, shown_fb.width, shown_fb.height, show=True
-                    )
+                    native = blit_menu_report(native, menu_report)
+                    if native.size != (FORUM_NATIVE_W, FORUM_NATIVE_H):
+                        native = scale_forum_fb(native, FORUM_NATIVE_W, FORUM_NATIVE_H)[0]
+                _set_layer(well_item, None, "well")
+                _set_layer(front_item, None, "front")
+                _show_forum_fb(native)
             else:
                 frame = blit_forum((fw, fh), forum_state, ctx.sim, eng=ctx.eng)
                 frame = compose_city_hud(
@@ -3652,6 +3678,13 @@ def show(ctx: BootContext, *, game: Path) -> None:
         win_w, win_h = nw, nh
         blit(last_extra)
 
+    def _fb_to_host(event: tk.Event, handler) -> None:  # type: ignore[type-arg]
+        """Label clicks are local; add place() origin so hits stay in 640×480."""
+        if event.widget is fb_shot:
+            event.x += int(fb_shot.winfo_x())
+            event.y += int(fb_shot.winfo_y())
+        handler(event)
+
     root.bind("<Key>", on_key)
     root.bind("<Configure>", on_resize)
     host.bind("<Configure>", on_resize)
@@ -3662,6 +3695,10 @@ def show(ctx: BootContext, *, game: Path) -> None:
     host.bind("<MouseWheel>", on_wheel)
     host.bind("<Button-4>", on_wheel)
     host.bind("<Button-5>", on_wheel)
+    fb_cover.bind("<Button-1>", lambda e: _fb_to_host(e, on_press))
+    fb_cover.bind("<Button-3>", lambda e: _fb_to_host(e, on_right))
+    fb_shot.bind("<Button-1>", lambda e: _fb_to_host(e, on_press))
+    fb_shot.bind("<Button-3>", lambda e: _fb_to_host(e, on_right))
     def on_close() -> None:
         _stop_advisor_video()
         _stop_intro()
