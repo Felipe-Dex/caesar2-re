@@ -1,0 +1,192 @@
+﻿image C:\Users\Felip\caesar2-re\ghidra_work\c2_x.bin  len=1086048
+GhidraMCP 127.0.0.1:8080 was down; Capstone on mapped c2_x.
+
+Query strings: 0x64337 samples tiles into [0x117a**],
+0x63845 picks C2.ENG [60] skips, 0x62a59 evolve, then 0x26f16 blit.
+No dialog chrome before those fills.
+
+==== 64337 tile -> 0x117a scratch 0x64337..0x64437 ====
+  00064337  bb30000000               mov      ebx, 0x30
+  0006433c  89ca                     mov      edx, ecx
+  0006433e  89f8                     mov      eax, edi
+  00064340  e823990000               call     0x6dc68
+  00064345  a2727a1100               mov      byte ptr [0x117a72], al
+  0006434a  0fbe05687a1100           movsx    eax, byte ptr [0x117a68]
+  00064351  83f810                   cmp      eax, 0x10
+  00064354  0f9dc0                   setge    al
+  00064357  a2657a1100               mov      byte ptr [0x117a65], al
+  0006435c  803d727a110000           cmp      byte ptr [0x117a72], 0
+  00064363  740a                     je       0x6436f
+  00064365  88c6                     mov      dh, al
+  00064367  fec6                     inc      dh
+  00064369  8835657a1100             mov      byte ptr [0x117a65], dh
+  0006436f  31c9                     xor      ecx, ecx
+  00064371  8a4c240c                 mov      cl, byte ptr [esp + 0xc]
+  00064375  bfbc2f0e00               mov      edi, 0xe2fbc
+  0006437a  01f7                     add      edi, esi
+  0006437c  bb03000000               mov      ebx, 3
+  00064381  89ca                     mov      edx, ecx
+  00064383  89f8                     mov      eax, edi
+  00064385  e856990000               call     0x6dce0
+  0006438a  a27e7a1100               mov      byte ptr [0x117a7e], al
+  0006438f  bb0c000000               mov      ebx, 0xc
+  00064394  89ca                     mov      edx, ecx
+  00064396  89f8                     mov      eax, edi
+  00064398  e843990000               call     0x6dce0
+  0006439d  a27c7a1100               mov      byte ptr [0x117a7c], al
+  000643a2  25ff000000               and      eax, 0xff
+  000643a7  c1f802                   sar      eax, 2
+  000643aa  a27c7a1100               mov      byte ptr [0x117a7c], al
+  000643af  bb30000000               mov      ebx, 0x30
+  000643b4  89ca                     mov      edx, ecx
+  000643b6  89f8                     mov      eax, edi
+  000643b8  e823990000               call     0x6dce0
+  000643bd  a27d7a1100               mov      byte ptr [0x117a7d], al
+  000643c2  25ff000000               and      eax, 0xff
+  000643c7  c1f804                   sar      eax, 4
+  000643ca  a27d7a1100               mov      byte ptr [0x117a7d], al
+  000643cf  a07e7a1100               mov      al, byte ptr [0x117a7e]
+  ...
+
+==== 63845 scratch -> [60] skip 0x63845..0x638c5 ====
+  00063845  53                       push     ebx
+  00063846  51                       push     ecx
+  00063847  52                       push     edx
+  00063848  56                       push     esi
+  00063849  57                       push     edi
+  0006384a  55                       push     ebp
+  0006384b  83ec04                   sub      esp, 4
+  0006384e  31ff                     xor      edi, edi
+  00063850  bd10000000               mov      ebp, 0x10
+  00063855  85ff                     test     edi, edi
+  00063857  752a                     jne      0x63883
+  00063859  803d797a110000           cmp      byte ptr [0x117a79], 0
+  00063860  7407                     je       0x63869
+  00063862  be02000000               mov      esi, 2
+  00063867  eb1a                     jmp      0x63883
+  00063869  803d7a7a110000           cmp      byte ptr [0x117a7a], 0
+  00063870  7407                     je       0x63879
+  00063872  be03000000               mov      esi, 3
+  00063877  eb0a                     jmp      0x63883
+  00063879  be04000000               mov      esi, 4
+  0006387e  bd0b000000               mov      ebp, 0xb
+  00063883  83ff01                   cmp      edi, 1
+  00063886  751a                     jne      0x638a2
+  00063888  803d827a110000           cmp      byte ptr [0x117a82], 0
+  0006388f  7407                     je       0x63898
+  00063891  be05000000               mov      esi, 5
+  00063896  eb0a                     jmp      0x638a2
+  00063898  be06000000               mov      esi, 6
+  ...
+
+==== 62a59 evolve [60]+60..87 0x62a59..0x62ab9 ====
+  00062a59  53                       push     ebx
+  00062a5a  51                       push     ecx
+  00062a5b  52                       push     edx
+  00062a5c  56                       push     esi
+  00062a5d  57                       push     edi
+  00062a5e  55                       push     ebp
+  00062a5f  31d2                     xor      edx, edx
+  00062a61  8a15787a1100             mov      dl, byte ptr [0x117a78]
+  00062a67  0fbe345531610900         movsx    esi, byte ptr [edx*2 + 0x96131]
+  00062a6f  0fbe0c5532610900         movsx    ecx, byte ptr [edx*2 + 0x96132]
+  00062a77  0fbe156c7a1100           movsx    edx, byte ptr [0x117a6c]
+  00062a7e  39ca                     cmp      edx, ecx
+  00062a80  7e0a                     jle      0x62a8c
+  00062a82  ba57000000               mov      edx, 0x57
+  00062a87  e92e040000               jmp      0x62eba
+  00062a8c  803d797a110000           cmp      byte ptr [0x117a79], 0
+  00062a93  751c                     jne      0x62ab1
+  00062a95  803d7a7a110000           cmp      byte ptr [0x117a7a], 0
+  00062a9c  7513                     jne      0x62ab1
+  00062a9e  83fa02                   cmp      edx, 2
+  00062aa1  0f8566030000             jne      0x62e0d
+  00062aa7  ba3d000000               mov      edx, 0x3d
+  00062aac  e909040000               jmp      0x62eba
+  00062ab1  803d827a110000           cmp      byte ptr [0x117a82], 0
+  ...
+
+==== callers 0x64337 (fill before draw) ====
+
+==== callers 0x63845 ====
+
+==== call 63845 @0x6262e 0x62616..0x62646 ====
+  00062616  3d8d7a1100               cmp      eax, 0x117a8d
+  0006261b  00752a                   add      byte ptr [ebp + 0x2a], dh
+  0006261e  e83b000000               call     0x6265e
+  00062623  8b3d80241000             mov      edi, dword ptr [0x102480]
+  00062629  83ff02                   cmp      edi, 2
+  0006262c  7507                     jne      0x62635
+  0006262e  e812120000               call     0x63845
+  00062633  eb18                     jmp      0x6264d
+  00062635  83ff01                   cmp      edi, 1
+  00062638  7507                     jne      0x62641
+  0006263a  e8650c0000               call     0x632a4
+  0006263f  eb0c                     jmp      0x6264d
+  ...
+
+==== 0x26f16 in 0x62700..0x63000 (draw after fill) ====
+
+==== 26f16 @0x62715 0x62705..0x62725 ====
+  00062705  0a00                     or       al, byte ptr [eax]
+  00062707  89f9                     mov      ecx, edi
+  00062709  bb98000000               mov      ebx, 0x98
+  0006270e  89f2                     mov      edx, esi
+  00062710  b83c000000               mov      eax, 0x3c
+  00062715  e8fc47fcff               call     0x26f16
+  0006271a  0fbf0475b9460900         movsx    eax, word ptr [esi*2 + 0x946b9]
+
+==== 26f16 @0x62748 0x62738..0x62758 ====
+  00062738  0a00                     or       al, byte ptr [eax]
+  0006273a  89f9                     mov      ecx, edi
+  0006273c  bb98000000               mov      ebx, 0x98
+  00062741  31d2                     xor      edx, edx
+  00062743  b83d000000               mov      eax, 0x3d
+  00062748  e8c947fcff               call     0x26f16
+  0006274d  e9dbc8ffff               jmp      0x5f02d
+  00062752  31d2                     xor      edx, edx
+
+==== 26f16 @0x62772 0x62762..0x62782 ====
+  00062762  f9                       stc      
+  00062763  bb98000000               mov      ebx, 0x98
+  00062768  ba01000000               mov      edx, 1
+  0006276d  b83d000000               mov      eax, 0x3d
+  00062772  e89f47fcff               call     0x26f16
+  00062777  6a10                     push     0x10
+  00062779  682c6a0a00               push     0xa6a2c
+  0006277e  57                       push     edi
+
+==== 26f16 @0x62a4f 0x62a3f..0x62a5f ====
+  00062a3f  47                       inc      edi
+  00062a40  0c00                     or       al, 0
+  00062a42  83c338                   add      ebx, 0x38
+  00062a45  ba5b000000               mov      edx, 0x5b
+  00062a4a  b83d000000               mov      eax, 0x3d
+  00062a4f  e8c244fcff               call     0x26f16
+  00062a54  5e                       pop      esi
+  00062a55  5a                       pop      edx
+  00062a56  59                       pop      ecx
+  00062a57  5b                       pop      ebx
+  ...
+
+==== 26f16 @0x62f1e 0x62f0e..0x62f2e ====
+  00062f0e  00bb48000000             add      byte ptr [ebx + 0x48], bh
+  00062f14  ba56000000               mov      edx, 0x56
+  00062f19  b83d000000               mov      eax, 0x3d
+  00062f1e  e8f33ffcff               call     0x26f16
+  00062f23  e904c1ffff               jmp      0x5f02c
+  00062f28  53                       push     ebx
+  00062f29  51                       push     ecx
+  00062f2a  52                       push     edx
+  00062f2b  56                       push     esi
+  00062f2c  6a10                     push     0x10
+  ...
+
+==== 26f16 @0x62f54 0x62f44..0x62f64 ====
+  00062f44  8a156b7a1100             mov      dl, byte ptr [0x117a6b]
+  00062f4a  bb38000000               mov      ebx, 0x38
+  00062f4f  b83f000000               mov      eax, 0x3f
+  00062f54  e8bd3ffcff               call     0x26f16
+  00062f59  31c0                     xor      eax, eax
+  00062f5b  a06b7a1100               mov      al, byte ptr [0x117a6b]
+  00062f60  83f807                   cmp      eax, 7

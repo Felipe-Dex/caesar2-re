@@ -44,6 +44,11 @@ from app.city_paint import (
     hospital_cover_percent,
     library_cover_percent,
     paint_land_value,
+    paint_plus12_amenities,
+    paint_plus13_buildings,
+    paint_plus13_water,
+    paint_plus14_security,
+    refresh_land_value,
     security_enclosure_mask,
     security_overlay_index,
     security_score,
@@ -986,6 +991,53 @@ def building_name(tid: int, eng=None) -> str:
     return f"Building {tid:#04x}"
 
 
+# After city_sim_phase returns, [0x1026A8] is the *next* slot. 0x51 wiped
+# +13; 0x52 wiped +15. Query 0x64337 / 0x63845 / 0x62a59 fill [0x117a**]
+# then CALL 0x26f16 — they never blit [60]+0/+4 from a half-wiped map.
+QUERY_LANE_REBUILD_LO = 0x52
+QUERY_LANE_REBUILD_HI = 0x8D
+
+
+def query_display_city(city: CityMap, sim=None) -> CityMap:
+    """Copy + finish splash/LV when Query opens during 0x51–0x8D rebuild.
+
+    Live tiles stay mid-wipe so the month can keep painting bands. EXE
+    0x63845 reads 0x117a79… after 0x64337 already sampled the tile.
+    """
+    phase = int(getattr(sim, "phase", 0) or 0) if sim is not None else 0
+    if sim is None or not (QUERY_LANE_REBUILD_LO <= phase <= QUERY_LANE_REBUILD_HI):
+        return city
+    snap = CityMap()
+    snap.tiles = bytearray(city.tiles)
+    snap.source = "query-snap"
+    _rebuild_query_lanes(snap.tiles, phase, sim)
+    return snap
+
+
+def _query_water_staffed(sim) -> bool:
+    from app.forum import labor_shutoff
+
+    return "water" not in labor_shutoff(sim)
+
+
+def _rebuild_query_lanes(tiles: bytearray, phase: int, sim) -> None:
+    """Replay wiped 0x51–0x8D painters on a copy. Do not refresh labor need."""
+    pop = int(getattr(sim, "population", 0) or 0)
+    adj = int(getattr(sim, "land_value_adj", 0) or 0)
+    if phase <= 0x75:
+        wipe_lane(tiles, 13)
+        paint_plus13_buildings(tiles, 0, MAP_H)
+        paint_plus12_amenities(tiles, 0, MAP_H)
+        paint_plus13_water(
+            tiles, 0, MAP_H, water_staffed=_query_water_staffed(sim)
+        )
+    if 0x54 <= phase <= 0x65:
+        wipe_lane(tiles, 14)
+        paint_plus14_security(tiles, 0, MAP_H)
+    if 0x53 <= phase <= QUERY_LANE_REBUILD_HI:
+        refresh_land_value(tiles, population=pop, land_adj=adj)
+
+
 @dataclass(frozen=True)
 class PlaceInfo:
     x: int
@@ -996,8 +1048,9 @@ class PlaceInfo:
     lines: tuple[str, ...]
 
 
-def query_place(city: CityMap, x: int, y: int, eng=None) -> PlaceInfo:
+def query_place(city: CityMap, x: int, y: int, eng=None, sim=None) -> PlaceInfo:
     """Full structure box: C2.ENG [60] + tile bytes (not walker quotes)."""
+    city = query_display_city(city, sim)
     t = city.tile(x, y)
     tid = t.terrain_id
     name = building_name(tid, eng)
@@ -1009,7 +1062,18 @@ def query_place(city: CityMap, x: int, y: int, eng=None) -> PlaceInfo:
         name,
         f"tile ({x},{y})  id {tid:#04x}  +1 {t.flags:#04x}",
     ]
+    splash = t.desirability
+    amenity12 = t.unknown12
+    ent_size = 1
+    ox, oy = x, y
     land = i8(t.industry)
+    if t.is_housing:
+        ox, oy, ent_size = _housing_query_origin(t, x, y)
+        splash = _block_or13(city, ox, oy, ent_size)
+        amenity12 = entertainment_level_block(city.tiles, ox, oy, ent_size)
+        land = i8(city.tile(ox, oy).industry)
+    else:
+        amenity12 = entertainment_level(amenity12)
     if land:
         lines.append(f"{_eng_skip(eng, 60, 1, 'Land Value is')} {land}")
     else:
@@ -1024,16 +1088,6 @@ def query_place(city: CityMap, x: int, y: int, eng=None) -> PlaceInfo:
         ill = t.housing_grade & 0x30
         if ill:
             lines.append(f"illness +11&0x30={ill:#x}")
-    splash = t.desirability
-    amenity12 = t.unknown12
-    ent_size = 1
-    ox, oy = x, y
-    if t.is_housing:
-        ox, oy, ent_size = _housing_query_origin(t, x, y)
-        splash = _block_or13(city, ox, oy, ent_size)
-        amenity12 = entertainment_level_block(city.tiles, ox, oy, ent_size)
-    else:
-        amenity12 = entertainment_level(amenity12)
     lines.append(query_water_line(splash, eng))
     if tid == 0xBE or (0xCB <= tid <= 0xD6):
         charge = t.coverage & 3
@@ -2450,6 +2504,64 @@ def selftest() -> list[str]:
         lines.append("FAIL  stall skip rhetor")
     else:
         lines.append("ok    0x62a59 education stalls → [60]+72 / +75")
+    from app.city_sim import SimState as _QSim
+
+    mid = CityMap()
+    ro = mid.offset(10, 10)
+    mid.tiles[ro] = 0xBE
+    mid.tiles[ro + 10] = 3
+    fo = mid.offset(12, 10)
+    mid.tiles[fo] = 0xDD
+    mid.tiles[fo + 5] = 0
+    ho = mid.offset(13, 10)
+    mid.tiles[ho] = 0x86
+    mid.tiles[ho + 1] = 0x01
+    paint_plus13_buildings(mid.tiles, 0, MAP_H)
+    paint_plus13_water(mid.tiles, 0, MAP_H)
+    refresh_land_value(mid.tiles, population=50)
+    ready_q = " ".join(query_place(mid, 13, 10).lines)
+    if "NO Water Supply" in ready_q or "NO Land Value" in ready_q:
+        lines.append(f"FAIL  query ready watered house {ready_q}")
+    else:
+        lines.append("ok    Query watered house has water and land value")
+    wipe_lane(mid.tiles, 13)
+    wipe_lane(mid.tiles, 15)
+    raw_wipe = " ".join(query_place(mid, 13, 10).lines)
+    if "NO Water Supply" not in raw_wipe or "NO Land Value" not in raw_wipe:
+        lines.append(f"FAIL  query wipe without phase {raw_wipe}")
+    else:
+        lines.append("ok    Query on wiped lanes without sim is the raw zeros")
+    snap_q = query_place(
+        mid, 13, 10, sim=_QSim(phase=0x53, population=50, city_only=1)
+    )
+    snap_join = " ".join(snap_q.lines)
+    if "NO Water Supply" in snap_join:
+        lines.append(f"FAIL  query mid-rebuild water {snap_q.lines}")
+    elif "NO Land Value" in snap_join:
+        lines.append(f"FAIL  query mid-rebuild land {snap_q.lines}")
+    elif "Water Supply" not in snap_join:
+        lines.append(f"FAIL  query mid-rebuild missing water {snap_q.lines}")
+    else:
+        lines.append("ok    Query mid-wipe 0x52–0x8D snapshot restores water/LV")
+    if mid.tiles[ho + 13] or mid.tiles[ho + 15]:
+        lines.append("FAIL  query snapshot mutated live +13/+15")
+    else:
+        lines.append("ok    Query snapshot does not write live lanes")
+    dry = CityMap()
+    doff = dry.offset(4, 4)
+    dry.tiles[doff] = 0x82
+    dry.tiles[doff + 1] = 0x01
+    wipe_lane(dry.tiles, 13)
+    wipe_lane(dry.tiles, 15)
+    dry_q = " ".join(
+        query_place(
+            dry, 4, 4, sim=_QSim(phase=0x53, population=50, city_only=1)
+        ).lines
+    )
+    if "NO Water Supply" not in dry_q:
+        lines.append(f"FAIL  query dry house invented water {dry_q}")
+    else:
+        lines.append("ok    Query mid-wipe dry house stays NO Water Supply")
     if overlay_name(2) != "Water" or overlay_name(10) != "Cancel":
         lines.append("FAIL  names")
     else:

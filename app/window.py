@@ -2919,7 +2919,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
             _sfx("click")
             blit(f"Query {place_dlg.name}  tesouro {ctx.sim.treasury}")
             return
-        place_dlg = query_place(ctx.city, x, y, ctx.eng)
+        place_dlg = query_place(ctx.city, x, y, ctx.eng, ctx.sim)
         _sfx("click")
         blit(f"Query {place_dlg.name}  tesouro {ctx.sim.treasury}")
 
