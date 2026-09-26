@@ -39,6 +39,7 @@ import struct
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from statistics import median
 
 from PIL import Image, ImageChops, ImageDraw
 
@@ -87,13 +88,19 @@ ID_RESERVOIR = 0xBE
 ID_TOWER = 0xBF
 # Lone 0xBF: BUILD1B 0x18–0x1B all bake a wall-cap. Host composite (not a LUT id).
 VAR_TOWER_ALONE = 0x80
-# Aqueduct-through-wall. EXE +4=3/7 are unused wall end-caps (BUILD1B
-# [3]/[7]) — a punched gap in the walkway. Iso remaps to the matching
-# wall straight so crenellation stays continuous. Tile +4 stays 3/7.
+# Aqueduct-through-wall. EXE +3=0x08 +4=3/7 (BUILD1B end-caps) punches a
+# hole. Host blits the wall straight (4/0) then the CITYFIXT arcade
+# (0xD0 +4=0x76 EW / 0xCF +4=0x79 NS, plus charge) so the pipe sits on
+# the walkway. Tile +4 stays 3/7; charge must not bump it.
 ID_AQUEDUCT_WALL_EW = 0xBC
 ID_AQUEDUCT_WALL_NS = 0xBD
 VAR_WALL_STRAIGHT_NS = 0x00
 VAR_WALL_STRAIGHT_EW = 0x04
+# Dry CITYFIXT +4 for the same-axis aqueduct (0xD0 EW / 0xCF NS).
+_AQ_WALL_PIPE_DRY = {
+    ID_AQUEDUCT_WALL_EW: 0x76,
+    ID_AQUEDUCT_WALL_NS: 0x79,
+}
 ID_AQUEDUCT_STUB = 0xCB
 ID_AQUEDUCT_LO = 0xCB
 ID_AQUEDUCT_HI = 0xD6
@@ -1318,6 +1325,8 @@ _WATER_B_OVER_R = 20
 _WATER_B_OVER_G = 8
 _water_anim_cache: dict[int, tuple[Image.Image, ...]] = {}
 _tower_alone_cache: dict[int, Image.Image] = {}
+_aq_wall_cache: dict[tuple[int, int, int, int, int], Image.Image] = {}
+_aq_arcade_cache: dict[int, Image.Image] = {}
 
 
 def _is_water_rgba(px: tuple[int, ...]) -> bool:
@@ -1391,6 +1400,70 @@ def _tower_standalone_sprite(frames: Sequence[Image.Image] | None) -> Image.Imag
                 continue
             dest[x, y] = max(opa, key=lambda c: c[0] + c[1] + c[2])
     _tower_alone_cache[key] = out
+    return out
+
+
+def _aqueduct_arcade_overlay(src: Image.Image) -> Image.Image:
+    """Keep the raised arcade; drop the CITYFIXT diamond floor.
+
+    Aqueduct frames are type-1 diamonds with an opaque stone floor.
+    Pasting that floor on a wall hides the walkway (the punched gap).
+    Arcade luma sits above the floor median; channel blue stays.
+    """
+    key = id(src)
+    hit = _aq_arcade_cache.get(key)
+    if hit is not None:
+        return hit
+    im = src.convert("RGBA")
+    pix = list(im.getdata())
+    lumas = [p[0] + p[1] + p[2] for p in pix if p[3] > 20]
+    if not lumas:
+        _aq_arcade_cache[key] = im
+        return im
+    cut = median(lumas) + 40
+    out_px: list[tuple[int, int, int, int]] = []
+    for p in pix:
+        if p[3] < 20:
+            out_px.append((0, 0, 0, 0))
+            continue
+        if p[0] + p[1] + p[2] >= cut or _is_water_rgba(p):
+            out_px.append(p)
+        else:
+            out_px.append((0, 0, 0, 0))
+    out = Image.new("RGBA", im.size)
+    out.putdata(out_px)
+    _aq_arcade_cache[key] = out
+    return out
+
+
+def _aqueduct_wall_sprite(
+    wall_frames: Sequence[Image.Image] | None,
+    wall_idx: int,
+    cityfixt: Sequence[Image.Image] | None,
+    aq_idx: int,
+    *,
+    water_src: Image.Image | None = None,
+) -> Image.Image | None:
+    """Wall straight + same-axis aqueduct arcade (pipe over the walkway)."""
+    if wall_frames is None or not (0 <= wall_idx < len(wall_frames)):
+        return None
+    src = water_src
+    if src is None:
+        if cityfixt is None or not (0 <= aq_idx < len(cityfixt)):
+            return None
+        src = cityfixt[aq_idx]
+    cache_key = (id(wall_frames), wall_idx, id(src), aq_idx, src.size[0])
+    hit = _aq_wall_cache.get(cache_key)
+    if hit is not None:
+        return hit
+    wall = wall_frames[wall_idx].convert("RGBA")
+    arcade = _aqueduct_arcade_overlay(src)
+    w = max(wall.width, arcade.width)
+    h = max(wall.height, arcade.height)
+    out = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    out.paste(wall, (0, h - wall.height), wall)
+    out.paste(arcade, (0, h - arcade.height), arcade)
+    _aq_wall_cache[cache_key] = out
     return out
 
 
@@ -1537,12 +1610,31 @@ def _tile_frames(
         alone = _tower_standalone_sprite(frames)
         if alone is not None:
             return (alone,), 0
-    # 0xBC/0xBD store EXE +4=3/7 (end-caps). Blit wall straights 4/0.
-    if name == PL8_BUILD1B:
-        if tile.terrain_id == ID_AQUEDUCT_WALL_EW:
-            idx = VAR_WALL_STRAIGHT_EW
-        elif tile.terrain_id == ID_AQUEDUCT_WALL_NS:
-            idx = VAR_WALL_STRAIGHT_NS
+    # 0xBC/0xBD store EXE +4=3/7 (end-caps). Wall straight + CITYFIXT arcade.
+    if name == PL8_BUILD1B and tile.terrain_id in (
+        ID_AQUEDUCT_WALL_EW,
+        ID_AQUEDUCT_WALL_NS,
+    ):
+        wall_idx = (
+            VAR_WALL_STRAIGHT_EW
+            if tile.terrain_id == ID_AQUEDUCT_WALL_EW
+            else VAR_WALL_STRAIGHT_NS
+        )
+        dry = _AQ_WALL_PIPE_DRY[tile.terrain_id]
+        charge = tile.coverage & 3
+        var = dry + charge if dry + charge < len(_LUT_CITYFIXT_BLD) else dry
+        aq_idx = _LUT_CITYFIXT_BLD[var] + CITYFIXT_TERRAIN_BIAS
+        aq_src = None
+        if cityfixt is not None and 0 <= aq_idx < len(cityfixt) and charge:
+            aq_src = _water_interior_frames(cityfixt[aq_idx])[
+                int(water_frame) % WATER_FRAMES
+            ]
+        combo = _aqueduct_wall_sprite(
+            frames, wall_idx, cityfixt, aq_idx, water_src=aq_src
+        )
+        if combo is not None:
+            return (combo,), 0
+        idx = wall_idx
     if (
         frames is not None
         and idx is not None
@@ -3376,9 +3468,52 @@ def selftest() -> list[str]:
         Tile.unpack(bytes(raw_combo)), 0, None, {PL8_BUILD1B: dummy_b1b}
     )
     if idx_bc != VAR_WALL_STRAIGHT_EW or idx_bd != VAR_WALL_STRAIGHT_NS:
-        lines.append(f"FAIL  0xBC/0xBD blit {idx_bc}/{idx_bd} (want 4/0)")
+        lines.append(f"FAIL  0xBC/0xBD blit {idx_bc}/{idx_bd} (want 4/0 fallback)")
     else:
-        lines.append("ok    0xBC/0xBD blit remaps +4 3/7 -> wall straight 4/0")
+        lines.append("ok    0xBC/0xBD without CITYFIXT falls back to wall 4/0")
+    try:
+        from app.assets import load_pl8_frames
+        from app.config import resolve_game_dir
+
+        game, _how = resolve_game_dir()
+        if game is not None:
+            real_b1b, _p = load_pl8_frames(game, "BUILD1B.PL8")
+            real_fixt, _p = load_pl8_frames(game, "CITYFIXT.PL8")
+            raw_combo[0] = ID_AQUEDUCT_WALL_EW
+            raw_combo[4] = 3
+            raw_combo[10] = 3
+            combo_fr, combo_idx = _tile_frames(
+                Tile.unpack(bytes(raw_combo)),
+                0,
+                real_fixt,
+                {PL8_BUILD1B: real_b1b},
+            )
+            wall_only = real_b1b[VAR_WALL_STRAIGHT_EW].convert("RGBA")
+            spr = combo_fr[combo_idx].convert("RGBA") if combo_fr else None
+            bright = 0
+            if spr is not None:
+                bright = sum(
+                    1
+                    for p in spr.getdata()
+                    if p[3] > 20 and p[0] + p[1] + p[2] >= 500
+                )
+            wall_bright = sum(
+                1
+                for p in wall_only.getdata()
+                if p[3] > 20 and p[0] + p[1] + p[2] >= 500
+            )
+            if spr is None or bright <= wall_bright:
+                lines.append(
+                    f"FAIL  0xBC composite no pipe overlay bright={bright} wall={wall_bright}"
+                )
+            else:
+                lines.append(
+                    f"ok    0xBC composite wall+arcade (bright {bright} > wall {wall_bright})"
+                )
+        else:
+            lines.append("ok    0xBC composite skipped (no game dir)")
+    except Exception as exc:
+        lines.append(f"ok    0xBC composite skipped ({type(exc).__name__}: {exc})")
     if iso_sprite_dest(10, 40, 51, 30) != (10, 19):
         lines.append(f"FAIL  tall blit origin {iso_sprite_dest(10, 40, 51, 30)}")
     elif iso_sprite_dest(10, 40, 30, 30) != (10, 40):

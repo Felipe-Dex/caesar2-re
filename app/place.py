@@ -88,7 +88,8 @@ aqueduct (``0x67201`` ``0xCF``/``0xD0``) morph to ``0xBC`` (EW wall)
 / ``0xBD`` (NS wall): ``+1=0x42``, ``+3=0x08``, ``+4=3``/``7``.
 Order does not matter. Charge still walks ``+1&0xC0``. The combo
 keeps wall bit ``0x02`` so Security flood (``+1&0x1E``) cannot walk
-through. Iso remaps ``+4`` 3/7 (end-caps) to wall straights 0/4.
+through. Iso blits wall straights 0/4 plus the CITYFIXT arcade
+(``0x76``/``0x79``) so the pipe sits on the walkway.
 
 Not the full EXE stamp. Tent 6 is observed (sav_c), not C2MODEL. City
 road / aqueduct / Palatine have no pinned city-cost slot — do not invent;
@@ -1446,7 +1447,8 @@ def is_lv_amenity_id(tid: int) -> bool:
 def _refresh_plaza_garden_lv(city: CityMap, sim: SimState | None) -> None:
     """Recompute +15 so Query sees plaza/garden splash without waiting a month."""
     pop = getattr(sim, "population", 0) if sim is not None else 0
-    refresh_land_value(city.tiles, population=pop)
+    adj = getattr(sim, "land_value_adj", 0) if sim is not None else 0
+    refresh_land_value(city.tiles, population=pop, land_adj=adj)
 
 
 def is_wall_run_id(tid: int) -> bool:
