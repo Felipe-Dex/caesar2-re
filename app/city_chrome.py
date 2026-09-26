@@ -72,6 +72,10 @@ _VIEW_SPRITE_ACTIONS: dict[int, str] = {
 # Dest EBX=0x1C4 ECX=0x1A. Faster ([0xC45A0]>=2) skips the view_frame blit;
 # city enter always draws it. Host always blits.
 NORTH_ARROW_XY = (0x1C4, 0x1A)
+# FUN_00061A67: "Cost: " at EBX=0x1EA ECX=0x10C, then 0x26f95 + " Dn".
+COST_HUD_X = 0x1EA
+COST_HUD_Y = 0x10C
+COST_HUD_FILL = (255, 228, 160, 255)
 # Minimap N-up: FUN_0003ed7c tail. EDX=4, dest ([0x102B5C]+2, [0x102B60]+2).
 # Boot writes B5C=0x1E0 B60=0x30 (0x10715).
 MINIMAP_NORTH_XY = (0x1E0 + 2, 0x30 + 2)
@@ -272,6 +276,31 @@ class CityChrome:
             out, self.misc_frames, MINIMAP_NORTH_SPRITE, MINIMAP_NORTH_XY, ox
         )
         return out.convert(frame.mode) if frame.mode != "RGBA" else out
+
+
+def blit_tool_cost(
+    frame: Image.Image, text: str, *, ox: int = 0
+) -> Image.Image:
+    """Sidebar ``Cost: N Dn`` at EXE 0x61B89 / 0x61B84. Empty text is a no-op."""
+    if not text:
+        return frame
+    keep = frame.mode
+    out = frame.convert("RGBA")
+    draw = ImageDraw.Draw(out)
+    font = ImageFont.load_default()
+    x = COST_HUD_X + int(ox)
+    y = COST_HUD_Y
+    if hasattr(font, "getbbox"):
+        box = font.getbbox(text)
+        tw, th = box[2] - box[0], box[3] - box[1]
+    else:
+        tw, th = draw.textlength(text, font=font), 12
+    # 0x1166c clears (0x1E8, 0x10B) before the string.
+    draw.rectangle((x - 2, y - 1, x + tw + 4, y + th + 2), fill=(0, 0, 0, 180))
+    draw.text((x, y), text, fill=COST_HUD_FILL, font=font)
+    if keep == "RGBA":
+        return out
+    return out.convert(keep)
 
 
 def chrome_ox(win_w: int) -> int:
@@ -508,6 +537,15 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  chrome blit size {painted.size}")
     else:
         lines.append("ok    chrome blit keeps 640×480 with facing")
+    costed = blit_tool_cost(frame, "Cost: 700 Dn")
+    crop = costed.crop(
+        (COST_HUD_X, COST_HUD_Y, COST_HUD_X + 80, COST_HUD_Y + 14)
+    )
+    rmax = crop.getextrema()[0][1]
+    if costed.size != (SCREEN_W, SCREEN_H) or rmax < 200:
+        lines.append(f"FAIL  Cost HUD rmax={rmax}")
+    else:
+        lines.append("ok    Cost: 700 Dn at sidebar 490,268")
     try:
         from app.config import resolve_game_dir
 

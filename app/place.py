@@ -2047,6 +2047,37 @@ def _civic_unit_cost(tool: str) -> int:
     return 0
 
 
+# FUN_00061A67: C2.ENG [51]+0 then 0x26f95 + suffix at 0x90d4b.
+COST_HUD_ENG_SLOT = 51
+COST_HUD_SUFFIX = " Dn"
+
+
+def tool_unit_cost(tool: str | None) -> int:
+    """Per-stamp debit. Same integers 0x30B2C subtracts / 0x61A67 paints.
+
+    Table is EXE ``0x9674B`` (C2MODEL ``[96:124]``) plus observed Tent 6
+    and Reservoir 51. Road / aqueduct / Palatine stay 0 — no pinned city slot.
+    """
+    if not tool or tool in (TOOL_CLEAR, TOOL_QUERY, TOOL_ROAD, TOOL_AQUEDUCT):
+        return 0
+    if tool == TOOL_TENT:
+        return COST_TENT
+    return _civic_unit_cost(tool)
+
+
+def cost_hud_text(amount: int, eng=None) -> str:
+    """``Cost: 700 Dn`` — sidebar caption when a construction tool is live."""
+    n = int(amount)
+    if n <= 0:
+        return ""
+    prefix = "Cost: "
+    if eng is not None:
+        got = eng.skip(COST_HUD_ENG_SLOT, 0)
+        if got:
+            prefix = got
+    return f"{prefix}{n}{COST_HUD_SUFFIX}"
+
+
 def _civic_already_id(tool: str) -> int:
     spec = _STAMPS.get(tool)
     if spec is not None:
@@ -5851,6 +5882,21 @@ def selftest() -> list[str]:
         lines.append("FAIL  map compose _fit do canvas iso (zoom-pop)")
     else:
         lines.append("ok    map compose não thumbnail o iso (sem zoom-pop)")
+
+    if (
+        tool_unit_cost(TOOL_ARENA) != COST_ARENA
+        or tool_unit_cost(TOOL_HOSPITAL) != COST_HOSPITAL
+        or tool_unit_cost(TOOL_TENT) != COST_TENT
+        or tool_unit_cost(TOOL_ROAD) != 0
+        or cost_hud_text(COST_ARENA) != "Cost: 700 Dn"
+        or cost_hud_text(0) != ""
+    ):
+        lines.append(
+            f"FAIL  cost HUD {tool_unit_cost(TOOL_ARENA)} "
+            f"{cost_hud_text(COST_ARENA)!r}"
+        )
+    else:
+        lines.append("ok    Cost: 700 Dn from EXE 0x9674B / 0x61A67")
 
     from app.palette import selftest as palette_selftest
 

@@ -27,6 +27,7 @@ from app.city_chrome import (
     SIDEBAR_W,
     SIDEBAR_X,
     TOP_BAR_H,
+    blit_tool_cost,
     chrome_ox,
     speed_action,
 )
@@ -173,12 +174,14 @@ from app.place import (
     DragPreview,
     aqueduct_preview_cells,
     canvas_to_view,
+    cost_hud_text,
     garden_preview_cells,
     wall_preview_cells,
     in_map,
     preview_span,
     screen_to_tile,
     stamp_ghost_pieces,
+    tool_unit_cost,
     try_place,
     try_place_span,
     view_to_canvas,
@@ -548,6 +551,13 @@ def _eng_skip(eng, slot: int, n: int, fallback: str) -> str:
         if got:
             return got
     return fallback
+
+
+def _tool_cost_line(tool: str | None, eng, preview: DragPreview | None = None) -> str:
+    """FUN_00061A67: pending total [0x102438], else unit [0x102434]."""
+    if preview is not None and preview.cost > 0:
+        return cost_hud_text(preview.cost, eng)
+    return cost_hud_text(tool_unit_cost(tool), eng)
 
 
 def _hud_font() -> ImageFont.ImageFont:
@@ -1158,7 +1168,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
             extra_alert = True
         prev = current_preview()
         if prev is not None:
-            shown = f"{prev.message}  tesouro {ctx.sim.treasury}"
+            shown = _tool_cost_line(tool, ctx.eng, prev) or prev.message
             extra_alert = False
         if forum_state is not None:
             fw, fh = _forum_canvas_size()
@@ -1289,6 +1299,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
             ox,
             overlay_id,
             tool,
+            _tool_cost_line(tool, ctx.eng, prev),
             speed_action(ctx.sim),
             ctx.sim.date_label,
             int(ctx.sim.treasury),
@@ -1306,6 +1317,9 @@ def show(ctx: BootContext, *, game: Path) -> None:
                 speed=speed_action(ctx.sim),
                 ox=ox,
                 facing=map_facing,
+            )
+            frame = blit_tool_cost(
+                frame, _tool_cost_line(tool, ctx.eng, prev), ox=ox
             )
             vp = (cam_x, cam_y, zoom, ww, wh, win_w, win_h)
             if overlay_has_legend(overlay_id):
@@ -1432,12 +1446,16 @@ def show(ctx: BootContext, *, game: Path) -> None:
             how = f"scale zoom {zoom}"
         names = "+".join(sheets) if sheets else "cached"
         tw, th = city_map.iso_tile_size(zoom)
-        return (
+        line = (
             f"mapa {ctx.city.source}  zoom={zoom} ({tw}x{th} {how})  "
             f"pan={cam_x},{cam_y}  walkers={n_walkers}  "
             f"{overlay_name(overlay_id, ctx.eng)}  "
             f"água {water_frame}/{WATER_FRAMES} {WATER_FRAME_MS}ms  ({names})"
         )
+        cost = _tool_cost_line(tool, ctx.eng)
+        if cost:
+            return f"{cost}  {line}"
+        return line
 
     def _ltlmen(at_zoom: int):
         from app.walkers import load_ltlmen_frames
@@ -3115,7 +3133,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
             tool = picked.tool
             _close_query()
         _sfx("click")
-        blit(f"{picked.message}  tesouro {ctx.sim.treasury}")
+        blit(picked.message)
 
     def pick_overlay(idx: int) -> None:
         nonlocal overlay_id, overlay_flyout, tool, place_dlg
@@ -3392,10 +3410,8 @@ def show(ctx: BootContext, *, game: Path) -> None:
                 band_cur = hit
                 pending_click = None
                 prev = current_preview()
-                extra = (
-                    f"{prev.message}  tesouro {ctx.sim.treasury}"
-                    if prev is not None
-                    else None
+                extra = _tool_cost_line(tool, ctx.eng, prev) or (
+                    prev.message if prev is not None else None
                 )
                 blit(extra)
             return
@@ -3423,10 +3439,8 @@ def show(ctx: BootContext, *, game: Path) -> None:
             if hit is not None:
                 band_cur = hit
             prev = current_preview()
-            extra = (
-                f"{prev.message}  tesouro {ctx.sim.treasury}"
-                if prev is not None
-                else None
+            extra = _tool_cost_line(tool, ctx.eng, prev) or (
+                prev.message if prev is not None else None
             )
             blit(extra)
             return
@@ -3548,7 +3562,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
             if picked.tool is not None:
                 tool = picked.tool
             _sfx("click")
-            blit(f"{picked.message}  tesouro {ctx.sim.treasury}")
+            blit(picked.message)
             return
         hit = chrome.hit_test(event.x, event.y, ox=ox)
         if hit is not None:
