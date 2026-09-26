@@ -53,9 +53,11 @@ tower ``0x04`` (Gate ``0x24`` counts; river ``0x10`` does not). Pieces
 ends; isolated → ``0xC8``. ``+4`` from ``0x94CEB[id*4]`` (``0x00``/``0x04``
 straights, ``0x08``–``0x0B`` corners, ``0x01``/``0x02``/``0x05``/``0x06``
 ends). T/cross are not in the 14-row table — keep the through axis
-(``0xC1`` if N+S else ``0xC2``). BUILD1B LUT columns already swap NS↔EW
-on odd facing — do not also remap ids in ``orient_terrain_id``. Gate
-``+4`` LUT ``0x94D17`` (NS ``0x92`` / EW ``0x93``).
+(``0xC1`` if N+S else ``0xC2``). BUILD1B LUT columns are zoom remaps
+(identity on wall ``+4`` 0–11) — they do **not** swap NS↔EW on facing.
+Paint remaps wall/aqueduct ``+0``/``+4`` in ``iso_paint_tile`` by walking
+the same NESW mask as roads (does not write the map). Gate ``+4`` LUT
+``0x94D17`` (NS ``0x92`` / EW ``0x93``) walks with the wall.
 Does **not** write road ``0x52–0x5C`` and must **not** run road retile —
 that was turning neighbour grass+``FLAG_PAD`` into a fake road. River
 refused except the documented road→bridge case. Drag-rect for 1×1 civics
@@ -1504,6 +1506,99 @@ _GATE_FROM_MASK: dict[int, int] = {
     0x5: 0x92,
     0xA: 0x93,
 }
+
+
+# Paint-only inverse of the 14-row LUTs. Isolated 0xC8/0xCB share a
+# sprite with the N/S cap; store the cap mask so a NS run's ends still
+# rematerialize after a 90° view rotate.
+_WALL_CANON_MASK: dict[int, int] = {
+    ID_WALL_NS: 0x05,
+    ID_WALL_EW: 0x0A,
+    ID_WALL_NE: 0x03,
+    ID_WALL_SE: 0x06,
+    ID_WALL_SW: 0x0C,
+    ID_WALL_NW: 0x09,
+    ID_WALL_END_S: 0x04,
+    ID_WALL_END_N: 0x01,
+    ID_WALL_END_E: 0x02,
+    ID_WALL_END_W: 0x08,
+}
+_AQ_CANON_MASK: dict[int, int] = {
+    0xCB: 0x04,
+    0xCC: 0x01,
+    0xCD: 0x02,
+    0xCE: 0x08,
+    0xCF: 0x05,
+    0xD0: 0x0A,
+    0xD1: 0x03,
+    0xD2: 0x06,
+    0xD3: 0x0C,
+    0xD4: 0x09,
+}
+_GATE_CANON_MASK: dict[int, int] = {
+    0x8E: 0x01,
+    0x8F: 0x02,
+    0x90: 0x04,
+    0x91: 0x08,
+    0x92: 0x05,
+    0x93: 0x0A,
+}
+
+
+def rotate_nesw_mask(mask: int, facing: int) -> int:
+    """N=1 E=2 S=4 W=8. One facing step is 90° CW — same as roads."""
+    rot = mask & 0x0F
+    for _ in range(int(facing) & 3):
+        rot = ((rot << 1) | (rot >> 3)) & 0x0F
+    return rot
+
+
+def _remap_aqueduct_variant(old_tid: int, variant: int, new_tid: int) -> int:
+    """Keep the charge bump on +4 (dry + 1/2). Combo 0xBC/0xBD is not here."""
+    old_dry = _AQUEDUCT_DRY.get(old_tid, variant)
+    new_dry = _AQUEDUCT_DRY.get(new_tid, variant)
+    return (new_dry + ((variant - old_dry) & 0xFF)) & 0xFF
+
+
+def orient_autotile_art(tid: int, variant: int, facing: int) -> tuple[int, int]:
+    """Paint-only +0/+4 so wall / aqueduct / gate follow the view.
+
+    Does not write the map. Charge (+10), Security (+1 0x02), and Gate
+    id 0xC0 stay on the world tile. 0xD5/0xD6 (T/cross and over-road)
+    keep that family — they must not collapse to 0xCF/0xD0.
+    """
+    f = int(facing) & 3
+    if f == 0:
+        return tid, variant
+    if tid in (ID_AQUEDUCT_WALL_EW, ID_AQUEDUCT_WALL_NS):
+        if f & 1:
+            if tid == ID_AQUEDUCT_WALL_NS:
+                return ID_AQUEDUCT_WALL_EW, VAR_AQUEDUCT_WALL_EW
+            return ID_AQUEDUCT_WALL_NS, VAR_AQUEDUCT_WALL_NS
+        return tid, variant
+    if tid == ID_GATE:
+        mask = _GATE_CANON_MASK.get(variant)
+        if mask is None:
+            return tid, variant
+        return tid, gate_variant_for(rotate_nesw_mask(mask, f))
+    if ID_WALL_LO <= tid <= ID_WALL_HI:
+        mask = _WALL_CANON_MASK.get(tid)
+        if mask is None:
+            return tid, variant
+        new_id = wall_id_for(rotate_nesw_mask(mask, f))
+        return new_id, wall_variant_for(new_id)
+    if tid in (ID_AQUEDUCT_ROAD_NS, ID_AQUEDUCT_ROAD_EW):
+        if f & 1:
+            new_id = ID_AQUEDUCT_ROAD_EW if tid == ID_AQUEDUCT_ROAD_NS else ID_AQUEDUCT_ROAD_NS
+            return new_id, _remap_aqueduct_variant(tid, variant, new_id)
+        return tid, variant
+    if ID_AQUEDUCT_LO <= tid <= ID_AQUEDUCT_HI:
+        mask = _AQ_CANON_MASK.get(tid)
+        if mask is None:
+            return tid, variant
+        new_id = aqueduct_id_for(rotate_nesw_mask(mask, f))
+        return new_id, _remap_aqueduct_variant(tid, variant, new_id)
+    return tid, variant
 
 
 def wall_id_for(mask: int) -> int:
@@ -4982,6 +5077,110 @@ def selftest() -> list[str]:
         lines.append("FAIL  wall LUT 0x94BAF / +4 0x94CEB")
     else:
         lines.append("ok    Wall LUT 0x94BAF (cap/NS/EW/canto) +4 0x94CEB")
+
+    # Compass rotate is paint-only: NESW mask walk. World bytes stay.
+    if (
+        orient_autotile_art(ID_WALL_NS, 0x00, 1) != (ID_WALL_EW, 0x04)
+        or orient_autotile_art(ID_WALL_EW, 0x04, 1) != (ID_WALL_NS, 0x00)
+        or orient_autotile_art(ID_WALL_NS, 0x00, 2) != (ID_WALL_NS, 0x00)
+        or orient_autotile_art(ID_WALL_END_S, 0x01, 1) != (ID_WALL_END_W, 0x06)
+        or orient_autotile_art(0xCF, 0x79, 1) != (0xD0, 0x76)
+        or orient_autotile_art(0xCF, 0x7B, 1) != (0xD0, 0x78)
+        or orient_autotile_art(0xD5, 0x73, 1) != (0xD6, 0x70)
+        or orient_autotile_art(ID_AQUEDUCT_WALL_NS, 7, 1)
+        != (ID_AQUEDUCT_WALL_EW, 3)
+        or orient_autotile_art(ID_GATE, 0x92, 1) != (ID_GATE, 0x93)
+        or orient_autotile_art(ID_GATE, 0x93, 2) != (ID_GATE, 0x93)
+    ):
+        lines.append("FAIL  orient_autotile_art wall/aq/gate mask walk")
+    else:
+        lines.append("ok    orient_autotile_art NS/EW + charge + Gate + 0xBC/0xBD")
+
+    from app.city_map import iso_paint_tile
+
+    _grass_block(70, 10, 1, 5)
+    sim.treasury = 200
+    r_ns = try_place_span(city, 70, 10, 70, 14, TOOL_WALL, sim)
+    world_mid = city.tiles[city.offset(70, 12)]
+    world_n = city.tiles[city.offset(70, 10)]
+    world_s = city.tiles[city.offset(70, 14)]
+    world_flags = city.tiles[city.offset(70, 12) + 1]
+    p0 = iso_paint_tile(city, 70, 12, 0)
+    p1 = iso_paint_tile(city, 70, 12, 1)
+    p2 = iso_paint_tile(city, 70, 12, 2)
+    p3 = iso_paint_tile(city, 70, 12, 3)
+    n1 = iso_paint_tile(city, 70, 10, 1)
+    s1 = iso_paint_tile(city, 70, 14, 1)
+    if (
+        not r_ns.ok
+        or world_mid != ID_WALL_NS
+        or world_n != ID_WALL_END_S
+        or world_s != ID_WALL_END_N
+        or p0.terrain_id != ID_WALL_NS
+        or p1.terrain_id != ID_WALL_EW
+        or p1.variant != 0x04
+        or p2.terrain_id != ID_WALL_NS
+        or p3.terrain_id != ID_WALL_EW
+        or n1.terrain_id != ID_WALL_END_W
+        or s1.terrain_id != ID_WALL_END_E
+        or city.tiles[city.offset(70, 12)] != ID_WALL_NS
+        or city.tiles[city.offset(70, 12) + 1] != world_flags
+    ):
+        lines.append(
+            f"FAIL  wall rotate paint {r_ns.message} world={world_mid:#x} "
+            f"p1={p1.terrain_id:#x}+4={p1.variant:#x} "
+            f"ends={n1.terrain_id:#x}/{s1.terrain_id:#x}"
+        )
+    else:
+        lines.append("ok    NS wall run stay connected at facing 1/2/3 (paint)")
+
+    _grass_block(72, 10, 1, 6)
+    city.tiles[city.offset(72, 10)] = ID_RESERVOIR
+    city.tiles[city.offset(72, 10) + 1] = FLAG_RESERVOIR
+    city.tiles[city.offset(72, 10) + 10] = 3
+    r_aq = try_place_span(city, 72, 11, 72, 15, TOOL_AQUEDUCT, None)
+    aq_ids = [city.tiles[city.offset(72, y)] for y in range(11, 16)]
+    aq_mid = city.tile(72, 13)
+    aq1 = iso_paint_tile(city, 72, 13, 1)
+    aq2 = iso_paint_tile(city, 72, 13, 2)
+    aq3 = iso_paint_tile(city, 72, 13, 3)
+    aq_n1 = iso_paint_tile(city, 72, 11, 1)
+    aq_s1 = iso_paint_tile(city, 72, 15, 1)
+    charged = bool(aq_mid.coverage & 3)
+    if (
+        not r_aq.ok
+        or aq_ids[2] != 0xCF
+        or aq1.terrain_id != 0xD0
+        or aq2.terrain_id != 0xCF
+        or aq3.terrain_id != 0xD0
+        or aq_n1.terrain_id not in (0xCD, 0xCE, 0xD0)
+        or aq_s1.terrain_id not in (0xCD, 0xCE, 0xD0)
+        or city.tiles[city.offset(72, 13)] != 0xCF
+        or (aq_mid.coverage & 3) != (city.tile(72, 13).coverage & 3)
+        or (charged and aq1.variant == 0x79)
+    ):
+        lines.append(
+            f"FAIL  aq rotate paint {r_aq.message} ids={ [hex(i) for i in aq_ids] } "
+            f"p1={aq1.terrain_id:#x}+4={aq1.variant:#x} "
+            f"ends={aq_n1.terrain_id:#x}/{aq_s1.terrain_id:#x}"
+        )
+    else:
+        lines.append("ok    NS aqueduct run stay connected at facing 1/2/3 (paint)")
+
+    combo = iso_paint_tile(city, 25, 29, 1)
+    combo0 = city.tile(25, 29)
+    if (
+        combo0.terrain_id != ID_AQUEDUCT_WALL_NS
+        or combo.terrain_id != ID_AQUEDUCT_WALL_EW
+        or combo.variant != VAR_AQUEDUCT_WALL_EW
+        or combo0.flags != (FLAG_PIPE | FLAG_WALL)
+    ):
+        lines.append(
+            f"FAIL  0xBD rotate paint {combo.terrain_id:#x}+4={combo.variant} "
+            f"world={combo0.terrain_id:#x}+1={combo0.flags:#x}"
+        )
+    else:
+        lines.append("ok    0xBD->0xBC paint on odd facing; +1=0x42 stays")
 
     _grass_block(20, 20, 3, 3)
     sim.treasury = 200

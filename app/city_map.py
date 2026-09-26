@@ -427,26 +427,23 @@ _ROAD_FROM_MASK: tuple[int, ...] = (
     0x52, 0x52, 0x53, 0x54, 0x52, 0x52, 0x55, 0x58,
     0x53, 0x57, 0x53, 0x5B, 0x56, 0x5A, 0x59, 0x5C,
 )
-_AQUEDUCT_AXIS: dict[int, int] = {0xD0: 0xD1, 0xD1: 0xD0, 0xD5: 0xD6, 0xD6: 0xD5}
-
-
 def orient_terrain_id(tid: int, facing: int) -> int:
-    """Paint-only +0 remap so roads/aqueducts follow the view.
+    """Paint-only +0 remap so roads follow the view.
 
     Does not write the map. Corners/T use the mask walk; 180° keeps NS/EW.
+    Wall / aqueduct / gate are buildings (id ≥ 0x78) — ``iso_paint_tile``
+    remaps those via ``orient_autotile_art``.
     """
     f = clamp_facing(facing)
     if f == 0:
         return tid
     mask = _ROAD_CANON_MASK.get(tid)
-    if mask is not None:
-        rot = mask
-        for _ in range(f):
-            rot = ((rot << 1) | (rot >> 3)) & 0xF
-        return _ROAD_FROM_MASK[rot]
-    if f & 1:
-        return _AQUEDUCT_AXIS.get(tid, tid)
-    return tid
+    if mask is None:
+        return tid
+    rot = mask
+    for _ in range(f):
+        rot = ((rot << 1) | (rot >> 3)) & 0xF
+    return _ROAD_FROM_MASK[rot]
 
 
 def rotate_footprint_local(
@@ -519,7 +516,9 @@ def iso_paint_tile(
 
     Long pair buildings (Circus / C.Maximus) synthesize leftover-axis
     +4 at odd facing so extra_rows meet; square N×N still remaps via
-    ``graphic_source_xy``. Does not write the map.
+    ``graphic_source_xy``. Wall / aqueduct / gate walk the NESW mask so
+    a 90° compass rotate still looks like a connected run. Does not
+    write the map (charge / Security / Gate bytes stay).
     """
     f = clamp_facing(facing)
     if f != 0 and 0 <= wx < city.width and 0 <= wy < city.height:
@@ -533,7 +532,18 @@ def iso_paint_tile(
             raw[4] = variant & 0xFF
             return Tile.unpack(bytes(raw))
     gx, gy = graphic_source_xy(city, wx, wy, facing)
-    return city.tile(gx, gy)
+    tile = city.tile(gx, gy)
+    if f == 0:
+        return tile
+    from app.place import orient_autotile_art
+
+    tid, variant = orient_autotile_art(tile.terrain_id, tile.variant, f)
+    if tid == tile.terrain_id and variant == tile.variant:
+        return tile
+    raw = bytearray(city.tile_bytes(gx, gy))
+    raw[0] = tid & 0xFF
+    raw[4] = variant & 0xFF
+    return Tile.unpack(bytes(raw))
 
 
 def tile_iso_xy(
@@ -3966,6 +3976,56 @@ def selftest() -> list[str]:
         lines.append("FAIL  road 180° should stay NS")
     else:
         lines.append("ok    road NS/EW swap on odd facing; 180 keeps NS")
+    from app.place import orient_autotile_art
+
+    run = CityMap()
+    for y in range(10, 15):
+        off = run.offset(8, y)
+        run.tiles[off] = 0xC1 if 10 < y < 14 else (0xC7 if y == 10 else 0xC8)
+        run.tiles[off + 1] = 0x02
+        run.tiles[off + 3] = 0x08
+        run.tiles[off + 4] = 0x00 if 10 < y < 14 else (0x01 if y == 10 else 0x02)
+        aoff = run.offset(9, y)
+        run.tiles[aoff] = 0xCF if 10 < y < 14 else (0xCB if y == 10 else 0xCC)
+        run.tiles[aoff + 1] = 0x40
+        run.tiles[aoff + 3] = 0x10
+        run.tiles[aoff + 4] = 0x79
+        run.tiles[aoff + 9] = 0x79
+        run.tiles[aoff + 10] = 3
+    goff = run.offset(8, 12)
+    run.tiles[goff] = 0xC0
+    run.tiles[goff + 1] = 0x24
+    run.tiles[goff + 3] = 0x88
+    run.tiles[goff + 4] = 0x92
+    coff = run.offset(10, 12)
+    run.tiles[coff] = ID_AQUEDUCT_WALL_NS
+    run.tiles[coff + 1] = 0x42
+    run.tiles[coff + 3] = 0x08
+    run.tiles[coff + 4] = 7
+    w1 = iso_paint_tile(run, 8, 11, 1)
+    a1 = iso_paint_tile(run, 9, 12, 1)
+    a2 = iso_paint_tile(run, 9, 12, 2)
+    g1 = iso_paint_tile(run, 8, 12, 1)
+    c1 = iso_paint_tile(run, 10, 12, 1)
+    if (
+        w1.terrain_id != 0xC2
+        or w1.variant != 0x04
+        or a1.terrain_id != 0xD0
+        or a2.terrain_id != 0xCF
+        or g1.terrain_id != 0xC0
+        or g1.variant != 0x93
+        or c1.terrain_id != ID_AQUEDUCT_WALL_EW
+        or run.tiles[run.offset(9, 12)] != 0xCF
+        or run.tiles[run.offset(9, 12) + 10] != 3
+        or run.tiles[run.offset(10, 12) + 1] != 0x42
+        or orient_autotile_art(0xC1, 0, 3)[0] != 0xC2
+    ):
+        lines.append(
+            f"FAIL  wall/aq rotate paint w1={w1.terrain_id:#x} "
+            f"a1={a1.terrain_id:#x} g1+4={g1.variant:#x} c1={c1.terrain_id:#x}"
+        )
+    else:
+        lines.append("ok    NS wall+aqueduct+Gate+0xBD connected at facing 1/2/3")
     # N×N +4 rides the visual slot: SW at facing 1 draws the NW origin piece.
     if rotate_footprint_local(0, 1, 2, 1) != (0, 0):
         lines.append(
