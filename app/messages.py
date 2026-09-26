@@ -562,7 +562,11 @@ def scan_city_messages(
     disease_infected: int = 0,
     event_xy: tuple[int, int] | None = None,
 ) -> list[str]:
-    """Push City Only banners. Career / Emperor packs are not enqueued."""
+    """Push City Only banners. Career / Emperor packs are not enqueued.
+
+    ``year_wrapped`` is kept for call sites. City Only Dec→Jan does not
+    enqueue [83]; the window opens Annual Summary [72] instead.
+    """
     fired: list[str] = []
     if not getattr(sim, "city_only", 0):
         return fired
@@ -589,12 +593,9 @@ def scan_city_messages(
         if enqueue(sim, _make(eng, "hail", 79)):
             fired.append("hail")
 
-    # 58c87 EAX=0x54 → official slot 83 on Dec→Jan. Same congrat clip as Hail.
-    # Discard seen so a later year wrap can speak again (not once per city).
-    if year_wrapped:
-        watch.seen.discard("year")
-        if enqueue(sim, _make(eng, "year", 83)):
-            fired.append("year")
+    # year_wrapped: City Only Dec→Jan is FUN_00061389 / C2.ENG [72]
+    # Annual Summary (sav_year_end 0x34e14). No 58c87 site loads EAX=0x54
+    # ([83] Another Year Passes). Do not enqueue congrat on wrap.
 
     if peak > watch.peak:
         for gate, name in UNLOCK_LABEL.items():
@@ -1075,22 +1076,19 @@ def selftest() -> list[str]:
         year_sim, tiles3, hail=False, month_wrapped=True, year_wrapped=True
     )
     ymsg = peek_message(year_sim)
-    if "year" not in got:
-        lines.append(f"FAIL  Dec->Jan must post New Year [83] {got}")
+    if "year" in got or (ymsg is not None and getattr(ymsg, "slot", None) == 83):
+        lines.append(f"FAIL  Dec->Jan must not post [83] {got} {ymsg}")
     elif "hail" in got or "fire" in got:
         lines.append(f"FAIL  Dec->Jan dumped Hail/Fire {got}")
-    elif ymsg is None or ymsg.slot != 83 or ymsg.key != "year":
-        lines.append(f"FAIL  New Year message {ymsg}")
     else:
-        lines.append("ok    New Year [83] on Dec->Jan wrap")
-    pop_message(year_sim)
+        lines.append("ok    Dec->Jan does not post New Year [83] (summary is [72])")
     got = scan_city_messages(
         year_sim, tiles3, hail=False, month_wrapped=True, year_wrapped=True
     )
-    if "year" not in got:
-        lines.append(f"FAIL  second Dec->Jan must post [83] again {got}")
+    if "year" in got:
+        lines.append(f"FAIL  second Dec->Jan posted [83] {got}")
     else:
-        lines.append("ok    New Year [83] may fire every year wrap")
+        lines.append("ok    later year wraps still skip [83]")
 
     sim = SimState(city_only=1, population=20, treasury=-3)
     init_city_only_labor(sim)

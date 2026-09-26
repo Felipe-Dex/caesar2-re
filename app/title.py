@@ -664,9 +664,8 @@ def selftest() -> list[str]:
     else:
         lines.append("ok    title boot does not start A01/mandate")
     hail = type("M", (), {"slot": 79, "key": "hail"})()
-    year = type("M", (), {"slot": 83, "key": "year"})()
-    if not advisor_plays_audio(hail) or not advisor_plays_audio(year):
-        lines.append("FAIL  Hail/year must keep mp4 audio")
+    if not advisor_plays_audio(hail):
+        lines.append("FAIL  Hail must keep mp4 audio")
     else:
-        lines.append("ok    Hail [79] / New Year [83] still have mp4 audio")
+        lines.append("ok    Hail [79] still has mp4 audio")
     return lines

@@ -3,7 +3,7 @@
 Play path paints visible iso diamonds into the camera well — never the
 ~4640×2400 world bitmap. Walker / water ticks dirty that well only
 (``video_blit_dirty`` 0x29849 stand-in). City Only keys follow
-C2MANUAL.DOC p.48 (P pause, C census, A faster, Space cancel build,
+C2MANUAL.DOC p.48 (P pause, C census, A year-end turbo, Space cancel build,
 F/F2 forum, F1 city, F3 province, F4 load, F5 save list then last slot,
 1/2/3 zoom, Esc dismiss). Off-map debug: 1 title, 2 CITYFIXT, 3 enter map, Space/T sim
 slot, A audio. Arrow keys pan. Housing / Roads / Clear / Aqueduct
@@ -1596,6 +1596,10 @@ def show(ctx: BootContext, *, game: Path) -> None:
         nonlocal place_dlg
         if advisor_dlg is not None:
             return
+        # Annual Summary [72] (and other reports) stay in front. 58c87
+        # congrat must not cover FUN_00061389. Resume after _close_report.
+        if menu_report is not None:
+            return
         from app.messages import advisor_show_policy, peek_message, pop_message
 
         nxt = peek_message(ctx.sim)
@@ -1865,15 +1869,26 @@ def show(ctx: BootContext, *, game: Path) -> None:
         )
 
     def apply_speed(action: str) -> None:
-        """INT_CITY play / faster / pause + Speed menu. Original starts unpaused."""
+        """INT_CITY play / faster / pause + Speed menu. A is year-end turbo.
+
+        0x28c2f / 0x31a9c set [0xC45A0]; sav_year_end 0x34df7 clears it.
+        Speed flyout and P cancel turbo without waiting for December.
+        """
+        from app.city_sim import end_year_turbo, start_year_turbo
+
         sim = ctx.sim
-        if action == "speed_pause":
+        if action == "speed_year":
+            start_year_turbo(sim)
+        elif action == "speed_pause":
+            end_year_turbo(sim, restore=False)
             sim.paused = True
             sim.catchup = 0
         elif action == "speed_play":
+            end_year_turbo(sim, restore=False)
             sim.paused = False
             sim.catchup = 0
         elif action == "speed_fast":
+            end_year_turbo(sim, restore=False)
             sim.paused = False
             sim.catchup = 1
         else:
@@ -1881,7 +1896,9 @@ def show(ctx: BootContext, *, game: Path) -> None:
         from app.walkers import drawable_walkers
 
         extra = speed_action(sim)
-        if action == "speed_pause" and sim.paused:
+        if action == "speed_year":
+            extra = _eng_skip(ctx.eng, 75, 0, "Accelerated Time")
+        elif action == "speed_pause" and sim.paused:
             extra = _eng_skip(ctx.eng, 8, 2, "Game Paused")
         blit(
             f"{extra}  {sim.date_label}  "
@@ -1942,6 +1959,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
         save_typed = ""
         save_typing = False
         title_session.options_open = False
+        _pump_advisor()
 
     def _open_report(
         report: MenuReport,
@@ -1961,7 +1979,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
         blit(extra if extra is not None else report.title)
 
     def _maybe_annual_summary(ph) -> None:
-        """FUN_00061389 after Dec→Jan. City Only only. Not Hail / Fire."""
+        """FUN_00061389 after Dec→Jan. City Only [72] numbers. Not [83]."""
         if not getattr(ph, "year_wrapped", False):
             return
         if not getattr(ctx.sim, "city_only", 0):
@@ -2623,7 +2641,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
             _open_census()
             return
         if key in {"a"} or ch == "a":
-            apply_speed("speed_fast")
+            apply_speed("speed_year")
             return
         if key in {"space"}:
             _cancel_build()

@@ -66,10 +66,14 @@ def sim_tick_due(sim: SimState, dt_ms: int) -> int:
     """0x3E4B9 — accumulate dt; 0 if paused or not enough ms.
 
     Returns how many pulses to run (0, 1, or 4). Host Space/T still ignores
-    this gate (manual step).
+    this gate (manual step). [0xC45A0] >= 2 (A turbo / view_frame bump)
+    skips the scalar interval so the year can run out at max speed.
     """
     if sim.paused:
         return 0
+    if getattr(sim, "year_turbo", False) or int(sim.catchup) >= 2:
+        sim.tick_acc = 0
+        return 4
     sim.tick_acc += max(0, int(dt_ms))
     need = sim_tick_interval_ms(sim.speed_scalar)
     if sim.tick_acc < need:

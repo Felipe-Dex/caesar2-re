@@ -12,8 +12,9 @@ slot — do not play a clip for it.
 City Only start Hail [79] is the “build your city” briefing. The EXE
 table names ``congrat.smk`` there (same talking-head as pop milestones
 / New Structure). Play that clip’s mp4 audio when Options Sound is on
-— the user wants the talking-head on map enter. New Year [83]
-(Another Year Passes) plays the same ``congrat`` clip with audio.
+— the user wants the talking-head on map enter. [83] Another Year
+Passes is in the SMK table as ``congrat``, but City Only Dec→Jan
+does **not** enqueue it (score card is [72] ``FUN_00061389``).
 Do **not** play ``A01.RAW`` (boot sting). ``promote.smk`` is Career
 kind 5, not this banner.
 
