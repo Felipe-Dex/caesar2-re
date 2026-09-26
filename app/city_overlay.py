@@ -328,7 +328,7 @@ def _paint_land_value(lv_byte: int) -> int:
 
 
 def _is_pipe_building(tid: int) -> bool:
-    return tid == 0xBE or (0xCB <= tid <= 0xD6)
+    return tid == 0xBE or tid in (0xBC, 0xBD) or (0xCB <= tid <= 0xD6)
 
 
 def _paint_water(tid: int, flags: int, splash: int) -> int:
@@ -585,6 +585,8 @@ def _fill_names() -> None:
         0xB4: "Janiculan",
         0xB7: "Palatine",
         0xB9: "Palatine",
+        0xBC: "Aqueduct",
+        0xBD: "Aqueduct",
         0xBE: "Reservoir",
         0xBF: "Tower",
         0xC0: "Gate",
@@ -911,6 +913,8 @@ def building_name(tid: int, eng=None) -> str:
         0xDC: (12, 3, "Fountain"),
         0xDD: (12, 3, "Fountain"),
         0xDE: (12, 3, "Fountain"),
+        0xBC: (13, 0, "Wall"),
+        0xBD: (13, 0, "Wall"),
         0xC0: (13, 0, "Wall"),
         0xC1: (13, 0, "Wall"),
         0xC2: (13, 0, "Wall"),
