@@ -38,6 +38,7 @@ from app.forum import (
     click_forum,
     is_forum_building,
     open_forum,
+    type_forum_key,
 )
 from app.menus import (
     DIS_BARBARIAN,
@@ -1979,7 +1980,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
         tool = None
         forum_state = open_forum(ctx.sim, ctx.city.tiles, game)
         _sfx("forum")
-        blit(_eng_skip(ctx.eng, 28, 8, "PLEBS"))
+        blit(_eng_skip(ctx.eng, 28, 0, "CLEAR FORUM"))
 
     def _leave_forum() -> None:
         nonlocal forum_state
@@ -1997,6 +1998,9 @@ def show(ctx: BootContext, *, game: Path) -> None:
             forum_state.kind = KIND_CHROME
             forum_state.oracle_advice = None
             forum_state.oracle_sfx = ""
+            forum_state.empire_pick = None
+            forum_state.field_focus = ""
+            forum_state.field_edit = ""
             blit(_eng_skip(ctx.eng, 28, 0, "CLEAR FORUM"))
             return True
         _leave_forum()
@@ -2717,7 +2721,11 @@ def show(ctx: BootContext, *, game: Path) -> None:
     def on_key(event: tk.Event) -> None:  # type: ignore[type-arg]
         """City Only: C2MANUAL.DOC Keyboard Commands. Debug keys only off-map."""
         key = event.keysym.lower()
-        ch = (getattr(event, "char", "") or "").lower()
+        ch = (getattr(event, "char", "") or "")
+        if forum_state is not None and type_forum_key(forum_state, ctx.sim, key, ch):
+            blit(last_extra)
+            return
+        ch = ch.lower()
         mods = int(getattr(event, "state", 0) or 0)
         alt = bool(mods & 0x20008)
         step = PAN_STEP[city_map.clamp_zoom(zoom)]

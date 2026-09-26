@@ -1,10 +1,11 @@
-"""forum_view 0x59A15 stand-in — City Only chrome + PLEBS labor.
+"""forum_view 0x59A15 stand-in — City Only Forum chrome.
 
 Forum is a submode (view_submode=1): no sim tick. Open from a Forum
 building (0xAF / 0xB2–0xB4 / 0xB7–0xB9) or INT_CITY view-tab sprite 11.
-Career EMPIRE / ROME / PERSONAL stay stubs. Oracle is the 4-column
-RAT_BACK / RAT_FRON view (chunks 286–289 + avg 46). Click a rating
-label plays B-series RAW (0x57450 → 0x135a4). Scribe is HISTORY
+Idle is CLEAR FORUM (full FORUM.PL8, no overlay). Advisors paint on the
+same crowd except Oracle (RAT_FRON) and EMPIRE MAP (EMPIRE.PL8). Empire
+Map is chrome only — no REGIONS assignment / career travel. Click a
+rating label plays B-series RAW (0x57450 → 0x135a4). Scribe is HISTORY
 graphs only (no letters).
 
 Labor table = SavChunk 56 (8× assigned/need) @ [0xD2E6C]. Need is
@@ -50,10 +51,16 @@ from app.city_sim import SimState
 # Host kinds (not the EXE [0x117A5C] numbers — TREASURER took 3 first).
 KIND_CHROME = 0
 KIND_ORACLE = 1
+KIND_PERSONAL = 2
 KIND_TREASURER = 3
+KIND_EMPIRE = 6
+KIND_MERCHANT = 7
 KIND_PLEBS = 8
 KIND_EXIT = 9
 KIND_SCRIBE = 10
+KIND_CENTURION = 11
+KIND_ROME = 12
+KIND_HELP = 13
 
 # C2.ENG [28]+0…11 in file order → visual 4×3 (forum_qa.md).
 _BUTTON_SKIP: tuple[int, ...] = (
@@ -62,9 +69,33 @@ _BUTTON_SKIP: tuple[int, ...] = (
     7, 4, 5, 9,
 )
 _BUTTON_KIND: tuple[int, ...] = (
-    KIND_ORACLE, 0, 0, KIND_TREASURER,
-    KIND_SCRIBE, 0, KIND_PLEBS, 0,
-    0, 0, 0, KIND_EXIT,
+    KIND_ORACLE, KIND_CENTURION, KIND_EMPIRE, KIND_TREASURER,
+    KIND_SCRIBE, KIND_CHROME, KIND_PLEBS, KIND_PERSONAL,
+    KIND_MERCHANT, KIND_ROME, KIND_HELP, KIND_EXIT,
+)
+_ADVISOR_KINDS = frozenset(
+    {
+        KIND_ORACLE,
+        KIND_PERSONAL,
+        KIND_TREASURER,
+        KIND_EMPIRE,
+        KIND_MERCHANT,
+        KIND_PLEBS,
+        KIND_SCRIBE,
+        KIND_CENTURION,
+        KIND_ROME,
+    }
+)
+_OVERLAY_KINDS = frozenset(
+    {
+        KIND_PERSONAL,
+        KIND_TREASURER,
+        KIND_MERCHANT,
+        KIND_PLEBS,
+        KIND_SCRIBE,
+        KIND_CENTURION,
+        KIND_ROME,
+    }
 )
 _BUTTON_FALLBACK: tuple[str, ...] = (
     "ORACLE", "CENTURION", "EMPIRE MAP", "TREASURER",
@@ -145,7 +176,22 @@ HIST_REC = 20
 HIST_CAP = 200
 HIST_BYTES = HIST_REC * HIST_CAP
 SCRIBE_WINDOWS = (10, 20, 30)
-SCRIBE_SCALES = (10_000, 50_000, 8_000, 4_000)
+# Screenshot 2×2 caps (pop / funds / pop tax / industry tax).
+SCRIBE_SCALES = (10_000, 25_000, 8_000, 2_000)
+RANK_CAESAR = 10  # [7]+10; promotions left = 10 − rank (0x555ce)
+SALARY_MAX = 500
+SALARY_STEP = 10
+WAGE_MAX = 200
+WAGE_STEP = 5
+CONSCRIPT_MAX = 100
+FAVOR_QUOTES = 12  # [37]+3…+14
+INF_NAME_OFF, INF_NAME_LEN = 24, 20
+# goods_16x48: +4 store, +8 factories, +24 supplied%, +36 /month
+GOODS_STORE, GOODS_FACTORIES, GOODS_PRODUCED = 4, 8, 36
+GOODS_LABELS: tuple[str, ...] = (
+    "Wheat", "Grapes", "Cattle", "Wool", "Gems", "Lead", "Iron", "Copper",
+    "Clay", "Sand", "Marble", "Stone", "Silk", "Spice", "Ivory", "Fish",
+)
 
 FORUM_IDS = frozenset(
     {0xAE, 0xAF, 0xB0, 0xB2, 0xB3, 0xB4, 0xB6, 0xB7, 0xB8, 0xB9}
@@ -235,7 +281,7 @@ class LaborState:
 class ForumState:
     """forum_view session. kind 0 = chrome illustration + 12 buttons."""
 
-    kind: int = KIND_PLEBS
+    kind: int = KIND_CHROME
     labor: LaborState = field(default_factory=LaborState)
     bg: Image.Image | None = None
     bits: list = field(default_factory=list)
@@ -244,6 +290,11 @@ class ForumState:
     oracle_advice: int | None = None  # 0…3 column, or None
     oracle_sfx: str = ""  # B-series stem from 0x135a4, empty if none
     scribe_years: int = 10  # 10 / 20 / 30 — arrows only change the window
+    empire_map: Image.Image | None = None  # EMPIRE.PL8 640×480
+    empire_parts: list = field(default_factory=list)  # E_PARTS2 (img,x,y)
+    empire_pick: int | None = None  # [5] skip 1…44, chrome only
+    field_focus: str = ""  # donate | gift | ""
+    field_edit: str = ""
 
 
 def _eng(eng, slot: int, skip: int, fallback: str) -> str:
@@ -1077,14 +1128,72 @@ def load_oracle_column(game: Path) -> Image.Image | None:
     return None
 
 
+def load_empire_map(game: Path) -> Image.Image | None:
+    """EMPIRE.PL8 — 640×480 parchment map. Palette EMPIRE.256."""
+    try:
+        from app import assets
+
+        frames, _path = assets.load_pl8_frames(game, "EMPIRE.PL8")
+        if frames:
+            return frames[0].convert("RGBA")
+    except (OSError, ValueError, FileNotFoundError):
+        return None
+    return None
+
+
+def load_empire_parts(game: Path) -> list:
+    """E_PARTS2.PL8 — 44 province stamps (xy) + 3 caption plates."""
+    try:
+        from app import assets
+
+        packed = assets.load_pl8_sprites_xy(game, "E_PARTS2.PL8")
+        return [(im.convert("RGBA"), int(x), int(y)) for im, x, y in packed]
+    except (OSError, ValueError, FileNotFoundError):
+        return []
+
+
+def load_governor_name(game: Path | None) -> str:
+    """CAESAR2.INF offset 24, 20 bytes — not a SavChunk (forum_qa.md)."""
+    if game is None:
+        return "Governor"
+    try:
+        from app.config import find_file
+
+        path = find_file(game, "CAESAR2.INF")
+        if path is None:
+            return "Governor"
+        raw = path.read_bytes()
+    except OSError:
+        return "Governor"
+    text = raw.decode("latin-1", errors="replace")
+    best = ""
+    cur = []
+    for ch in text:
+        if ch.isprintable() and ch != "\x00" and (ch.isalnum() or ch in " .'-"):
+            cur.append(ch)
+            continue
+        cand = "".join(cur).strip()
+        if len(cand) > len(best) and any(c.isalpha() for c in cand):
+            best = cand
+        cur = []
+    cand = "".join(cur).strip()
+    if len(cand) > len(best) and any(c.isalpha() for c in cand):
+        best = cand
+    return best or "Governor"
+
+
 def open_forum(sim: SimState, tiles: bytearray, game: Path | None = None) -> ForumState:
-    """forum_view_setup — enter PLEBS (the panel this pass is for)."""
-    state = ForumState(kind=KIND_PLEBS, labor=labor_from_sim(sim))
+    """forum_view_setup — idle CLEAR FORUM (kind 0), crowd + 12 buttons."""
+    state = ForumState(kind=KIND_CHROME, labor=labor_from_sim(sim))
     if game is not None:
         state.bg = load_forum_art(game)
         state.bits = load_forum_bits(game)
         state.oracle_back = load_oracle_scene(game)
         state.oracle_column = load_oracle_column(game)
+        state.empire_map = load_empire_map(game)
+        state.empire_parts = load_empire_parts(game)
+        if not getattr(sim, "governor_name", ""):
+            sim.governor_name = load_governor_name(game)
     sync_labor(state.labor, tiles, sim)
     return state
 
@@ -1278,13 +1387,18 @@ def click_forum(
     """
     if frame_size is not None:
         mx, my = forum_to_native(mx, my, frame_size[0], frame_size[1])
-    # Oracle is a full screen (no 4×3 chrome). Hit the rating texts first.
+    # Oracle / Empire Map are full screens (no 4×3 chrome).
     if state.kind == KIND_ORACLE:
         col = _oracle_column(mx, my)
         if col is not None:
             state.oracle_advice = col
             state.oracle_sfx = oracle_raw_stem(oracle_advice_id(sim, col))
             return ""
+        return ""
+    if state.kind == KIND_EMPIRE:
+        skip = _empire_hit(state, mx, my)
+        if skip is not None:
+            state.empire_pick = skip
         return ""
 
     hit = button_at(mx, my)
@@ -1294,18 +1408,21 @@ def click_forum(
         label = _eng(eng, 28, skip, _BUTTON_FALLBACK[hit])
         if kind == KIND_EXIT:
             return "exit"
-        if kind in (KIND_PLEBS, KIND_ORACLE, KIND_TREASURER, KIND_SCRIBE):
-            state.kind = kind
-            state.oracle_advice = None
-            state.oracle_sfx = ""
+        _clear_forum_focus(state)
+        if hit == 5 or kind == KIND_CHROME:
+            state.kind = KIND_CHROME
+            return label
+        if kind == KIND_HELP:
+            state.kind = KIND_CHROME if state.kind == KIND_HELP else KIND_HELP
+            return label
+        if kind in _ADVISOR_KINDS:
+            if state.kind == kind:
+                state.kind = KIND_CHROME
+            else:
+                state.kind = kind
             return label
         state.kind = KIND_CHROME
-        if skip in (11, 4, 2, 6):  # EMPIRE MAP / ROME / PERSONAL / CENTURION
-            return _eng(
-                eng, 31, 24,
-                "You cannot get promoted when playing in city-only mode.",
-            )
-        return f"{label} — ainda não"
+        return label
 
     if state.kind == KIND_PLEBS:
         action = hit_plebs(mx, my, state.labor)
@@ -1326,12 +1443,33 @@ def click_forum(
             apply_scribe_hit(state, action)
             return ""
         return ""
+
+    if state.kind == KIND_PERSONAL:
+        action = hit_personal(mx, my)
+        if action:
+            apply_personal_hit(action, state, sim)
+            return ""
+        return ""
+
+    if state.kind == KIND_ROME:
+        action = hit_rome(mx, my)
+        if action:
+            apply_rome_hit(action, state, sim)
+            return ""
+        return ""
+
+    if state.kind == KIND_CENTURION:
+        action = hit_centurion(mx, my)
+        if action:
+            apply_centurion_hit(action, sim)
+            return ""
+        return ""
     return ""
 
 
 def _scribe_year_rects() -> tuple[tuple[int, int, int, int], tuple[int, int, int, int]]:
-    y = _PANEL_Y + 28
-    return ((_PANEL_X + 220, y, 16, 16), (_PANEL_X + 320, y, 16, 16))
+    y = _PANEL_Y + 56
+    return ((_PANEL_X + 10, y, 16, 16), (_PANEL_X + 30, y, 16, 16))
 
 
 def hit_scribe(mx: int, my: int) -> str | None:
@@ -1389,6 +1527,8 @@ def _blit_forum_native(state: ForumState, sim: SimState, *, eng=None) -> Image.I
     """Paint the C2 Forum at 640×480 (panel, sliders, 4×3 chrome)."""
     if state.kind == KIND_ORACLE:
         return _blit_oracle_native(state, sim, eng=eng)
+    if state.kind == KIND_EMPIRE:
+        return _blit_empire_native(state, sim, eng=eng)
     if state.bg is not None:
         out = state.bg.resize((FORUM_NATIVE_W, FORUM_NATIVE_H), Image.Resampling.NEAREST)
     else:
@@ -1396,13 +1536,7 @@ def _blit_forum_native(state: ForumState, sim: SimState, *, eng=None) -> Image.I
     out = out.convert("RGBA")
     draw = ImageDraw.Draw(out)
     font = _font()
-    title = _eng(eng, 36, 0, "Plebeian Tribune") if state.kind == KIND_PLEBS else (
-        _eng(eng, 28, 12, "Treasury") if state.kind == KIND_TREASURER else (
-            _eng(eng, 32, 0, "Your Scribe") if state.kind == KIND_SCRIBE else
-            _eng(eng, 28, 0, "CLEAR FORUM")
-        )
-    )
-    if state.kind != KIND_CHROME:
+    if state.kind in (KIND_PLEBS, KIND_TREASURER, KIND_SCRIBE):
         if state.kind == KIND_TREASURER:
             draw.rectangle(
                 (_PANEL_X, _PANEL_Y, _PANEL_X + _PANEL_W - 1, _PANEL_Y + _PANEL_H - 1),
@@ -1416,24 +1550,30 @@ def _blit_forum_native(state: ForumState, sim: SimState, *, eng=None) -> Image.I
                 fill=(8, 20, 18, 230),
                 outline=(200, 180, 90, 255),
             )
+            title = (
+                _eng(eng, 36, 0, "Plebeian Tribune") if state.kind == KIND_PLEBS else
+                _eng(eng, 32, 0, "Your Scribe")
+            )
             draw.text((_PANEL_X + 10, _PANEL_Y + 8), title[:48], fill=(255, 228, 160, 255), font=font)
             if state.kind == KIND_PLEBS:
                 _draw_plebs(draw, font, state.labor, eng)
             elif state.kind == KIND_SCRIBE:
                 _draw_scribe(draw, font, sim, state.scribe_years, eng)
+    elif state.kind == KIND_MERCHANT:
+        _draw_merchant(draw, font, sim, eng)
+    elif state.kind == KIND_CENTURION:
+        _draw_centurion(draw, font, sim, eng)
+    elif state.kind == KIND_ROME:
+        _draw_rome(draw, font, state, sim, eng)
+    elif state.kind == KIND_PERSONAL:
+        _draw_personal(draw, font, state, sim, eng)
     for i, skip in enumerate(_BUTTON_SKIP):
         x, y, bw, bh = button_rect(i)
         kind = _BUTTON_KIND[i]
-        lit = (kind == state.kind and kind != KIND_CHROME) or (
-            state.kind == KIND_CHROME and kind == 0 and i == 5
+        lit = (state.kind == KIND_CHROME and i == 5) or (
+            kind == state.kind and kind not in (KIND_CHROME, KIND_EXIT)
         )
-        if kind == state.kind and kind != 0:
-            lit = True
-        fill = (40, 70, 50, 230) if not lit else (160, 40, 30, 240)
-        if kind == state.kind and kind in (
-            KIND_PLEBS, KIND_ORACLE, KIND_TREASURER, KIND_SCRIBE
-        ):
-            fill = (160, 40, 30, 240)
+        fill = (160, 40, 30, 240) if lit else (40, 70, 50, 230)
         draw.rectangle((x, y, x + bw - 1, y + bh - 1), fill=fill, outline=(200, 190, 140, 255))
         lab = _eng(eng, 28, skip, _BUTTON_FALLBACK[i])
         draw.text((x + 8, y + 10), lab[:16], fill=(255, 230, 180, 255), font=font)
@@ -1670,7 +1810,7 @@ def _year_label(year_raw: int) -> str:
 
 
 def _draw_scribe(draw, font, sim: SimState, years: int, eng) -> None:
-    """HISTORY graphs only — pop / funds / pop tax / industry tax."""
+    """HISTORY 2×2 charts — pop / funds / pop tax / industry tax."""
     recs = history_window(parse_history(getattr(sim, "history", None)), years)
     window = 10 if years not in SCRIBE_WINDOWS else int(years)
     look = _eng(eng, 32, 5, "Look at records")
@@ -1680,18 +1820,17 @@ def _draw_scribe(draw, font, sim: SimState, years: int, eng) -> None:
     if recs:
         span = f"{_year_label(recs[0][4])} {to} {_year_label(recs[-1][4])}"
     else:
-        span = f"{_year_label(int(getattr(sim, 'year_raw', 0)))} {to} {_year_label(int(getattr(sim, 'year_raw', 0)))}"
-    draw.text(
-        (_PANEL_X + 10, _PANEL_Y + 30),
-        f"{look} {last} {window} {yrs}  {span}",
-        fill=(200, 210, 190),
-        font=font,
-    )
+        y0 = int(getattr(sim, "year_raw", 0))
+        span = f"{_year_label(y0)} {to} {_year_label(y0)}"
+    draw.text((_PANEL_X + 10, _PANEL_Y + 28), look, fill=(200, 210, 190), font=font)
+    draw.text((_PANEL_X + 10, _PANEL_Y + 42), last, fill=(200, 210, 190), font=font)
     minus, plus = _scribe_year_rects()
     draw.rectangle((minus[0], minus[1], minus[0] + 15, minus[1] + 15), outline=(200, 180, 90))
-    draw.text((minus[0] + 4, minus[1] + 1), "-", fill=(255, 228, 160), font=font)
+    draw.text((minus[0] + 2, minus[1] + 1), "<", fill=(255, 228, 160), font=font)
     draw.rectangle((plus[0], plus[1], plus[0] + 15, plus[1] + 15), outline=(200, 180, 90))
-    draw.text((plus[0] + 4, plus[1] + 1), "+", fill=(255, 228, 160), font=font)
+    draw.text((plus[0] + 4, plus[1] + 1), ">", fill=(255, 228, 160), font=font)
+    draw.text((_PANEL_X + 10, _PANEL_Y + 74), f"{window} {yrs}", fill=(200, 210, 190), font=font)
+    draw.text((_PANEL_X + 10, _PANEL_Y + 88), span, fill=(200, 210, 190), font=font)
 
     labels = (
         _eng(eng, 32, 1, "City population: 0 - "),
@@ -1705,18 +1844,15 @@ def _draw_scribe(draw, font, sim: SimState, years: int, eng) -> None:
         [r[2] for r in recs],
         [r[3] for r in recs],
     )
-    gx = _PANEL_X + 12
-    gw = _PANEL_W - 24
-    gh = 44
-    gy0 = _PANEL_Y + 52
-    for i, (lab, scale, vals) in enumerate(zip(labels, SCRIBE_SCALES, series)):
-        y = gy0 + i * (gh + 10)
-        draw.text((gx, y), f"{lab}{scale}", fill=(255, 228, 160), font=font)
-        bx = gx
-        by = y + 14
-        bw = gw
-        bh = gh - 16
-        draw.rectangle((bx, by, bx + bw - 1, by + bh - 1), outline=(120, 110, 70))
+    colors = ((80, 200, 90), (230, 160, 70), (80, 200, 90), (230, 160, 70))
+    gw, gh = 200, 70
+    gx0, gy0 = _PANEL_X + 200, _PANEL_Y + 28
+    for i, (lab, scale, vals, col) in enumerate(zip(labels, SCRIBE_SCALES, series, colors)):
+        col_i, row_i = i % 2, i // 2
+        x = gx0 + col_i * (gw + 16)
+        y = gy0 + row_i * (gh + 28)
+        bx, by, bw, bh = x, y, gw, 48
+        draw.rectangle((bx, by, bx + bw - 1, by + bh - 1), outline=(180, 170, 140), fill=(18, 22, 28, 220))
         n = max(window, 1)
         slot_w = max(1, bw // n)
         for k, val in enumerate(vals):
@@ -1726,15 +1862,453 @@ def _draw_scribe(draw, font, sim: SimState, years: int, eng) -> None:
             if bar_h:
                 draw.rectangle(
                     (x0 + 1, by + bh - 1 - bar_h, x0 + slot_w - 2, by + bh - 2),
-                    fill=(180, 140, 40),
+                    fill=col,
                 )
-        if vals:
-            draw.text(
-                (bx + bw - 70, y),
-                str(vals[-1]),
-                fill=(220, 230, 210),
-                font=font,
-            )
+        draw.text((x, y + bh + 2), f"{lab}{scale}", fill=(255, 228, 160), font=font)
+
+
+def _ink() -> tuple[int, int, int, int]:
+    return (230, 228, 210, 255)
+
+
+def _clear_forum_focus(state: ForumState) -> None:
+    state.oracle_advice = None
+    state.oracle_sfx = ""
+    state.empire_pick = None
+    state.field_focus = ""
+    state.field_edit = ""
+
+
+def _i(sim: SimState, name: str, default: int = 0) -> int:
+    return int(getattr(sim, name, default) or 0)
+
+
+def promotions_left(rank: int) -> int:
+    """0x555ce: rank 0…9; Caesar (10) needs 0 more."""
+    return max(0, RANK_CAESAR - max(0, int(rank)))
+
+
+def favor_quote_skip(favor: int) -> int:
+    """[37]+3…+14. Favor 0–100 → 12 bands."""
+    band = max(0, min(FAVOR_QUOTES - 1, int(favor) * FAVOR_QUOTES // 101))
+    return 3 + band
+
+
+def empire_circa_title(year_raw: int, eng=None) -> str:
+    """[33]+2 + abs(year) + BC/AD."""
+    prefix = _eng(eng, 33, 2, "Roman empire circa ")
+    if prefix and not prefix.endswith(" "):
+        prefix = f"{prefix} "
+    return f"{prefix}{_year_label(year_raw)}"
+
+
+def industry_rows(sim: SimState) -> list[tuple[int, str, int, int, int, int]]:
+    """City Only: local goods with store / factories / produced. No invented trade."""
+    from app.city_paint import GOODS_COUNT, GOODS_SUPPLIED, goods_i32
+
+    goods = getattr(sim, "goods", None)
+    rows: list[tuple[int, str, int, int, int, int]] = []
+    for i in range(GOODS_COUNT):
+        store = goods_i32(goods, i, GOODS_STORE)
+        factories = goods_i32(goods, i, GOODS_FACTORIES)
+        produced = goods_i32(goods, i, GOODS_PRODUCED)
+        supplied = goods_i32(goods, i, GOODS_SUPPLIED)
+        if not (store or factories or produced):
+            continue
+        name = GOODS_LABELS[i] if i < len(GOODS_LABELS) else f"good {i}"
+        rows.append((i, name, produced, store, factories, supplied))
+        if len(rows) >= 8:
+            break
+    return rows
+
+
+def _box(draw, rect: tuple[int, int, int, int], text: str, font, *, fill=False) -> None:
+    x, y, w, h = rect
+    draw.rectangle(
+        (x, y, x + w - 1, y + h - 1),
+        outline=(200, 190, 140),
+        fill=(20, 28, 40, 230) if fill else None,
+    )
+    if text:
+        draw.text((x + 3, y + 1), text[:8], fill=_ink(), font=font)
+
+
+def _donate_rect() -> tuple[int, int, int, int]:
+    return (_PANEL_X + 220, _PANEL_Y + 86, 28, 16)
+
+
+def _gift_rect() -> tuple[int, int, int, int]:
+    return (_PANEL_X + 280, _PANEL_Y + 70, 28, 16)
+
+
+def _salary_rects() -> tuple[tuple[int, int, int, int], tuple[int, int, int, int]]:
+    y = _PANEL_Y + 64
+    return ((_PANEL_X + 200, y, 16, 16), (_PANEL_X + 218, y, 16, 16))
+
+
+def _wage_rects() -> tuple[tuple[int, int, int, int], tuple[int, int, int, int]]:
+    y = _PANEL_Y + 28
+    return ((_PANEL_X + 160, y, 16, 16), (_PANEL_X + 178, y, 16, 16))
+
+
+def _conscript_rects() -> tuple[tuple[int, int, int, int], tuple[int, int, int, int]]:
+    y = _PANEL_Y + 46
+    return ((_PANEL_X + 160, y, 16, 16), (_PANEL_X + 178, y, 16, 16))
+
+
+def _aux_rects() -> tuple[tuple[int, int, int, int], tuple[int, int, int, int]]:
+    y = _PANEL_Y + 100
+    return ((_PANEL_X + 160, y, 16, 16), (_PANEL_X + 178, y, 16, 16))
+
+
+def hit_personal(mx: int, my: int) -> str | None:
+    up, down = _salary_rects()
+    if _in_rect(mx, my, up):
+        return "salary+"
+    if _in_rect(mx, my, down):
+        return "salary-"
+    if _in_rect(mx, my, _donate_rect()):
+        return "donate"
+    return None
+
+
+def apply_personal_hit(action: str, state: ForumState, sim: SimState) -> None:
+    if action == "salary+":
+        sim.salary = min(SALARY_MAX, _i(sim, "salary") + SALARY_STEP)
+    elif action == "salary-":
+        sim.salary = max(0, _i(sim, "salary") - SALARY_STEP)
+    elif action == "donate":
+        state.field_focus = "donate"
+        state.field_edit = str(_i(sim, "donate_amount")) if _i(sim, "donate_amount") else ""
+
+
+def hit_rome(mx: int, my: int) -> str | None:
+    if _in_rect(mx, my, _gift_rect()):
+        return "gift"
+    return None
+
+
+def apply_rome_hit(action: str, state: ForumState, sim: SimState) -> None:
+    if action == "gift":
+        state.field_focus = "gift"
+        state.field_edit = str(_i(sim, "gift_amount")) if _i(sim, "gift_amount") else ""
+
+
+def hit_centurion(mx: int, my: int) -> str | None:
+    for name, rects in (
+        ("wage", _wage_rects()),
+        ("conscript", _conscript_rects()),
+        ("aux", _aux_rects()),
+    ):
+        up, down = rects
+        if _in_rect(mx, my, up):
+            return f"{name}+"
+        if _in_rect(mx, my, down):
+            return f"{name}-"
+    return None
+
+
+def apply_centurion_hit(action: str, sim: SimState) -> None:
+    if action == "wage+":
+        sim.legion_wages = min(WAGE_MAX, _i(sim, "legion_wages") + WAGE_STEP)
+    elif action == "wage-":
+        sim.legion_wages = max(0, _i(sim, "legion_wages") - WAGE_STEP)
+    elif action == "conscript+":
+        sim.conscription = min(CONSCRIPT_MAX, _i(sim, "conscription") + 1)
+    elif action == "conscript-":
+        sim.conscription = max(0, _i(sim, "conscription") - 1)
+    elif action == "aux+":
+        sim.auxiliaries = _i(sim, "auxiliaries") + 1
+    elif action == "aux-":
+        sim.auxiliaries = max(0, _i(sim, "auxiliaries") - 1)
+
+
+def type_forum_key(state: ForumState, sim: SimState, key: str, char: str) -> bool:
+    """Digits into donate / gift. True if consumed."""
+    if state.kind not in (KIND_PERSONAL, KIND_ROME) or not state.field_focus:
+        return False
+    if key in {"escape"}:
+        state.field_focus = ""
+        state.field_edit = ""
+        return True
+    if key in {"backspace"}:
+        state.field_edit = state.field_edit[:-1]
+    elif key in {"return", "kp_enter"}:
+        raw = int(state.field_edit or "0")
+        if state.field_focus == "donate":
+            sim.donate_amount = max(0, raw)
+        else:
+            sim.gift_amount = max(0, raw)
+        state.field_focus = ""
+        return True
+    elif char.isdigit() and len(state.field_edit) < 7:
+        state.field_edit += char
+    else:
+        return False
+    raw = int(state.field_edit or "0")
+    if state.field_focus == "donate":
+        sim.donate_amount = raw
+    else:
+        sim.gift_amount = raw
+    return True
+
+
+def _empire_hit(state: ForumState, mx: int, my: int) -> int | None:
+    """E_PARTS2 sprites 0…43 → [5] skip 1…44. Caption plates 44+ ignored."""
+    for i, item in enumerate(state.empire_parts[:44]):
+        _im, x, y = item[0], item[1], item[2]
+        w, h = _im.size
+        if x <= mx < x + w and y <= my < y + h:
+            return i + 1
+    return None
+
+
+def _draw_personal(draw, font, state: ForumState, sim: SimState, eng) -> None:
+    name = getattr(sim, "governor_name", "") or "Governor"
+    rank = max(0, min(10, _i(sim, "rank")))
+    title = f"{_eng(eng, 30, 0, 'The career of ')}{name}"
+    rank_s = _eng(eng, 7, rank, "Citizen")
+    draw.text((_PANEL_X + 8, _PANEL_Y + 8), title[:42], fill=_ink(), font=font)
+    draw.text((_PANEL_X + 400, _PANEL_Y + 8), rank_s, fill=_ink(), font=font)
+    need = _eng(eng, 76, 17, "You need")
+    promo = _eng(eng, 76, 18, "promotions to")
+    emp = _eng(eng, 76, 19, "become Emperor.")
+    draw.text(
+        (_PANEL_X + 8, _PANEL_Y + 36),
+        f"{need} {promotions_left(rank)} {promo} {emp}",
+        fill=_ink(),
+        font=font,
+    )
+    sal = _i(sim, "salary")
+    draw.text(
+        (_PANEL_X + 8, _PANEL_Y + 64),
+        f"{_eng(eng, 30, 2, 'Monthly salary of')} {sal} Dn",
+        fill=_ink(),
+        font=font,
+    )
+    up, down = _salary_rects()
+    _box(draw, up, "^", font)
+    _box(draw, down, "v", font)
+    draw.text(
+        (_PANEL_X + 280, _PANEL_Y + 64),
+        f"{_eng(eng, 30, 1, 'You have savings of')} {_i(sim, 'savings')} Dn",
+        fill=_ink(),
+        font=font,
+    )
+    draw.text(
+        (_PANEL_X + 8, _PANEL_Y + 86),
+        _eng(eng, 30, 3, "Donate money to the city?"),
+        fill=_ink(),
+        font=font,
+    )
+    shown = state.field_edit if state.field_focus == "donate" else str(_i(sim, "donate_amount") or "")
+    _box(draw, _donate_rect(), shown or "", font, fill=state.field_focus == "donate")
+
+
+def _draw_rome(draw, font, state: ForumState, sim: SimState, eng) -> None:
+    draw.text((_PANEL_X + 8, _PANEL_Y + 8), _eng(eng, 37, 0, "Rome."), fill=_ink(), font=font)
+    quote = _eng(eng, 37, favor_quote_skip(_i(sim, "imperial_favor")), '"He is indifferent to you."')
+    draw.text(
+        (_PANEL_X + 8, _PANEL_Y + 28),
+        f"{_eng(eng, 37, 1, 'Imperial favor:')} {quote}",
+        fill=_ink(),
+        font=font,
+    )
+    tribute = 0 if getattr(sim, "city_only", 0) else _i(sim, "tribute")
+    draw.text(
+        (_PANEL_X + 8, _PANEL_Y + 46),
+        f"{_eng(eng, 37, 2, 'Current annual tribute of')} {tribute} Dn.",
+        fill=_ink(),
+        font=font,
+    )
+    draw.text(
+        (_PANEL_X + 8, _PANEL_Y + 64),
+        _eng(eng, 37, 20, "The Emperor currently requests nothing."),
+        fill=_ink(),
+        font=font,
+    )
+    draw.text(
+        (_PANEL_X + 8, _PANEL_Y + 82),
+        _eng(eng, 37, 22, "Send a personal 'gift' to the Emperor"),
+        fill=_ink(),
+        font=font,
+    )
+    shown = state.field_edit if state.field_focus == "gift" else str(_i(sim, "gift_amount") or "")
+    _box(draw, _gift_rect(), shown or "", font, fill=state.field_focus == "gift")
+    avg = _eng(eng, 37, 27, "(Your average gift is ")
+    draw.text(
+        (_PANEL_X + 318, _PANEL_Y + 82),
+        f"{avg}{_i(sim, 'gift_avg')} Dn)",
+        fill=_ink(),
+        font=font,
+    )
+    draw.text(
+        (_PANEL_X + 8, _PANEL_Y + 100),
+        f"{_eng(eng, 30, 1, 'You have savings of')} {_i(sim, 'savings')} Dn",
+        fill=_ink(),
+        font=font,
+    )
+
+
+def _draw_merchant(draw, font, sim: SimState, eng) -> None:
+    draw.text((_PANEL_X + 8, _PANEL_Y + 8), _eng(eng, 35, 0, "Industry"), fill=_ink(), font=font)
+    rows = industry_rows(sim)
+    if not rows:
+        draw.text(
+            (_PANEL_X + 8, _PANEL_Y + 32),
+            _eng(eng, 35, 3, "No factories in the city"),
+            fill=_ink(),
+            font=font,
+        )
+        return
+    per = _eng(eng, 35, 1, "units produced/month")
+    store_l = _eng(eng, 35, 2, "in storage")
+    fac1 = _eng(eng, 35, 4, "factory")
+    facn = _eng(eng, 35, 5, "factories")
+    supp = _eng(eng, 35, 6, "supplied")
+    for i, (_gid, name, produced, store, factories, supplied) in enumerate(rows):
+        y = _PANEL_Y + 28 + i * 18
+        fac = fac1 if factories == 1 else facn
+        draw.text(
+            (_PANEL_X + 8, y),
+            f"{name}  {produced} {per}  {store} {store_l}  "
+            f"{factories} {fac}  {supplied}% {supp}",
+            fill=_ink(),
+            font=font,
+        )
+
+
+def _draw_centurion(draw, font, sim: SimState, eng) -> None:
+    draw.text((_PANEL_X + 8, _PANEL_Y + 8), _eng(eng, 34, 0, "The Legion"), fill=_ink(), font=font)
+    wages = _i(sim, "legion_wages")
+    draw.text(
+        (_PANEL_X + 8, _PANEL_Y + 28),
+        f"{_eng(eng, 34, 1, 'Monthly wages ')}{wages} Dn",
+        fill=_ink(),
+        font=font,
+    )
+    up, down = _wage_rects()
+    _box(draw, up, "^", font)
+    _box(draw, down, "v", font)
+    draw.text(
+        (_PANEL_X + 8, _PANEL_Y + 46),
+        f"{_eng(eng, 34, 2, 'Conscription')} {_i(sim, 'conscription')}%",
+        fill=_ink(),
+        font=font,
+    )
+    cu, cd = _conscript_rects()
+    _box(draw, cu, "^", font)
+    _box(draw, cd, "v", font)
+    soldiers = _i(sim, "soldiers")
+    ready = _i(sim, "soldiers_ready")
+    training = _i(sim, "soldiers_training")
+    draw.text(
+        (_PANEL_X + 8, _PANEL_Y + 64),
+        f"{_eng(eng, 34, 4, 'The legion has ')}{soldiers} {_eng(eng, 34, 5, 'soldiers')}",
+        fill=_ink(),
+        font=font,
+    )
+    draw.text(
+        (_PANEL_X + 8, _PANEL_Y + 80),
+        f"{ready} {_eng(eng, 34, 6, 'ready')}  {training} {_eng(eng, 34, 7, 'in training.')}",
+        fill=_ink(),
+        font=font,
+    )
+    aux = _i(sim, "auxiliaries")
+    if aux <= 0:
+        draw.text(
+            (_PANEL_X + 8, _PANEL_Y + 98),
+            _eng(eng, 34, 34, "There are no auxiliaries"),
+            fill=_ink(),
+            font=font,
+        )
+    else:
+        draw.text(
+            (_PANEL_X + 8, _PANEL_Y + 98),
+            f"{aux} {_eng(eng, 34, 31, 'auxiliaries')}  "
+            f"{_eng(eng, 34, 32, 'Cost ')}0 Dn {_eng(eng, 34, 33, 'per month')}",
+            fill=_ink(),
+            font=font,
+        )
+    au, ad = _aux_rects()
+    _box(draw, au, "^", font)
+    _box(draw, ad, "v", font)
+    draw.text((_PANEL_X + 300, _PANEL_Y + 8), _eng(eng, 44, 7, "COHORT REPORT"), fill=_ink(), font=font)
+    draw.text((_PANEL_X + 300, _PANEL_Y + 24), _eng(eng, 4, 0, "Prima Cohors"), fill=_ink(), font=font)
+    battle = _i(sim, "soldiers_ready")
+    heavy = _i(sim, "legion_heavy")
+    light = _i(sim, "legion_light")
+    sling = _i(sim, "legion_sling")
+    draw.text(
+        (_PANEL_X + 300, _PANEL_Y + 56),
+        f"{_eng(eng, 44, 8, 'We have ')}{battle} {_eng(eng, 44, 9, 'battle-ready soldiers')}",
+        fill=_ink(),
+        font=font,
+    )
+    draw.text(
+        (_PANEL_X + 300, _PANEL_Y + 72),
+        f"{heavy} Heavy, {light} Light, {sling} Sling, {aux} Auxiliaries",
+        fill=_ink(),
+        font=font,
+    )
+    morale = max(0, min(4, _i(sim, "legion_morale")))
+    ready_i = max(0, min(4, _i(sim, "legion_readiness")))
+    draw.text(
+        (_PANEL_X + 300, _PANEL_Y + 88),
+        _eng(eng, 34, 19 + morale, "Troop morale: EXCELLENT"),
+        fill=_ink(),
+        font=font,
+    )
+    draw.text(
+        (_PANEL_X + 300, _PANEL_Y + 104),
+        _eng(eng, 34, 24 + ready_i, "Readiness: EXCELLENT"),
+        fill=_ink(),
+        font=font,
+    )
+    cohorts = _i(sim, "cohorts")
+    if cohorts <= 0:
+        cohort_s = _eng(eng, 34, 8, "The legion has no cohorts.")
+    elif cohorts == 1:
+        cohort_s = _eng(eng, 34, 9, "Legion has 1 cohort.")
+    else:
+        cohort_s = f"{_eng(eng, 34, 10, 'Legion has')} {cohorts} {_eng(eng, 34, 11, 'cohorts.')}"
+    cr = max(0, min(2, _i(sim, "cohort_rank")))
+    rank_s = _eng(eng, 34, 29 + cr, "Major") if cr < 2 else _eng(eng, 34, 38, "Major")
+    draw.text((_PANEL_X + 300, _PANEL_Y + 120), f"{cohort_s}  {rank_s}", fill=_ink(), font=font)
+
+
+def _blit_empire_native(state: ForumState, sim: SimState, *, eng=None) -> Image.Image:
+    """Kind 6 — EMPIRE.PL8 full screen. No crowd, no 4×3 chrome."""
+    if state.empire_map is not None:
+        out = state.empire_map.resize((FORUM_NATIVE_W, FORUM_NATIVE_H), Image.Resampling.NEAREST)
+    else:
+        out = Image.new("RGB", (FORUM_NATIVE_W, FORUM_NATIVE_H), (48, 40, 28))
+    out = out.convert("RGBA")
+    draw = ImageDraw.Draw(out)
+    font = _serif_font(16)
+    small = _serif_font(13)
+    title = empire_circa_title(int(getattr(sim, "year_raw", 0)), eng)
+    tw = draw.textlength(title, font=font) if hasattr(draw, "textlength") else 280
+    draw.text(((FORUM_NATIVE_W - int(tw)) // 2, 18), title, fill=(16, 12, 8, 255), font=font)
+    cap = _eng(eng, 33, 1, "Select province for more info")
+    cw = draw.textlength(cap, font=small) if hasattr(draw, "textlength") else 240
+    draw.text(((FORUM_NATIVE_W - int(cw)) // 2, 402), cap, fill=(16, 12, 8, 255), font=small)
+    foot = _eng(eng, 33, 3, "Right Click to Return to Forum")
+    fw = draw.textlength(foot, font=small) if hasattr(draw, "textlength") else 260
+    draw.text(((FORUM_NATIVE_W - int(fw)) // 2, 448), foot, fill=(240, 230, 200, 255), font=small)
+    pick = state.empire_pick
+    if pick and 1 <= pick <= 44:
+        name = _eng(eng, 5, pick, "Unknown Province")
+        status = _eng(eng, 47, 9, "As yet unconquered.")
+        box = (20, 340, 280, 56)
+        draw.rectangle((box[0], box[1], box[0] + box[2], box[1] + box[3]), fill=(8, 40, 16, 220), outline=(200, 220, 160))
+        draw.text((box[0] + 8, box[1] + 6), name, fill=(220, 240, 200, 255), font=small)
+        draw.text((box[0] + 8, box[1] + 26), status, fill=(200, 220, 180, 255), font=small)
+        if pick - 1 < len(state.empire_parts):
+            _im, x, y = state.empire_parts[pick - 1]
+            w, h = _im.size
+            draw.ellipse((x - 3, y - 3, x + w + 3, y + h + 3), outline=(200, 32, 24, 255), width=2)
+    return out.convert("RGB")
 
 
 def _prior_year_raw(year_raw: int) -> int:
@@ -2395,7 +2969,6 @@ def selftest() -> list[str]:
     )
     scribe = ForumState(kind=KIND_SCRIBE, labor=labor)
     sframe = blit_forum((640, 480), scribe, sim_h)
-    click_forum(scribe, sx + 2, sy + 2, sim_h)
     if scribe.kind != KIND_SCRIBE or sframe.size != (640, 480):
         lines.append(f"FAIL  scribe blit/kind {scribe.kind} {sframe.size}")
     else:
@@ -2511,19 +3084,99 @@ def selftest() -> list[str]:
                 lines.append("ok    retail RAT_FRON + RAT_BACK[0] column 96x337")
     except (OSError, ValueError, FileNotFoundError) as exc:
         lines.append(f"ok    Oracle PL8 skip ({exc})")
+    opened = ForumState(kind=KIND_CHROME)
     ox, oy, _ow, _oh = button_rect(2)
-    stub = click_forum(ForumState(kind=KIND_CHROME), ox + 2, oy + 2, sim_o)
-    rx, ry, _rw, _rh = button_rect(9)
-    rome = click_forum(ForumState(kind=KIND_CHROME), rx + 2, ry + 2, sim_o)
-    px, py, _pw2, _ph2 = button_rect(7)
-    pers = click_forum(ForumState(kind=KIND_CHROME), px + 2, py + 2, sim_o)
-    cx, cy, _cw, _ch = button_rect(1)
-    cent = click_forum(ForumState(kind=KIND_CHROME), cx + 2, cy + 2, sim_o)
-    stubs = (stub, rome, pers, cent)
-    if any("cannot get promoted" not in s.lower() and "city-only" not in s.lower() for s in stubs):
-        lines.append(f"FAIL  Career stubs {stubs!r}")
+    emp = click_forum(opened, ox + 2, oy + 2, sim_o)
+    if opened.kind != KIND_EMPIRE or "EMPIRE" not in emp.upper():
+        lines.append(f"FAIL  EMPIRE MAP open {opened.kind} {emp!r}")
     else:
-        lines.append("ok    Career EMPIRE / ROME / PERSONAL / CENTURION stay [31]+24")
+        lines.append("ok    EMPIRE MAP opens full-screen chrome (no career travel)")
+    click_forum(opened, ox + 2, oy + 2, sim_o)
+    # Empire swallows chrome clicks — right-click / Esc returns (window _forum_back).
+    idle = ForumState(kind=KIND_CHROME)
+    rx, ry, _rw, _rh = button_rect(9)
+    rome = click_forum(idle, rx + 2, ry + 2, sim_o)
+    if idle.kind != KIND_ROME or "ROME" not in rome.upper():
+        lines.append(f"FAIL  ROME open {idle.kind} {rome!r}")
+    else:
+        lines.append("ok    ROME overlay opens")
+    click_forum(idle, rx + 2, ry + 2, sim_o)
+    if idle.kind != KIND_CHROME:
+        lines.append(f"FAIL  re-click ROME dismiss {idle.kind}")
+    else:
+        lines.append("ok    re-click advisor returns to CLEAR FORUM")
+    px, py, _pw2, _ph2 = button_rect(7)
+    pers = click_forum(idle, px + 2, py + 2, sim_o)
+    if idle.kind != KIND_PERSONAL:
+        lines.append(f"FAIL  PERSONAL open {idle.kind} {pers!r}")
+    else:
+        lines.append("ok    PERSONAL overlay opens")
+    cx, cy, _cw, _ch = button_rect(1)
+    idle.kind = KIND_CHROME
+    cent = click_forum(idle, cx + 2, cy + 2, sim_o)
+    if idle.kind != KIND_CENTURION:
+        lines.append(f"FAIL  CENTURION open {idle.kind} {cent!r}")
+    else:
+        lines.append("ok    CENTURION overlay opens")
+    mx8, my8, _mw, _mh = button_rect(8)
+    idle.kind = KIND_CHROME
+    mer = click_forum(idle, mx8 + 2, my8 + 2, sim_o)
+    if idle.kind != KIND_MERCHANT:
+        lines.append(f"FAIL  MERCHANT open {idle.kind} {mer!r}")
+    else:
+        lines.append("ok    MERCHANT overlay opens")
+    hx, hy, _hw, _hh = button_rect(10)
+    idle.kind = KIND_CHROME
+    help_msg = click_forum(idle, hx + 2, hy + 2, sim_o)
+    if idle.kind != KIND_HELP or "HELP" not in help_msg.upper():
+        lines.append(f"FAIL  HELP {idle.kind} {help_msg!r}")
+    else:
+        lines.append("ok    HELP highlights (no overlay)")
+    clx, cly, _clw, _clh = button_rect(5)
+    idle.kind = KIND_ROME
+    cleared = click_forum(idle, clx + 2, cly + 2, sim_o)
+    if idle.kind != KIND_CHROME or "CLEAR" not in cleared.upper():
+        lines.append(f"FAIL  CLEAR FORUM {idle.kind} {cleared!r}")
+    else:
+        lines.append("ok    CLEAR FORUM dismisses overlay")
+    fresh = open_forum(SimState(city_only=1), tiles)
+    if fresh.kind != KIND_CHROME:
+        lines.append(f"FAIL  open_forum idle {fresh.kind}")
+    else:
+        lines.append("ok    Forum enters idle CLEAR FORUM")
+    if promotions_left(1) != 9 or promotions_left(10) != 0:
+        lines.append(f"FAIL  promotions {promotions_left(1)} {promotions_left(10)}")
+    else:
+        lines.append("ok    promotions-to-Emperor = 10 − rank")
+    if favor_quote_skip(0) != 3 or favor_quote_skip(50) != 8:
+        lines.append(f"FAIL  favor skip {favor_quote_skip(0)} {favor_quote_skip(50)}")
+    else:
+        lines.append("ok    favor quote [37]+3…+14")
+    circa = empire_circa_title(-228)
+    if "228 BC" not in circa or "circa" not in circa.lower():
+        lines.append(f"FAIL  empire title {circa!r}")
+    else:
+        lines.append("ok    Roman empire circa <city year>")
+    rframe = blit_forum((640, 480), ForumState(kind=KIND_ROME), SimState(city_only=1, savings=0))
+    pframe = blit_forum((640, 480), ForumState(kind=KIND_PERSONAL), SimState(city_only=1, rank=0))
+    cframe = blit_forum((640, 480), ForumState(kind=KIND_CENTURION), SimState(city_only=1))
+    mframe = blit_forum((640, 480), ForumState(kind=KIND_MERCHANT), SimState(city_only=1))
+    eframe = blit_forum((640, 480), ForumState(kind=KIND_EMPIRE), SimState(city_only=1, year_raw=-300))
+    if any(f.size != (640, 480) for f in (rframe, pframe, cframe, mframe, eframe)):
+        lines.append("FAIL  new advisor blit size")
+    else:
+        lines.append("ok    Rome / Personal / Legion / Merchant / Empire blit 640x480")
+    sim_g = SimState(city_only=1)
+    goods = bytearray(768)
+    struct.pack_into("<i", goods, 1 * 48 + 8, 2)
+    struct.pack_into("<i", goods, 1 * 48 + 4, 10)
+    struct.pack_into("<i", goods, 1 * 48 + 36, 3)
+    sim_g.goods = goods
+    rows = industry_rows(sim_g)
+    if not rows or rows[0][1] != "Grapes":
+        lines.append(f"FAIL  industry rows {rows}")
+    else:
+        lines.append("ok    Merchant lists local Grapes from chunk 339")
     close_sim = SimState(
         city_only=1,
         year_raw=-299,
