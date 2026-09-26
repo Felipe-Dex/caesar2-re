@@ -77,7 +77,7 @@ class HostOptions:
     music: bool = False
     sound: bool = True
     animations: bool = True
-    auto_save: bool = False  # leftover — host does not write lastyear.sav
+    auto_save: bool = False  # leftover; wrap always overwrites sav/LASTYEAR.SAV
     annual_summary: bool = True  # [56]+6 / FUN_00061389 panel
     scroll_step: int = 1  # 1…3 × PAN_STEP
 

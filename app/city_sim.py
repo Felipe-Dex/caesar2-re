@@ -1334,6 +1334,7 @@ def city_sim_phase(
         year_wrapped = wrapped and int(state.year_raw) != year_before
         if year_wrapped:
             end_year_turbo(state, restore=True)
+            # Host writes sav/LASTYEAR.SAV after this (0x34E2D / F5 write_sav).
         if getattr(state, "city_only", 0) and can and walkers is not None:
             extra = wt.city_only_try_invasion(
                 state, tiles, walkers, years_played=years_played

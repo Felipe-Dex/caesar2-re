@@ -89,6 +89,8 @@ _LASTYEAR_FLAGS = (0, 0, 1, 0x01)
 # (CITY.SAV, FELIPE01.SAV, CAESAR2.SAV).
 SAV_SUBDIR = "sav"
 DEFAULT_SAV_NAME = "CITY.SAV"
+# sav_year_end 0x34D92 / string 0x90b40 lastyear.sav (DOS 8.3).
+LASTYEAR_NAME = "LASTYEAR.SAV"
 SAVE_NEW_LABEL = "[ new ]"
 # MenuReport fits ~12 lines; keep one for [ new ].
 SAVE_PICKER_LIMIT = 11
@@ -502,6 +504,28 @@ def write_sav(
     return dest
 
 
+def maybe_write_lastyear(
+    year_wrapped: bool,
+    city: CityMap | bytearray | bytes,
+    walkers: Sequence[Walker] | bytearray | bytes,
+    sim: SimState,
+    *,
+    game: Path | None = None,
+    root: Path | None = None,
+) -> Path | None:
+    """Dec→Jan autosave. Same write_sav as F5; 8.3 overwrite.
+
+    EXE: ``lastyear.sav`` at ``0x90b40``. ``sav_write`` ``0x70174`` from
+    ``sav_year_end`` ``0x34D92`` — ``0x34DC4`` then RET (skips [72]), or
+    ``0x34E2D`` after Annual Summary ``0x61389``. Host always overwrites
+    ``sav/LASTYEAR.SAV`` and still opens [72].
+    """
+    if not year_wrapped:
+        return None
+    dest = dest_path(game, root=root, name=LASTYEAR_NAME)
+    return write_sav(dest, city, walkers, sim, game=game)
+
+
 def selftest() -> list[str]:
     """Round-trip City Only chunks through a tempfile. No retail copy."""
     import tempfile
@@ -700,4 +724,48 @@ def selftest() -> list[str]:
             lines.append(f"FAIL  dest_path name= {named}")
         else:
             lines.append("ok    dest_path name= sanitizes 8.3")
+        slot = dest_path(name=LASTYEAR_NAME, root=Path(tmp))
+        if slot != Path(tmp) / SAV_SUBDIR / LASTYEAR_NAME:
+            lines.append(f"FAIL  lastyear dest {slot}")
+        else:
+            lines.append("ok    dest_path name=LASTYEAR.SAV is 8.3")
+        from app.city_sim import city_sim_phase
+
+        fresh.sim.phase = 0xD6
+        fresh.sim.month = 0
+        feb = city_sim_phase(fresh.city.tiles, fresh.sim, fresh.walkers)
+        if maybe_write_lastyear(
+            feb.year_wrapped, fresh.city, fresh.walkers, fresh.sim, root=Path(tmp)
+        ) is not None:
+            lines.append("FAIL  Jan-Feb wrote lastyear.sav")
+        else:
+            lines.append("ok    Jan-Feb does not write LASTYEAR.SAV")
+        fresh.sim.phase = 0xD6
+        fresh.sim.month = 11
+        fresh.sim.year_raw = -300
+        jan = city_sim_phase(fresh.city.tiles, fresh.sim, fresh.walkers)
+        dest = maybe_write_lastyear(
+            jan.year_wrapped, fresh.city, fresh.walkers, fresh.sim, root=Path(tmp)
+        )
+        want = Path(tmp) / SAV_SUBDIR / LASTYEAR_NAME
+        n = dest.stat().st_size if dest is not None else 0
+        flags = dest.read_bytes()[:4] if dest is not None else b""
+        if dest != want or n != SAV_SIZE or flags != bytes(_LASTYEAR_FLAGS):
+            lines.append(
+                f"FAIL  year wrap lastyear dest={dest} n={n} flags={flags!r}"
+            )
+        else:
+            lines.append(f"ok    year wrap writes sav/{LASTYEAR_NAME} {n} B")
+        again = maybe_write_lastyear(
+            True, fresh.city, fresh.walkers, fresh.sim, root=Path(tmp)
+        )
+        if (
+            dest is None
+            or again is None
+            or again != dest
+            or again.stat().st_size != SAV_SIZE
+        ):
+            lines.append("FAIL  lastyear overwrite")
+        else:
+            lines.append(f"ok    year wrap overwrites sav/{LASTYEAR_NAME} {SAV_SIZE} B")
     return lines

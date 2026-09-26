@@ -1866,6 +1866,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
         ph, w = n.phase, n.walkers
         _refresh_after_sim(houses_changed=ph.houses_changed > 0)
         _maybe_annual_summary(ph)
+        _maybe_lastyear(ph)
         _maybe_win_lose()
         _play_labor_sfx()
         _pump_advisor()
@@ -1893,6 +1894,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
         date = format_hud_date(ctx.sim.date)
         _refresh_after_sim(houses_changed=ph.houses_changed > 0)
         _maybe_annual_summary(ph)
+        _maybe_lastyear(ph)
         _maybe_win_lose()
         _play_labor_sfx()
         _pump_advisor()
@@ -2026,6 +2028,23 @@ def show(ctx: BootContext, *, game: Path) -> None:
         if not options.annual_summary:
             return
         _open_report(annual_summary_report(ctx.sim, eng=ctx.eng))
+
+    def _maybe_lastyear(ph) -> None:
+        """sav_year_end 0x34E2D lastyear.sav after [72]. Same write_sav as F5."""
+        if not getattr(ph, "year_wrapped", False):
+            return
+        from app.sav import maybe_write_lastyear
+        from app.sim_log import write
+
+        try:
+            dest = maybe_write_lastyear(
+                True, ctx.city, ctx.walkers, ctx.sim, game=game
+            )
+        except (OSError, ValueError):
+            return
+        if dest is None:
+            return
+        write(f"sav_write  {dest}  {dest.stat().st_size} B")
 
     def _maybe_win_lose() -> None:
         """0x59b06 / 0x59aa7 reports. Not Career [115]+ Emperor letters."""
@@ -2431,6 +2450,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
             if ph.houses_changed > 0:
                 _refresh_after_sim(houses_changed=True)
             _maybe_annual_summary(ph)
+            _maybe_lastyear(ph)
             _maybe_win_lose()
             _play_labor_sfx()
             _pump_advisor()
