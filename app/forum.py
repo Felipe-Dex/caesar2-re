@@ -2,8 +2,10 @@
 
 Forum is a submode (view_submode=1): no sim tick. Open from a Forum
 building (0xAF / 0xB2–0xB4 / 0xB7–0xB9) or INT_CITY view-tab sprite 11.
-Career EMPIRE / ROME / PERSONAL stay stubs. Oracle is chunks 286–289
-(+ avg 46). Scribe is HISTORY graphs only (no letters).
+Career EMPIRE / ROME / PERSONAL stay stubs. Oracle is the 4-column
+RAT_BACK / RAT_FRON view (chunks 286–289 + avg 46). Click a rating
+label plays B-series RAW (0x57450 → 0x135a4). Scribe is HISTORY
+graphs only (no letters).
 
 Labor table = SavChunk 56 (8× assigned/need) @ [0xD2E6C]. Need is
 recomputed from the city map; assigned is player-controlled (sliders)
@@ -156,6 +158,28 @@ _BTN_GAP = 4
 _PANEL_X, _PANEL_Y = 16, 36
 _PANEL_W, _PANEL_H = 608, 320
 
+# Oracle kind 0xA (host KIND_ORACLE). Draw 0x5e9eb / click 0x3d843.
+# Labels [31]+1…+4 at y=0x167; Need [31]+6 at y=0x177; hit y=0x164.
+ORACLE_HIT_X0 = 0x0A
+ORACLE_HIT_Y = 0x164
+ORACLE_HIT_W = 0x8C
+ORACLE_HIT_H = 0x21
+ORACLE_COL_STRIDE = 0xA0
+ORACLE_NAME_Y = 0x167
+ORACLE_NEED_Y = 0x177
+ORACLE_NAME_X = (0x1C, 0xBC, 0x160, 0x1FC)
+ORACLE_NEED_X = (0x1C, 0xBC, 0x15C, 0x1FC)
+ORACLE_AVG_X, ORACLE_AVG_Y = 0xA0, 0x18A
+ORACLE_PROMPT_X, ORACLE_PROMPT_Y = 0x18, 0x19E
+ORACLE_BACK_X, ORACLE_BACK_Y = 0xCC, 0x1D0
+ORACLE_COL_Y0 = 0x12C  # 300 − 3*rating = capital Y
+ORACLE_COL_SCALE = 3
+ORACLE_INK = (16, 176, 16, 255)
+ORACLE_INK_DIM = (12, 140, 12, 255)
+# 0x57450 live ids → EAX 0x1f…0x2c → raw_name_bank B02…B15.
+ORACLE_LIVE_IDS = (1, 2, 3, 4, 5, 6, 9, 10, 11, 12, 13, 14, 15, 16)
+ORACLE_RAW_EAX0 = 0x1F
+
 # Native C2 Forum overlay. Integer-upscaled to the city well (left of the
 # 162 px INT_CITY strip — same as city_chrome.SIDEBAR_W). At 640×480 the
 # overlay is full-window; the sidebar is never stretched.
@@ -215,7 +239,10 @@ class ForumState:
     labor: LaborState = field(default_factory=LaborState)
     bg: Image.Image | None = None
     bits: list = field(default_factory=list)
+    oracle_back: Image.Image | None = None  # RAT_FRON 640×480
+    oracle_column: Image.Image | None = None  # RAT_BACK[0] 96×337
     oracle_advice: int | None = None  # 0…3 column, or None
+    oracle_sfx: str = ""  # B-series stem from 0x135a4, empty if none
     scribe_years: int = 10  # 10 / 20 / 30 — arrows only change the window
 
 
@@ -652,43 +679,81 @@ def city_only_won(sim: SimState) -> bool:
     return p >= need and c >= need and (p + c) // 2 >= avg_need
 
 
-def oracle_advice_skip(sim: SimState, col: int) -> int:
-    """0x57450 + city-only force id 17 → [31]+24. col 0…3.
-
-    Empire / Peace stay the city-only stub. Prosperity uses surplus /
-    housing_income. Culture uses cover mins [0x102580/56C/54C].
-    """
-    if col < 0 or col > 3:
-        return 7
-    if getattr(sim, "city_only", 0) and col < 2:
-        return 24
+def oracle_advice_id(sim: SimState, col: int) -> int:
+    """0x57450 advice id 1…16. City-only rewrite to 17 is draw-only."""
+    if col == 0:
+        if int(getattr(sim, "rating_empire_cap", 0)):
+            return 1
+        if int(getattr(sim, "imperial_favor", 0)) < 80:
+            return 2
+        if int(getattr(sim, "province_links", 0)) == 0:
+            return 3
+        return 4
+    if col == 1:
+        if int(getattr(sim, "rating_peace_cap", 0)):
+            return 5
+        return 6
     if col == 2:
         if int(getattr(sim, "rating_prosperity_cap", 0)):
-            return 16
+            return 9
         surplus = int(getattr(sim, "rating_surplus", 0))
         if surplus == 0:
             books = treasurer_estimate(sim)
             surplus = books.surplus
         if surplus < 0:
-            return 17
+            return 10
         income = int(getattr(sim, "housing_income", 0))
         if income <= 0:
             income = int(getattr(sim, "tax_wealth", 0))
         if income < 10:
-            return 18
-        return 19
+            return 11
+        return 12
     if col == 3:
         if int(getattr(sim, "rating_culture_cap", 0)):
-            return 20
+            return 13
         ent = int(getattr(sim, "cover_entertainment", 0))
         temple = int(getattr(sim, "cover_temple", 0))
         svc = int(getattr(sim, "cover_services", 0))
         if ent <= temple and ent <= svc:
-            return 21
+            return 14
         if temple <= ent and temple <= svc:
-            return 22
-        return 23
-    return 24
+            return 15
+        return 16
+    return 17
+
+
+def oracle_advice_skip(sim: SimState, col: int) -> int:
+    """0x57450 + city-only force id 17 → [31]+24. col 0…3.
+
+    Empire / Peace stay the city-only stub. Prosperity uses surplus /
+    housing_income. Culture uses cover mins [0x102580/56C/54C].
+    Audio still uses the live id (B02…B15) even when text is +24.
+    """
+    if col < 0 or col > 3:
+        return 7
+    aid = oracle_advice_id(sim, col)
+    if getattr(sim, "city_only", 0) and aid < 9:
+        return 24
+    return aid + 7
+
+
+def oracle_raw_index(aid: int) -> int | None:
+    """0x135a4 EAX = 0x1f + index of live id. None for stubs / city-only 17."""
+    if aid not in ORACLE_LIVE_IDS:
+        return None
+    return ORACLE_RAW_EAX0 + ORACLE_LIVE_IDS.index(aid)
+
+
+def oracle_raw_stem(aid: int) -> str:
+    """Bank 0x93694: 0–29 A01–A30, 30–59 B01–B30. Advice starts at B02."""
+    idx = oracle_raw_index(aid)
+    if idx is None:
+        return ""
+    if idx < 30:
+        return f"A{idx + 1:02d}"
+    if idx < 60:
+        return f"B{idx - 29:02d}"
+    return f"C{idx - 59:02d}"
 
 
 def apply_month_treasury(sim: SimState) -> TreasurerBooks:
@@ -986,12 +1051,40 @@ def load_forum_bits(game: Path) -> list:
         return []
 
 
+def load_oracle_scene(game: Path) -> Image.Image | None:
+    """RAT_FRON.PL8 — 640×480 city / mountains. Palette RAT_BACK.256."""
+    try:
+        from app import assets
+
+        frames, _path = assets.load_pl8_frames(game, "RAT_FRON.PL8")
+        if frames:
+            return frames[0].convert("RGBA")
+    except (OSError, ValueError, FileNotFoundError):
+        return None
+    return None
+
+
+def load_oracle_column(game: Path) -> Image.Image | None:
+    """RAT_BACK.PL8 sprite 0 — 96×337 marble column (xy 321,15 in the sheet)."""
+    try:
+        from app import assets
+
+        packed = assets.load_pl8_sprites_xy(game, "RAT_BACK.PL8")
+        if packed:
+            return packed[0][0].convert("RGBA")
+    except (OSError, ValueError, FileNotFoundError):
+        return None
+    return None
+
+
 def open_forum(sim: SimState, tiles: bytearray, game: Path | None = None) -> ForumState:
     """forum_view_setup — enter PLEBS (the panel this pass is for)."""
     state = ForumState(kind=KIND_PLEBS, labor=labor_from_sim(sim))
     if game is not None:
         state.bg = load_forum_art(game)
         state.bits = load_forum_bits(game)
+        state.oracle_back = load_oracle_scene(game)
+        state.oracle_column = load_oracle_column(game)
     sync_labor(state.labor, tiles, sim)
     return state
 
@@ -1185,6 +1278,15 @@ def click_forum(
     """
     if frame_size is not None:
         mx, my = forum_to_native(mx, my, frame_size[0], frame_size[1])
+    # Oracle is a full screen (no 4×3 chrome). Hit the rating texts first.
+    if state.kind == KIND_ORACLE:
+        col = _oracle_column(mx, my)
+        if col is not None:
+            state.oracle_advice = col
+            state.oracle_sfx = oracle_raw_stem(oracle_advice_id(sim, col))
+            return ""
+        return ""
+
     hit = button_at(mx, my)
     if hit is not None:
         skip = _BUTTON_SKIP[hit]
@@ -1195,6 +1297,7 @@ def click_forum(
         if kind in (KIND_PLEBS, KIND_ORACLE, KIND_TREASURER, KIND_SCRIBE):
             state.kind = kind
             state.oracle_advice = None
+            state.oracle_sfx = ""
             return label
         state.kind = KIND_CHROME
         if skip in (11, 4, 2, 6):  # EMPIRE MAP / ROME / PERSONAL / CENTURION
@@ -1214,13 +1317,6 @@ def click_forum(
         action = hit_treasurer(mx, my)
         if action:
             apply_treasurer_hit(action, sim)
-            return ""
-        return ""
-
-    if state.kind == KIND_ORACLE:
-        col = _oracle_column(mx, my)
-        if col is not None:
-            state.oracle_advice = col
             return ""
         return ""
 
@@ -1256,13 +1352,14 @@ def apply_scribe_hit(state: ForumState, action: str) -> None:
 
 
 def _oracle_column(mx: int, my: int) -> int | None:
-    y = _PANEL_Y + 48
-    if not (_PANEL_Y + 40 <= my < y + 80):
+    """0x3d875: x = 10 + esi*160, y=0x164, 140×33. Average is not a hit."""
+    if not (ORACLE_HIT_Y <= my < ORACLE_HIT_Y + ORACLE_HIT_H):
         return None
-    w = _PANEL_W // 4
-    if not (_PANEL_X <= mx < _PANEL_X + _PANEL_W):
-        return None
-    return (mx - _PANEL_X) // w
+    for col in range(4):
+        x = ORACLE_HIT_X0 + col * ORACLE_COL_STRIDE
+        if x <= mx < x + ORACLE_HIT_W:
+            return col
+    return None
 
 
 def blit_forum(
@@ -1290,6 +1387,8 @@ def blit_forum(
 
 def _blit_forum_native(state: ForumState, sim: SimState, *, eng=None) -> Image.Image:
     """Paint the C2 Forum at 640×480 (panel, sliders, 4×3 chrome)."""
+    if state.kind == KIND_ORACLE:
+        return _blit_oracle_native(state, sim, eng=eng)
     if state.bg is not None:
         out = state.bg.resize((FORUM_NATIVE_W, FORUM_NATIVE_H), Image.Resampling.NEAREST)
     else:
@@ -1298,11 +1397,9 @@ def _blit_forum_native(state: ForumState, sim: SimState, *, eng=None) -> Image.I
     draw = ImageDraw.Draw(out)
     font = _font()
     title = _eng(eng, 36, 0, "Plebeian Tribune") if state.kind == KIND_PLEBS else (
-        _eng(eng, 31, 0, "Your Ratings") if state.kind == KIND_ORACLE else (
-            _eng(eng, 28, 12, "Treasury") if state.kind == KIND_TREASURER else (
-                _eng(eng, 32, 0, "Your Scribe") if state.kind == KIND_SCRIBE else
-                _eng(eng, 28, 0, "CLEAR FORUM")
-            )
+        _eng(eng, 28, 12, "Treasury") if state.kind == KIND_TREASURER else (
+            _eng(eng, 32, 0, "Your Scribe") if state.kind == KIND_SCRIBE else
+            _eng(eng, 28, 0, "CLEAR FORUM")
         )
     )
     if state.kind != KIND_CHROME:
@@ -1322,8 +1419,6 @@ def _blit_forum_native(state: ForumState, sim: SimState, *, eng=None) -> Image.I
             draw.text((_PANEL_X + 10, _PANEL_Y + 8), title[:48], fill=(255, 228, 160, 255), font=font)
             if state.kind == KIND_PLEBS:
                 _draw_plebs(draw, font, state.labor, eng)
-            elif state.kind == KIND_ORACLE:
-                _draw_oracle(draw, font, sim, state.oracle_advice, eng)
             elif state.kind == KIND_SCRIBE:
                 _draw_scribe(draw, font, sim, state.scribe_years, eng)
     for i, skip in enumerate(_BUTTON_SKIP):
@@ -1449,67 +1544,123 @@ def _draw_plebs(draw: ImageDraw.ImageDraw, font, labor: LaborState, eng) -> None
             )
 
 
-def _draw_oracle(draw, font, sim: SimState, advice: int | None, eng) -> None:
+def _oracle_col_top(rating: int) -> int:
+    """0x5eaa7: dest Y = 0x12c − rating*3."""
+    return ORACLE_COL_Y0 - ORACLE_COL_SCALE * int(rating)
+
+
+def _oracle_ratings(sim: SimState) -> tuple[int, int, int, int, int]:
+    return (
+        int(getattr(sim, "rating_empire", 0)),
+        int(getattr(sim, "rating_peace", 0)),
+        int(getattr(sim, "rating_prosperity", 0)),
+        int(getattr(sim, "rating_culture", 0)),
+        int(getattr(sim, "rating_avg", 0)),
+    )
+
+
+def _wrap_oracle_text(text: str, width: int = 72) -> list[str]:
+    words = text.replace("\n", " ").split()
+    if not words:
+        return []
+    lines: list[str] = []
+    cur = words[0]
+    for word in words[1:]:
+        trial = f"{cur} {word}"
+        if len(trial) <= width:
+            cur = trial
+        else:
+            lines.append(cur)
+            cur = word
+    lines.append(cur)
+    return lines
+
+
+def _blit_oracle_columns(out: Image.Image, column: Image.Image | None, ratings: tuple[int, ...]) -> None:
+    """0x5eb1d: x = 32 + esi*160, y = clamp(300−3*rating, 0, 0x126). Sprite 0."""
+    if column is None:
+        draw = ImageDraw.Draw(out)
+        for i, val in enumerate(ratings[:4]):
+            y = max(0, min(0x126, _oracle_col_top(val)))
+            x = 0x20 + i * ORACLE_COL_STRIDE
+            draw.rectangle((x + 28, y + 12, x + 68, 340), fill=(196, 168, 96, 230))
+            draw.rectangle((x + 16, y, x + 80, y + 18), fill=(210, 184, 110, 230))
+        return
+    col = column.convert("RGBA")
+    for i, val in enumerate(ratings[:4]):
+        x = 0x20 + i * ORACLE_COL_STRIDE
+        y = max(0, min(0x126, _oracle_col_top(val)))
+        out.paste(col, (x, y), col)
+
+
+def _blit_oracle_native(state: ForumState, sim: SimState, *, eng=None) -> Image.Image:
+    """Full-screen Your Ratings — no 4×3 chrome. Right-click returns."""
+    if state.oracle_back is not None:
+        out = state.oracle_back.resize(
+            (FORUM_NATIVE_W, FORUM_NATIVE_H), Image.Resampling.NEAREST
+        ).convert("RGBA")
+    elif state.bg is not None:
+        out = state.bg.resize(
+            (FORUM_NATIVE_W, FORUM_NATIVE_H), Image.Resampling.NEAREST
+        ).convert("RGBA")
+    else:
+        out = Image.new("RGBA", (FORUM_NATIVE_W, FORUM_NATIVE_H), (40, 56, 72, 255))
+    e, p, pr, c, avg = _oracle_ratings(sim)
+    _blit_oracle_columns(out, state.oracle_column, (e, p, pr, c))
+    draw = ImageDraw.Draw(out)
+    font = _serif_font(14)
+    small = _serif_font(13)
     names = (
         _eng(eng, 31, 1, "Empire"),
         _eng(eng, 31, 2, "Peace"),
         _eng(eng, 31, 3, "Prosperity"),
         _eng(eng, 31, 4, "Culture"),
     )
-    vals = (
-        int(getattr(sim, "rating_empire", 0)),
-        int(getattr(sim, "rating_peace", 0)),
-        int(getattr(sim, "rating_prosperity", 0)),
-        int(getattr(sim, "rating_culture", 0)),
-    )
-    avg = int(getattr(sim, "rating_avg", 0))
-    need_ind, _need_avg = rating_need(sim)
-    w = _PANEL_W // 4
+    vals = (e, p, pr, c)
+    need_ind, need_avg = rating_need(sim)
+    city_only = bool(getattr(sim, "city_only", 0))
+    need_tok = _eng(eng, 31, 6, "(Need")
     for i, (name, val) in enumerate(zip(names, vals)):
-        x = _PANEL_X + i * w
-        draw.rectangle((x + 8, _PANEL_Y + 40, x + w - 8, _PANEL_Y + 110), outline=(200, 180, 90))
-        draw.text((x + 16, _PANEL_Y + 48), name, fill=(255, 228, 160), font=font)
-        draw.text((x + 16, _PANEL_Y + 68), f"{val} %", fill=(220, 230, 210), font=font)
-        if getattr(sim, "city_only", 0):
-            if i >= 2:
-                draw.text(
-                    (x + 16, _PANEL_Y + 84),
-                    f"{_eng(eng, 31, 6, '(Need')} {need_ind} %)",
-                    fill=(180, 180, 160),
-                    font=font,
-                )
-        else:
+        draw.text((ORACLE_NAME_X[i], ORACLE_NAME_Y), f"{name} {val}%", fill=ORACLE_INK, font=font)
+        show_need = (not city_only) or i >= 2
+        if show_need:
             draw.text(
-                (x + 16, _PANEL_Y + 84),
-                f"{_eng(eng, 31, 6, '(Need')} 0 %)",
-                fill=(180, 180, 160),
-                font=font,
+                (ORACLE_NEED_X[i], ORACLE_NEED_Y),
+                f"{need_tok} {need_ind}%)",
+                fill=ORACLE_INK,
+                font=small,
             )
+    avg_lab = _eng(eng, 31, 5, "Average rating: ")
     draw.text(
-        (_PANEL_X + 10, _PANEL_Y + 120),
-        f"{_eng(eng, 31, 5, 'Average rating: ')}{avg} %",
-        fill=(220, 230, 210),
+        (ORACLE_AVG_X, ORACLE_AVG_Y),
+        f"{avg_lab}{avg}% {need_tok} {need_avg}%)",
+        fill=ORACLE_INK,
         font=font,
     )
-    if advice is None:
+    if state.oracle_advice is None:
         prompt = _eng(
             eng, 31, 7,
             "Select any of the ratings above to receive advice on improving them.",
         )
     else:
-        skip = oracle_advice_skip(sim, advice)
+        skip = oracle_advice_skip(sim, state.oracle_advice)
         fallback = (
             "You cannot get promoted when playing in city-only mode. "
-            "Get ADVICE on your city's Prosperity or Culture ratings by clicking on their boxes."
+            "Get ADVICE on your city's Prosperity or Culture ratings by clicking on their boxes. "
             if skip == 24 else ""
         )
         prompt = _eng(eng, 31, skip, fallback)
-    draw.text((_PANEL_X + 10, _PANEL_Y + 150), prompt[:86], fill=(200, 210, 190), font=font)
-    y = _PANEL_Y + 166
-    for chunk in (prompt[86:172], prompt[172:258]):
-        if chunk:
-            draw.text((_PANEL_X + 10, y), chunk, fill=(200, 210, 190), font=font)
-            y += 14
+    y = ORACLE_PROMPT_Y
+    for line in _wrap_oracle_text(prompt, 74)[:4]:
+        draw.text((ORACLE_PROMPT_X, y), line, fill=ORACLE_INK, font=small)
+        y += 14
+    draw.text(
+        (ORACLE_BACK_X, ORACLE_BACK_Y),
+        _eng(eng, 33, 3, "Right Click to Return to Forum"),
+        fill=ORACLE_INK,
+        font=small,
+    )
+    return out.convert("RGB")
 
 
 def _year_label(year_raw: int) -> str:
@@ -2302,18 +2453,77 @@ def selftest() -> list[str]:
         )
     else:
         lines.append("ok    Culture ticks from shrine cover (not seed)")
+    if oracle_raw_stem(1) != "B02" or oracle_raw_stem(4) != "B05" or oracle_raw_stem(16) != "B15":
+        lines.append(
+            f"FAIL  oracle RAW {oracle_raw_stem(1)} {oracle_raw_stem(4)} {oracle_raw_stem(16)}"
+        )
+    elif oracle_raw_index(7) is not None or oracle_raw_stem(17):
+        lines.append("FAIL  Peace stubs / city-only 17 must not play RAW")
+    else:
+        lines.append("ok    Oracle click audio B02–B15 (0x1f…0x2c)")
     oracle = ForumState(kind=KIND_ORACLE, labor=labor)
-    click_forum(oracle, _PANEL_X + 20, _PANEL_Y + 50, sim_o)
+    click_forum(oracle, ORACLE_HIT_X0 + 4, ORACLE_HIT_Y + 4, sim_o)
     if oracle.oracle_advice != 0:
         lines.append(f"FAIL  oracle col {oracle.oracle_advice}")
+    elif oracle.oracle_sfx != oracle_raw_stem(oracle_advice_id(sim_o, 0)):
+        lines.append(f"FAIL  oracle sfx {oracle.oracle_sfx!r}")
     else:
-        lines.append("ok    Oracle column hit Empire → city-only stub")
+        lines.append("ok    Oracle column hit Empire → city-only stub + B-series")
+    click_forum(oracle, ORACLE_HIT_X0 + 2 * ORACLE_COL_STRIDE + 4, ORACLE_HIT_Y + 4, sim_o)
+    if oracle.oracle_advice != 2:
+        lines.append(f"FAIL  oracle Prosperity col {oracle.oracle_advice}")
+    else:
+        lines.append("ok    Oracle Prosperity text hit (no crash)")
+    if _oracle_column(ORACLE_AVG_X + 8, ORACLE_AVG_Y + 2) is not None:
+        lines.append("FAIL  average rating must not be a column hit")
+    else:
+        lines.append("ok    Average rating is not a click target")
+    ox0, oy0, _ow0, _oh0 = button_rect(0)
+    still = ForumState(kind=KIND_ORACLE)
+    click_forum(still, ox0 + 4, oy0 + 4, sim_o)
+    if still.kind != KIND_ORACLE:
+        lines.append(f"FAIL  Oracle chrome leak {still.kind}")
+    else:
+        lines.append("ok    Oracle full screen ignores 4×3 chrome")
+    oframe = blit_forum((640, 480), ForumState(kind=KIND_ORACLE, labor=labor), sim_o)
+    if oframe.size != (640, 480):
+        lines.append(f"FAIL  oracle blit {oframe.size}")
+    else:
+        lines.append("ok    Oracle opens 4 ratings (640x480)")
+    try:
+        from app.config import resolve_game_dir
+
+        game, _how = resolve_game_dir()
+        col = load_oracle_column(game)
+        scene = load_oracle_scene(game)
+        if col is not None and col.size != (96, 337):
+            lines.append(f"FAIL  RAT_BACK[0] {col.size}")
+        elif scene is not None and scene.size[0] < 640:
+            lines.append(f"FAIL  RAT_FRON {scene.size}")
+        elif col is None or scene is None:
+            lines.append("ok    Oracle PL8 missing (retail not required for unit pin)")
+        else:
+            art = ForumState(kind=KIND_ORACLE, labor=labor, oracle_back=scene, oracle_column=col)
+            aframe = blit_forum((640, 480), art, SimState(city_only=1, skill=2, rating_prosperity=40, rating_culture=10))
+            if aframe.size != (640, 480):
+                lines.append(f"FAIL  oracle retail blit {aframe.size}")
+            else:
+                lines.append("ok    retail RAT_FRON + RAT_BACK[0] column 96x337")
+    except (OSError, ValueError, FileNotFoundError) as exc:
+        lines.append(f"ok    Oracle PL8 skip ({exc})")
     ox, oy, _ow, _oh = button_rect(2)
     stub = click_forum(ForumState(kind=KIND_CHROME), ox + 2, oy + 2, sim_o)
-    if "cannot get promoted" not in stub.lower() and "city-only" not in stub.lower():
-        lines.append(f"FAIL  EMPIRE MAP stub {stub!r}")
+    rx, ry, _rw, _rh = button_rect(9)
+    rome = click_forum(ForumState(kind=KIND_CHROME), rx + 2, ry + 2, sim_o)
+    px, py, _pw2, _ph2 = button_rect(7)
+    pers = click_forum(ForumState(kind=KIND_CHROME), px + 2, py + 2, sim_o)
+    cx, cy, _cw, _ch = button_rect(1)
+    cent = click_forum(ForumState(kind=KIND_CHROME), cx + 2, cy + 2, sim_o)
+    stubs = (stub, rome, pers, cent)
+    if any("cannot get promoted" not in s.lower() and "city-only" not in s.lower() for s in stubs):
+        lines.append(f"FAIL  Career stubs {stubs!r}")
     else:
-        lines.append("ok    Career EMPIRE MAP stays city-only stub")
+        lines.append("ok    Career EMPIRE / ROME / PERSONAL / CENTURION stay [31]+24")
     close_sim = SimState(
         city_only=1,
         year_raw=-299,

@@ -27,6 +27,8 @@ Pinned play/bind sites (mapped VA):
   pick is silent (no ``a09.wav``, ``unused.wav``, or ``poscl.wav``).
 - ``forum.wav`` is copied in ``city_sfx_bind_wavs`` ``0x12F2A`` (ambience
   table). Host plays it once on Forum enter.
+- Oracle rating click is ``0x57450`` → ``0x135a4`` EAX ``0x1f…0x2c``
+  (``B02.RAW``…``B15.RAW``). Play the full clip, not ``A01.RAW``.
 - ``unused.wav`` bind ``0x129B2`` / str ``0x90448`` is the EXE labor
   phrase name. City Only plays ``a09.wav`` (playtest). File may be
   absent on a flat 1.1A tree.
@@ -44,6 +46,7 @@ Pinned play/bind sites (mapped VA):
 from __future__ import annotations
 
 import ctypes
+import io
 import os
 import struct
 import subprocess
@@ -305,6 +308,51 @@ def resolve_wav(game: Path | None, name: str) -> Path | None:
         if hit is not None:
             return hit
     return None
+
+
+def resolve_raw(game: Path | None, stem: str) -> Path | None:
+    """Oracle / advisor voice: ``B02.wav`` in wav/ or sound/, else ``B02.RAW``."""
+    if not stem:
+        return None
+    base = Path(stem).name
+    if "." in base:
+        base = base.rsplit(".", 1)[0]
+    for name in (f"{base}.wav", f"{base}.WAV"):
+        hit = resolve_wav(game, name)
+        if hit is not None:
+            return hit
+    for name in (f"{base}.raw", f"{base}.RAW"):
+        if game is not None:
+            hit = find_file(game, name)
+            if hit is not None:
+                return hit
+        for folder_name in ("sound", "SOUND"):
+            if game is None:
+                break
+            folder = _ci_dir(game, folder_name)
+            if folder is None:
+                continue
+            hit = _ci_file(folder, name)
+            if hit is not None:
+                return hit
+        repo_sound = _ci_dir(REPO_ROOT, "sound")
+        if repo_sound is not None:
+            hit = _ci_file(repo_sound, name)
+            if hit is not None:
+                return hit
+    return None
+
+
+def raw_to_wav_bytes(path: Path) -> bytes:
+    """Unsigned 8-bit PCM mono @ 22050 Hz → RIFF WAV (full clip)."""
+    samples = path.read_bytes()
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(1)
+        wav.setframerate(RAW_RATE)
+        wav.writeframes(samples)
+    return buf.getvalue()
 
 
 def play_raw_preview(game: Path, name: str = PREFERRED_RAW) -> str:
@@ -875,6 +923,29 @@ class SfxPlayer:
             return f"sfx {name}"
         return f"skip sfx: no audio device for {path.name}"
 
+    def play_raw(self, stem: str) -> str:
+        """Play a RAW-bank stem (Oracle B02–B15). Empty if muted / missing."""
+        if not self.enabled or not stem:
+            return ""
+        path = resolve_raw(self.game, stem)
+        if path is None:
+            return f"skip raw: {stem} not found"
+        play_path = path
+        tmp: Path | None = None
+        if path.suffix.lower() == ".raw":
+            tmp = Path(tempfile.gettempdir()) / f"c2_oracle_{path.stem}.wav"
+            tmp.write_bytes(raw_to_wav_bytes(path))
+            play_path = tmp
+        if self._play_winmm(play_path, loops=0):
+            return f"raw {stem}"
+        if self._play_pygame(play_path):
+            return f"raw {stem}"
+        if self._play_ffplay(play_path):
+            return f"raw {stem}"
+        if self._play_winsound(play_path, loop=False):
+            return f"raw {stem}"
+        return f"skip raw: no audio device for {path.name}"
+
     def start_ambience(self) -> str:
         """No-op. EXE does not start gardenb/fountn at city enter."""
         return ""
@@ -1155,6 +1226,8 @@ def selftest(game: Path | None = None) -> list[str]:
     player = SfxPlayer(game, enabled=False)
     if player.play("place") or player._live or player.start_ambience() or player._ambience_live:
         lines.append("FAIL  muted SfxPlayer spawned audio")
+    elif player.play_raw("B02"):
+        lines.append("FAIL  muted Oracle RAW played")
     elif player._winmm:
         lines.append("FAIL  muted SfxPlayer opened WinMM")
     else:

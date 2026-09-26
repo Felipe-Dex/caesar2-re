@@ -1987,6 +1987,8 @@ def show(ctx: BootContext, *, game: Path) -> None:
             return False
         if forum_state.kind != KIND_CHROME:
             forum_state.kind = KIND_CHROME
+            forum_state.oracle_advice = None
+            forum_state.oracle_sfx = ""
             blit(_eng_skip(ctx.eng, 28, 0, "CLEAR FORUM"))
             return True
         _leave_forum()
@@ -3311,6 +3313,10 @@ def show(ctx: BootContext, *, game: Path) -> None:
                 eng=ctx.eng,
                 frame_size=(win_w, win_h),
             )
+            stem = forum_state.oracle_sfx
+            if stem:
+                forum_state.oracle_sfx = ""
+                sfx.play_raw(stem)
             if msg == "exit":
                 _sfx("click")
                 _leave_forum()
