@@ -995,13 +995,24 @@ MINIMAP_WELL = (478, 48, 162, 160)
 MINIMAP_SIZE = 80
 MINIMAP_X, MINIMAP_Y, MINIMAP_W, MINIMAP_H = MINIMAP_WELL
 MINIMAP_RECT = MINIMAP_WELL
-_MINI_GRASS = (56, 124, 48)
-_MINI_RIVER = (40, 92, 188)
-_MINI_ROAD = (176, 172, 164)
-_MINI_HOUSE = (204, 88, 56)
-_MINI_RUBBLE = (132, 92, 52)
-_MINI_BUILDING = (200, 168, 72)
-_MINI_VIEW = (255, 220, 40)
+# Geography radar only (iso stays CITYFIXT / BUILD). Punchier than the
+# old olive/tan soup so grass / water / road / house / civic read at 80×80.
+_MINI_GRASS = (20, 140, 28)
+_MINI_RIVER = (16, 64, 236)
+_MINI_ROAD = (236, 228, 212)
+_MINI_HOUSE = (236, 36, 24)
+_MINI_RUBBLE = (88, 56, 24)
+_MINI_BUILDING = (255, 200, 16)
+_MINI_GARDEN = (0, 72, 64)
+_MINI_WALL = (148, 148, 156)
+_MINI_EMPTY = (176, 168, 64)
+_MINI_PIPE = (16, 196, 220)
+_MINI_VIEW = (255, 255, 64)
+_ID_GARDEN_LO = 0x78
+_ID_GARDEN_HI = 0x7B
+_ID_EMPTY = 0x1C
+_ID_WALL_LO = 0xBF
+_ID_WALL_HI = 0xCA
 _ID_RUBBLE = 0x05
 _ID_BRIDGE_LO = 0x4E
 _ID_ROAD_HI = 0x5C
@@ -2344,15 +2355,27 @@ def blit_water_tiles(
 
 
 def _minimap_color(tid: int, flags: int) -> tuple[int, int, int]:
-    """One pixel: house / building / road+bridge / rubble / river / grass."""
+    """One pixel: house / garden / wall / pipe / civic / road / rubble / water / grass.
+
+    Extra buckets use known +0 ids (Gardens, walls, empty 0x1C, water
+    fixtures). Not new overlay types — Geography radar only.
+    """
     if ID_HOUSING_LO <= tid <= ID_HOUSING_HI:
         return _MINI_HOUSE
+    if _ID_GARDEN_LO <= tid <= _ID_GARDEN_HI:
+        return _MINI_GARDEN
+    if _ID_WALL_LO <= tid <= _ID_WALL_HI:
+        return _MINI_WALL
+    if tid == ID_RESERVOIR or ID_AQUEDUCT_LO <= tid <= ID_FOUNTAIN_HI:
+        return _MINI_PIPE
     if tid >= ID_TERRAIN_MAX:
         return _MINI_BUILDING
     if _ID_BRIDGE_LO <= tid <= _ID_ROAD_HI:
         return _MINI_ROAD
     if tid == _ID_RUBBLE:
         return _MINI_RUBBLE
+    if tid == _ID_EMPTY:
+        return _MINI_EMPTY
     if flags & FLAG_RIVER or tid < ID_WATER_MAX:
         return _MINI_RIVER
     return _MINI_GRASS
@@ -3115,6 +3138,11 @@ def selftest() -> list[str]:
         (3, 0, 0x4E, FLAG_RIVER | FLAG_PAD, _MINI_ROAD, "bridge"),
         (4, 0, 0x82, 0, _MINI_HOUSE, "house"),
         (5, 0, 0x05, 0, _MINI_RUBBLE, "rubble"),
+        (6, 0, 0x78, 0, _MINI_GARDEN, "garden"),
+        (7, 0, 0xC1, 0, _MINI_WALL, "wall"),
+        (8, 0, 0x1C, 0, _MINI_EMPTY, "empty"),
+        (9, 0, ID_RESERVOIR, 0, _MINI_PIPE, "reservoir"),
+        (10, 0, 0xE3, 0, _MINI_BUILDING, "prefecture"),
     )
     for x, y, tid, flags, color, name in samples:
         off = city.offset(x, y)
@@ -3132,6 +3160,33 @@ def selftest() -> list[str]:
             lines.append(f"FAIL  minimap {name} {got}, want {color}")
         else:
             lines.append(f"ok    minimap {name}")
+    geo_swatches = (
+        _MINI_GRASS,
+        _MINI_RIVER,
+        _MINI_ROAD,
+        _MINI_HOUSE,
+        _MINI_RUBBLE,
+        _MINI_BUILDING,
+        _MINI_GARDEN,
+        _MINI_WALL,
+        _MINI_EMPTY,
+        _MINI_PIPE,
+    )
+    if len(set(geo_swatches)) != len(geo_swatches):
+        lines.append("FAIL  geography minimap colours collided")
+    else:
+        mush = False
+        for i, a in enumerate(geo_swatches):
+            for b in geo_swatches[i + 1 :]:
+                dist = sum(abs(a[c] - b[c]) for c in range(3))
+                if dist < 80:
+                    mush = True
+                    lines.append(f"FAIL  geography mush {a}~{b} d={dist}")
+                    break
+            if mush:
+                break
+        if not mush:
+            lines.append("ok    geography minimap swatches separable")
     cw, ch = iso_canvas_size(0)
     box = view_tiles_for_camera(0, 0, 0, cw, ch)
     framed = render_minimap(city, viewport=(0, 0, 0, cw, ch))

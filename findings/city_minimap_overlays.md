@@ -50,7 +50,7 @@ Handlers store the id, set `[0x117A58]=1`, then `JMP 0x3E590` (wipe 80×80 plane
 | 8 | `0x3E8A2` | **+11&0x30** | `0x10` **0x79**; `0x20` **0x78**; `0x30` **0x77** |
 | 9 | `0x3EA03` | **+0** `0xFA`/`0xFC–0xFF`, **+10&0xC0** | market/factory **0x96**; walker 0x40/0x80/0xC0 → **0x93** / **0x90** / **0x8D** |
 
-Plane **0** → host keeps the geography pixel (dimmed). Nonzero → CITY1.256 RGB (fallback table in `city_overlay.py`; no palette file in git).
+Plane **0** → host keeps the geography pixel (dimmed). Nonzero → CITY1.256 **index** (fallback table in `city_overlay.py`; no palette file in git). Host remaps those key RGBs so the 80×80 and the iso wash stay readable — see §7.
 
 ## 4. Iso vs minimap
 
@@ -82,7 +82,24 @@ python -m app --new --city-only --no-audio
 
 1. Click the **name well** at the top of the right sidebar (`(478,24)` 162×24).
 2. Pick Water / Unrest / … . Geography = normal minimap + iso. Cancel = drop the build tool.
-3. Water: **blue** (`0x84` +13&3 / river), **tan** (`0x96` pipe / well / fountain / reservoir / aqueduct), **purple** (`0x87` charge+ring), **khaki ring** (`0x8D` +13&4). Uncovered grass stays geography (no red wash). Fountain blob is r=6 only when the fountain sits in a charged reservoir ring.
-4. Security: **tan** Praefecture `0x96`, **salmon** Barracks `0x8B`, **khaki** covered road `0x8D`, **dark brown** house coverage `0x93`, **brown** road `+17` `0x90`. River / uncovered land stay geography (no `0x96` flood).
+3. Water: **blue** (`0x84` +13&3 / river), **yellow** (`0x8D` +13&4 pipe), **red** (`0x87` charge+ring), **cyan** (`0x96` pipe / well / fountain / reservoir / aqueduct). Uncovered grass stays geography (no red wash). Fountain blob is r=6 only when the fountain sits in a charged reservoir ring.
+4. Security: **cyan** Praefecture `0x96`, **magenta** Barracks `0x8B`, **red** covered road `0x8D` (Both / Maximum), **blue** house coverage `0x93` (Internal), **yellow** enclosed land `0x90` (External). River / uncovered land stay geography (no `0x96` flood).
 5. Maximize / resize the window: same PL8 zoom, larger iso clip (more tiles). Chrome stays 162 px 1:1 on the right.
 6. Query tool or right-click (no tool) on a tile → place dialog.
+
+## 7. Host contrast remap (minimap + wash)
+
+CITY1.256 keys for reports 1–9 sit in a brown/olive/teal band. At 80×80 they mush. City Only keeps the **EXE index** (same painter, same legend skip) and remaps **host RGB** in `overlay_plane_rgb`:
+
+| Overlay | Indices (unchanged) | Host RGB |
+|---|---|---|
+| Water / Education | `0x84` / `0x8D` / `0x87` (+ `0x96` fixture) | blue / yellow / red (+ cyan) |
+| Security / Tax / Markets | `0x93` / `0x90` / `0x8D` (+ `0x96` / `0x8B`) | blue / yellow / red (+ cyan / magenta) |
+| Unrest / Illness | `0x79` / `0x78` / `0x77` | blue / yellow / red |
+| Land Value / Entert'ment | `(n)*3 + 0x7E` (nine chips) | cool→hot ramp (navy…crimson) |
+
+Iso wash uses the same RGB (alpha 180 on remapped keys) so the legend matches the city tint. Geography (id 0) does **not** write the plane — the radar is `_minimap_color` in `city_map.py` only. Iso CITYFIXT / BUILD art stays original.
+
+Geography buckets (known `+0` ids, not new overlay types): grass, empty `0x1C`, river / `id<8`, rubble `0x05`, road+bridge, housing `0x82–0xA1`, Gardens `0x78–0x7B`, walls/gate/tower `0xBF–0xCA`, water fixtures `0xBE` / `0xCB–0xDE`, other civic gold.
+
+**Retest:** City Only → cycle Geography…Markets on the right-hand 80×80. Types must stay separable. Gate / Arena / plaza-on-grass stamps unchanged.
