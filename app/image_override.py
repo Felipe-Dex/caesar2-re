@@ -26,9 +26,10 @@ footprints are not stretched.
 
 Export spec for ``images_new/AHOSPIT.png``: one isometric painting for
 the whole 3×3 (not nine tiles); transparent alpha background (flat
-green/black plate is not required and is keyed out if present); match
+green/black plate is not required and is keyed out if present — exact
+``(0, 255, 0)`` and Filmic/JPEG-near lime, plus magenta/black); match
 the C2 iso camera — the building is tall (174×143 at zoom 0). Higher
-res is OK; the host scales into that AABB.
+res is OK; the host letterboxes into that AABB (no stretch).
 
 Drop more files as ``images_new/{STEM}.png`` using the 8.3 stem
 (``ABATHS``, ``AHOUSE``, ``AWELL``, …). PNGs are gitignored.
@@ -263,27 +264,46 @@ def override_stamp(
 
 
 # Classic sprite keys. Keep real alpha; punch only these plates.
+# Lime is also matched as a chroma screen: exporters (Filmic/AgX, sRGB,
+# JPEG-like PNG) turn the requested (0, 255, 0) into ~ (20, 239, 23).
 _KEY_RGB: tuple[tuple[int, int, int], ...] = (
     (0, 0, 0),
     (255, 0, 255),
     (0, 255, 0),
 )
 _KEY_TOL = 12
+_LIME_G_MIN = 168
+_LIME_RB_MAX = 110
+_LIME_DOM = 80
+
+
+def _is_key_rgb(r: int, g: int, b: int) -> bool:
+    """True for black / magenta / lime plates — not stone or terracotta."""
+    for kr, kg, kb in _KEY_RGB:
+        if (
+            abs(r - kr) <= _KEY_TOL
+            and abs(g - kg) <= _KEY_TOL
+            and abs(b - kb) <= _KEY_TOL
+        ):
+            return True
+    if g < _LIME_G_MIN or r > _LIME_RB_MAX or b > _LIME_RB_MAX:
+        return False
+    return (g - max(r, b)) >= _LIME_DOM
 
 
 def key_sprite_plate(img: Image.Image) -> Image.Image:
-    """Keep PNG alpha; treat flat black / magenta / lime as transparent."""
+    """Keep PNG alpha; punch black / magenta / lime (exact and near).
+
+    RGB / RGBA / P all go through ``convert('RGBA')`` so palette and
+    opaque cards key the same. Punched texels are ``(0,0,0,0)`` so a
+    later LANCZOS fit does not bleed plate green into the silhouette.
+    """
     src = img.convert("RGBA")
     out: list[tuple[int, int, int, int]] = []
     punched = False
     for r, g, b, a in src.getdata():
-        if a and any(
-            abs(r - kr) <= _KEY_TOL
-            and abs(g - kg) <= _KEY_TOL
-            and abs(b - kb) <= _KEY_TOL
-            for kr, kg, kb in _KEY_RGB
-        ):
-            out.append((r, g, b, 0))
+        if a and _is_key_rgb(r, g, b):
+            out.append((0, 0, 0, 0))
             punched = True
         else:
             out.append((r, g, b, a))
@@ -299,11 +319,11 @@ def fit_to_dest(img: Image.Image, dest_w: int, dest_h: int) -> Image.Image:
     if dest_w < 1 or dest_h < 1:
         return src
     if src.size == (dest_w, dest_h):
-        return src
+        return key_sprite_plate(src)
     scale = min(dest_w / src.width, dest_h / src.height)
     nw = max(1, int(round(src.width * scale)))
     nh = max(1, int(round(src.height * scale)))
-    resized = src.resize((nw, nh), Image.Resampling.LANCZOS)
+    resized = key_sprite_plate(src.resize((nw, nh), Image.Resampling.LANCZOS))
     if resized.size == (dest_w, dest_h):
         return resized
     canvas = Image.new("RGBA", (dest_w, dest_h), (0, 0, 0, 0))
@@ -611,6 +631,24 @@ def selftest(game: Path | None = None) -> list[str]:
             lines.append("FAIL  magenta/black plate not keyed")
         else:
             lines.append("ok    chroma keys lime/magenta/black; building stays")
+        filmic = Image.new("RGBA", (8, 8), (21, 239, 22, 255))
+        filmic.putpixel((3, 3), (180, 150, 120, 255))
+        filmic.putpixel((4, 4), (0, 255, 0, 255))
+        fk = key_sprite_plate(filmic)
+        if fk.getpixel((1, 1))[3] != 0 or fk.getpixel((4, 4))[3] != 0:
+            lines.append(f"FAIL  filmic/exact lime {fk.getpixel((1, 1))} {fk.getpixel((4, 4))}")
+        elif fk.getpixel((3, 3))[3] != 255 or fk.getpixel((3, 3))[1] < 140:
+            lines.append(f"FAIL  filmic ate stone {fk.getpixel((3, 3))}")
+        else:
+            lines.append("ok    filmic ~(21,239,22) and exact (0,255,0) punch; stone stays")
+        pal = Image.new("P", (4, 4), 0)
+        pal.putpalette([0, 255, 0, 200, 40, 40] + [0, 0, 0] * 254)
+        pal.putpixel((1, 1), 1)
+        pk = key_sprite_plate(pal)
+        if pk.getpixel((0, 0))[3] != 0 or pk.getpixel((1, 1))[3] != 255:
+            lines.append(f"FAIL  P-mode lime {pk.getpixel((0, 0))} mid={pk.getpixel((1, 1))}")
+        else:
+            lines.append("ok    P-mode palette lime punches; index 1 stays")
         pin_city = CityMap()
         dests: list[tuple[int, int, int, int]] = []
         for ox, oy in ((10, 10), (20, 14)):
