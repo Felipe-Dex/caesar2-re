@@ -476,14 +476,18 @@ def overlay_span_preview(
 
         th = iso_tile_size(zoom)[1]
         painted = False
-        for tx, ty, tid, variant in piece_rows:
+        for row in piece_rows:
+            tx, ty, tid, variant = row[0], row[1], row[2], row[3]
+            dry = row[4] if len(row) > 4 else None
             if tid == ID_GATE:
                 pdraw = DRAW_GATE
             elif tid in (ID_AQUEDUCT_WALL_EW, ID_AQUEDUCT_WALL_NS):
                 pdraw = DRAW_WALL
             else:
                 pdraw = piece_draw
-            spr = building_sprite_image(tid, pdraw, variant, sheets, zoom=zoom)
+            spr = building_sprite_image(
+                tid, pdraw, variant, sheets, zoom=zoom, dry=dry
+            )
             if spr is None:
                 continue
             ghost = _as_ghost(spr, refuse=bool(preview.refuse))

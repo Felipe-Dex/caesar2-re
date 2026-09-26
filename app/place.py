@@ -92,8 +92,10 @@ aqueduct (``0x67201`` ``0xCF``/``0xD0``) morph to ``0xBC`` (EW wall)
 / ``0xBD`` (NS wall): ``+1=0x42``, ``+3=0x08``, ``+4=3``/``7``.
 Order does not matter. Charge still walks ``+1&0xC0``. The combo
 keeps wall bit ``0x02`` so Security flood (``+1&0x1E``) cannot walk
-through. Iso blits wall straights 0/4 plus the CITYFIXT arcade
-(``0x76``/``0x79``) so the pipe sits on the walkway.
+through. ``+9`` is the CITYFIXT dry from the pipe-neighbour mask
+(same LUT ``0x94D8F`` as grass). Iso blits wall straights 0/4 plus
+that arcade so a crossing uses the through pipe, not a stub on
+every wall cell.
 
 Not the full EXE stamp. Tent 6 is observed (sav_c), not C2MODEL. City
 road / aqueduct / Palatine have no pinned city-cost slot — do not invent;
@@ -1571,6 +1573,48 @@ def _remap_aqueduct_variant(old_tid: int, variant: int, new_tid: int) -> int:
     return (new_dry + ((variant - old_dry) & 0xFF)) & 0xFF
 
 
+# +9 dry → a 14-row LUT id so facing can walk the NESW mask.
+_AQ_DRY_REP = {
+    0x79: 0xCF,
+    0x76: 0xD0,
+    0x7C: 0xD1,
+    0x7F: 0xD2,
+    0x82: 0xD3,
+    0x85: 0xD4,
+    0x73: 0xD5,
+    0x70: 0xD6,
+}
+
+
+def rotate_aqueduct_dry(dry: int, facing: int) -> int:
+    """Paint-only CITYFIXT +9 walk. 0x79 (NS/stub family) → 0x76 on odd facing."""
+    f = int(facing) & 3
+    if f == 0:
+        return dry & 0xFF
+    base = dry & 0xFF
+    bump = 0
+    tid = _AQ_DRY_REP.get(base)
+    if tid is None:
+        for cand, rep in _AQ_DRY_REP.items():
+            if base >= cand and (base - cand) <= 2:
+                tid = rep
+                bump = base - cand
+                base = cand
+                break
+    if tid is None:
+        return dry & 0xFF
+    if tid in (0xD5, 0xD6):
+        if f & 1:
+            new_tid = 0xD6 if tid == 0xD5 else 0xD5
+            return (_remap_aqueduct_variant(tid, base, new_tid) + bump) & 0xFF
+        return (base + bump) & 0xFF
+    mask = _AQ_CANON_MASK.get(tid)
+    if mask is None:
+        return dry & 0xFF
+    new_tid = aqueduct_id_for(rotate_nesw_mask(mask, f))
+    return (_remap_aqueduct_variant(tid, base, new_tid) + bump) & 0xFF
+
+
 def orient_autotile_art(tid: int, variant: int, facing: int) -> tuple[int, int]:
     """Paint-only +0/+4 so wall / aqueduct / gate follow the view.
 
@@ -1922,12 +1966,17 @@ def _write_aqueduct_wall_cell(
     *,
     horizontal: bool | None = None,
 ) -> int:
-    """``0xBC``/``0xBD`` ``+1=0x42`` ``+3=0x08`` ``+4=3``/``7``."""
+    """``0xBC``/``0xBD`` ``+1=0x42`` ``+3=0x08`` ``+4=3``/``7``.
+
+    ``+9`` is the CITYFIXT dry from the pipe-neighbour mask (``0x94D8F``),
+    not the wall end-cap. Charge leaves +4 at 3/7; blit reads +9.
+    """
     ns = _wall_run_is_ns(city, x, y, pending, horizontal=horizontal)
     tid = ID_AQUEDUCT_WALL_NS if ns else ID_AQUEDUCT_WALL_EW
     var = VAR_AQUEDUCT_WALL_NS if ns else VAR_AQUEDUCT_WALL_EW
+    dry = _aqueduct_variant(aqueduct_id_for(_pipe_mask(city, x, y, pending)))
     _write_building(
-        city, x, y, tid, FLAG_PIPE | FLAG_WALL, DRAW_WALL, var, dry=var
+        city, x, y, tid, FLAG_PIPE | FLAG_WALL, DRAW_WALL, var, dry=dry
     )
     return tid
 
@@ -1961,10 +2010,10 @@ def aqueduct_preview_cells(
     city: CityMap,
     ok: list[tuple[int, int]],
     stamp: list[tuple[int, int]],
-) -> list[tuple[int, int, int, int]]:
-    """``(x, y, id, +4)`` for the rubber-band line, same autotile as commit."""
+) -> list[tuple[int, ...]]:
+    """``(x, y, id, +4[, +9])`` for the rubber-band line, same autotile as commit."""
     pending = set(stamp)
-    out: list[tuple[int, int, int, int]] = []
+    out: list[tuple[int, ...]] = []
     for x, y in ok:
         mask = _pipe_mask(city, x, y, pending)
         existing = city.tiles[city.offset(x, y)]
@@ -1975,7 +2024,8 @@ def aqueduct_preview_cells(
             ns = _wall_run_is_ns(city, x, y, pending)
             tid = ID_AQUEDUCT_WALL_NS if ns else ID_AQUEDUCT_WALL_EW
             var = VAR_AQUEDUCT_WALL_NS if ns else VAR_AQUEDUCT_WALL_EW
-            out.append((x, y, tid, var))
+            dry = _aqueduct_variant(aqueduct_id_for(mask))
+            out.append((x, y, tid, var, dry))
             continue
         if _is_road_combo_cell(city, x, y):
             tid = aqueduct_road_id_for(mask)
@@ -2313,10 +2363,10 @@ def wall_preview_cells(
     city: CityMap,
     ok: list[tuple[int, int]],
     stamp: list[tuple[int, int]],
-) -> list[tuple[int, int, int, int]]:
-    """``(x, y, id, +4)`` for the rubber-band line, same autotile as commit."""
+) -> list[tuple[int, ...]]:
+    """``(x, y, id, +4[, +9])`` for the rubber-band line, same autotile as commit."""
     pending = set(stamp)
-    out: list[tuple[int, int, int, int]] = []
+    out: list[tuple[int, ...]] = []
     for x, y in ok:
         mask = _fort_join_mask(city, x, y, pending)
         existing = city.tiles[city.offset(x, y)]
@@ -2332,7 +2382,8 @@ def wall_preview_cells(
             ns = _wall_run_is_ns(city, x, y, pending)
             tid = ID_AQUEDUCT_WALL_NS if ns else ID_AQUEDUCT_WALL_EW
             var = VAR_AQUEDUCT_WALL_NS if ns else VAR_AQUEDUCT_WALL_EW
-            out.append((x, y, tid, var))
+            dry = _aqueduct_variant(aqueduct_id_for(_pipe_mask(city, x, y, pending)))
+            out.append((x, y, tid, var, dry))
             continue
         tid = wall_id_for(mask)
         out.append((x, y, tid, wall_variant_for(tid)))
@@ -4928,6 +4979,7 @@ def selftest() -> list[str]:
         or w_on_aq.flags != (FLAG_PIPE | FLAG_WALL)
         or w_on_aq.draw != DRAW_WALL
         or w_on_aq.variant not in (VAR_AQUEDUCT_WALL_EW, VAR_AQUEDUCT_WALL_NS)
+        or not (0x70 <= w_on_aq.overlay_anim <= 0x87)
         or not is_wall_run_id(wall_n)
         or not is_wall_run_id(wall_s)
         or (w_on_aq.coverage & 3) != 3
@@ -4960,6 +5012,7 @@ def selftest() -> list[str]:
         or aq_on_w.flags != (FLAG_PIPE | FLAG_WALL)
         or aq_on_w.draw != DRAW_WALL
         or aq_on_w.variant not in (VAR_AQUEDUCT_WALL_EW, VAR_AQUEDUCT_WALL_NS)
+        or not (0x70 <= aq_on_w.overlay_anim <= 0x87)
         or (aq_on_w.coverage & 3) != 3
     ):
         lines.append(
@@ -4987,12 +5040,14 @@ def selftest() -> list[str]:
         not r_c2.ok
         or c2t.terrain_id != ID_AQUEDUCT_WALL_EW
         or c2t.variant != VAR_AQUEDUCT_WALL_EW
+        or c2t.overlay_anim != 0x76
     ):
         lines.append(
             f"FAIL  67a6a C2->{c2t.terrain_id:#x}+4={c2t.variant:#x}"
+            f"+9={c2t.overlay_anim:#x}"
         )
     else:
-        lines.append("ok    aqueduct-on-C2 -> 0xBC +4=3")
+        lines.append("ok    aqueduct-on-C2 -> 0xBC +4=3 +9=0x76 (EW pipe)")
     _grass_block(24, 28, 3, 3)
     city.tiles[city.offset(25, 29)] = ID_WALL_NS
     city.tiles[city.offset(25, 29) + 1] = FLAG_WALL
@@ -5005,12 +5060,14 @@ def selftest() -> list[str]:
         not r_c1.ok
         or c1t.terrain_id != ID_AQUEDUCT_WALL_NS
         or c1t.variant != VAR_AQUEDUCT_WALL_NS
+        or c1t.overlay_anim != 0x79
     ):
         lines.append(
             f"FAIL  67a6a C1->{c1t.terrain_id:#x}+4={c1t.variant:#x}"
+            f"+9={c1t.overlay_anim:#x}"
         )
     else:
-        lines.append("ok    aqueduct-on-C1 -> 0xBD +4=7")
+        lines.append("ok    aqueduct-on-C1 -> 0xBD +4=7 +9=0x79 (NS pipe)")
     _grass_block(28, 28, 3, 3)
     city.tiles[city.offset(29, 29)] = 0xCF
     city.tiles[city.offset(29, 29) + 1] = FLAG_PIPE
@@ -5068,6 +5125,7 @@ def selftest() -> list[str]:
         or mid.terrain_id != ID_AQUEDUCT_WALL_EW
         or mid.flags != (FLAG_PIPE | FLAG_WALL)
         or mid.variant != VAR_AQUEDUCT_WALL_EW
+        or mid.overlay_anim != 0x79
         or (mid.coverage & 3) != 3
         or left != ID_WALL_EW
         or right != ID_WALL_EW
@@ -5077,15 +5135,41 @@ def selftest() -> list[str]:
     ):
         lines.append(
             f"FAIL  3-tile wall+pipe mid={mid.terrain_id:#x}+1={mid.flags:#x}"
-            f"+4={mid.variant:#x}+10={mid.coverage:#x} "
+            f"+4={mid.variant:#x}+9={mid.overlay_anim:#x}+10={mid.coverage:#x} "
             f"L={left:#x}+4={left_var:#x} R={right:#x}+4={right_var:#x} "
             f"{r_mid.message}"
         )
     else:
         lines.append(
-            "ok    5-tile EW + aqueduct mid 0xBC +1=0x42; "
+            "ok    5-tile EW + aqueduct mid 0xBC +9=0x79 (NS cross); "
             "neighbors C2 +4=4; barrier; carga 3"
         )
+
+    # Aqueduct along an EW wall (same cells): mid pipe is E+W → +9=0x76.
+    _grass_block(40, 36, 7, 3)
+    city.tiles[city.offset(40, 37)] = 0x1E
+    city.tiles[city.offset(40, 37) + 1] = FLAG_RIVER
+    sim.treasury = 200
+    try_place(city, 41, 37, TOOL_RESERVOIR, sim)
+    try_place_span(city, 40, 38, 46, 38, TOOL_WALL, sim)
+    r_along = try_place_span(city, 41, 38, 45, 38, TOOL_AQUEDUCT, None)
+    along_mid = city.tile(43, 38)
+    along_ids = [city.tiles[city.offset(x, 38)] for x in range(41, 46)]
+    if (
+        not r_along.ok
+        or along_mid.terrain_id != ID_AQUEDUCT_WALL_EW
+        or along_mid.variant != VAR_AQUEDUCT_WALL_EW
+        or along_mid.overlay_anim != 0x76
+        or (along_mid.coverage & 3) != 3
+        or along_ids != [ID_AQUEDUCT_WALL_EW] * 5
+    ):
+        lines.append(
+            f"FAIL  aq along EW wall mid={along_mid.terrain_id:#x}"
+            f"+4={along_mid.variant:#x}+9={along_mid.overlay_anim:#x} "
+            f"ids={[hex(i) for i in along_ids]} {r_along.message}"
+        )
+    else:
+        lines.append("ok    aq along EW wall 0xBC +9=0x76 (not stub 0x79)")
     # Closed ring with one 0xBC: External still holds (no door).
     for i in range(5):
         city.tiles[city.offset(50 + i, 40)] = ID_WALL_EW
@@ -5151,6 +5235,10 @@ def selftest() -> list[str]:
         or orient_autotile_art(0xD5, 0x73, 1) != (0xD6, 0x70)
         or orient_autotile_art(ID_AQUEDUCT_WALL_NS, 7, 1)
         != (ID_AQUEDUCT_WALL_EW, 3)
+        or rotate_aqueduct_dry(0x79, 1) != 0x76
+        or rotate_aqueduct_dry(0x76, 1) != 0x79
+        or rotate_aqueduct_dry(0x7B, 1) != 0x78
+        or rotate_aqueduct_dry(0x73, 1) != 0x70
         or orient_autotile_art(ID_GATE, 0x92, 1) != (ID_GATE, 0x93)
         or orient_autotile_art(ID_GATE, 0x93, 2) != (ID_GATE, 0x93)
     ):
@@ -5236,6 +5324,8 @@ def selftest() -> list[str]:
         or combo.terrain_id != ID_AQUEDUCT_WALL_EW
         or combo.variant != VAR_AQUEDUCT_WALL_EW
         or combo0.flags != (FLAG_PIPE | FLAG_WALL)
+        or combo0.overlay_anim != 0x79
+        or combo.overlay_anim != 0x76
     ):
         lines.append(
             f"FAIL  0xBD rotate paint {combo.terrain_id:#x}+4={combo.variant} "

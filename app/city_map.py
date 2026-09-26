@@ -39,8 +39,6 @@ import struct
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from statistics import median
-
 from PIL import Image, ImageChops, ImageDraw
 
 from app.config import find_file
@@ -88,20 +86,23 @@ ID_RESERVOIR = 0xBE
 ID_TOWER = 0xBF
 # Lone 0xBF: BUILD1B 0x18–0x1B all bake a wall-cap. Host composite (not a LUT id).
 VAR_TOWER_ALONE = 0x80
-# Aqueduct-through-wall. EXE +3=0x08 +4=3/7 (BUILD1B end-caps) punches a
-# hole. Host blits the wall straight (4/0) then the CITYFIXT arcade
-# (0xD0 +4=0x76 EW / 0xCF +4=0x79 NS, plus charge) so the pipe sits on
-# the walkway. Tile +4 stays 3/7; charge must not bump it.
+# Aqueduct-through-wall. 67a6a writes +3=0x08 +4=+9=3/7 (BUILD1B
+# end-caps). Blitting those punches a hole and hides the pipe. Host
+# keeps +4 at 3/7 (charge must not bump it) and blits wall straight
+# 4/0 plus the CITYFIXT arcade. +9 holds the pipe dry (LUT 0x94D8F
+# neighbour mask — not the wall axis), so a crossing uses 0xCF/0xD0
+# of the pipe, not a stub 0x79 on every cell.
 ID_AQUEDUCT_WALL_EW = 0xBC
 ID_AQUEDUCT_WALL_NS = 0xBD
 VAR_WALL_STRAIGHT_NS = 0x00
 VAR_WALL_STRAIGHT_EW = 0x04
-# Dry CITYFIXT +4 for the same-axis aqueduct (0xD0 EW / 0xCF NS).
-# 2a635 aqueduct bump: charge 3 → +2 (0x78 / 0x7B wet), else +1.
+# Fallback when +9 is still the EXE 3/7 stamp (old tiles / ghost).
 _AQ_WALL_PIPE_DRY = {
     ID_AQUEDUCT_WALL_EW: 0x76,
     ID_AQUEDUCT_WALL_NS: 0x79,
 }
+# CITYFIXT aqueduct +9 family (20230610 / FELIPE dry).
+_AQ_PIPE_DRY_LO, _AQ_PIPE_DRY_HI = 0x70, 0x87
 
 
 def aqueduct_wet_plus4(dry: int, charge: int) -> int:
@@ -113,6 +114,16 @@ def aqueduct_wet_plus4(dry: int, charge: int) -> int:
     else:
         bump = 0
     return (dry + bump) & 0xFF
+
+
+def aqueduct_wall_pipe_dry(tile: Tile) -> int:
+    """CITYFIXT dry for the 0xBC/0xBD arcade. +9 if it is a pipe variant."""
+    stored = tile.overlay_anim
+    if _AQ_PIPE_DRY_LO <= stored <= _AQ_PIPE_DRY_HI:
+        return stored
+    return _AQ_WALL_PIPE_DRY.get(tile.terrain_id, 0x79)
+
+
 ID_AQUEDUCT_STUB = 0xCB
 ID_AQUEDUCT_LO = 0xCB
 ID_AQUEDUCT_HI = 0xD6
@@ -550,11 +561,25 @@ def iso_paint_tile(
     from app.place import orient_autotile_art
 
     tid, variant = orient_autotile_art(tile.terrain_id, tile.variant, f)
-    if tid == tile.terrain_id and variant == tile.variant:
+    from app.place import (
+        ID_AQUEDUCT_WALL_EW,
+        ID_AQUEDUCT_WALL_NS,
+        rotate_aqueduct_dry,
+    )
+
+    dry = tile.overlay_anim
+    if tile.terrain_id in (ID_AQUEDUCT_WALL_EW, ID_AQUEDUCT_WALL_NS):
+        dry = rotate_aqueduct_dry(tile.overlay_anim, f)
+    if (
+        tid == tile.terrain_id
+        and variant == tile.variant
+        and dry == tile.overlay_anim
+    ):
         return tile
     raw = bytearray(city.tile_bytes(gx, gy))
     raw[0] = tid & 0xFF
     raw[4] = variant & 0xFF
+    raw[9] = dry & 0xFF
     return Tile.unpack(bytes(raw))
 
 
@@ -1428,33 +1453,34 @@ def _tower_standalone_sprite(frames: Sequence[Image.Image] | None) -> Image.Imag
     return out
 
 
-def _aqueduct_arcade_overlay(src: Image.Image) -> Image.Image:
-    """Keep the raised arcade; drop the CITYFIXT diamond floor.
+def _is_cityfixt_aq_floor(p: tuple[int, ...]) -> bool:
+    """Olive grass / dirt under a CITYFIXT aqueduct — not stone, not water.
 
-    Aqueduct frames are type-1 diamonds with an opaque stone floor.
-    Pasting that floor on a wall hides the walkway (the punched gap).
-    Arcade luma sits above the floor median; channel blue stays.
+    The old luma cut (median+40) dropped NS pillars (0x79/0x7B) and left
+    only the wet channel, so 0xBD along a wall looked like isolated stubs.
     """
+    r, g, b = p[0], p[1], p[2]
+    a = p[3] if len(p) > 3 else 255
+    if a < 20:
+        return True
+    if _is_water_rgba(p):
+        return False
+    luma = r + g + b
+    if luma >= 400 and r >= g - 12:
+        return False
+    return b + 18 <= min(r, g) and g >= r - 24
+
+
+def _aqueduct_arcade_overlay(src: Image.Image) -> Image.Image:
+    """Keep the raised arcade and channel; drop the CITYFIXT grass diamond."""
     key = id(src)
     hit = _aq_arcade_cache.get(key)
     if hit is not None:
         return hit
     im = src.convert("RGBA")
-    pix = list(im.getdata())
-    lumas = [p[0] + p[1] + p[2] for p in pix if p[3] > 20]
-    if not lumas:
-        _aq_arcade_cache[key] = im
-        return im
-    cut = median(lumas) + 40
-    out_px: list[tuple[int, int, int, int]] = []
-    for p in pix:
-        if p[3] < 20:
-            out_px.append((0, 0, 0, 0))
-            continue
-        if p[0] + p[1] + p[2] >= cut or _is_water_rgba(p):
-            out_px.append(p)
-        else:
-            out_px.append((0, 0, 0, 0))
+    out_px = [
+        (0, 0, 0, 0) if _is_cityfixt_aq_floor(p) else p for p in im.getdata()
+    ]
     out = Image.new("RGBA", im.size)
     out.putdata(out_px)
     _aq_arcade_cache[key] = out
@@ -1635,7 +1661,8 @@ def _tile_frames(
         alone = _tower_standalone_sprite(frames)
         if alone is not None:
             return (alone,), 0
-    # 0xBC/0xBD store EXE +4=3/7 (end-caps). Wall straight + CITYFIXT arcade.
+    # 0xBC/0xBD store EXE +4=3/7 (end-caps). Wall straight + CITYFIXT arcade
+    # from +9 (pipe-neighbour dry), not the wall axis alone.
     if name == PL8_BUILD1B and tile.terrain_id in (
         ID_AQUEDUCT_WALL_EW,
         ID_AQUEDUCT_WALL_NS,
@@ -1645,7 +1672,7 @@ def _tile_frames(
             if tile.terrain_id == ID_AQUEDUCT_WALL_EW
             else VAR_WALL_STRAIGHT_NS
         )
-        dry = _AQ_WALL_PIPE_DRY[tile.terrain_id]
+        dry = aqueduct_wall_pipe_dry(tile)
         charge = tile.coverage & 3
         var = aqueduct_wet_plus4(dry, charge)
         if var >= len(_LUT_CITYFIXT_BLD):
@@ -1701,12 +1728,17 @@ def building_sprite_image(
     sheets: dict[str, Sequence[Image.Image]] | None,
     *,
     zoom: int = 0,
+    dry: int | None = None,
+    charge: int = 0,
 ) -> Image.Image | None:
     """RGBA building sprite for a ghost stamp (same LUT as city_tile_draw_building)."""
     raw = bytearray(TILE_BYTES)
     raw[0] = tid & 0xFF
     raw[3] = draw & 0xFF
     raw[4] = variant & 0xFF
+    if dry is not None:
+        raw[9] = dry & 0xFF
+    raw[10] = charge & 3
     tile = Tile.unpack(bytes(raw))
     cityfixt = sheets.get(PL8_CITYFIXT) if sheets else None
     frames, idx = _tile_frames(tile, 0, cityfixt, sheets)
@@ -3574,6 +3606,44 @@ def selftest() -> list[str]:
                 lines.append(
                     f"ok    0xBC charge 3 blits wet CITYFIXT 0x78 (water {wet_n})"
                 )
+            bd_raw = bytearray(TILE_BYTES)
+            bd_raw[0] = ID_AQUEDUCT_WALL_NS
+            bd_raw[3] = SHEET_BUILD1B
+            bd_raw[4] = 7
+            bd_raw[9] = 0x79
+            bd_raw[10] = 3
+            bd_fr, bd_idx = _tile_frames(
+                Tile.unpack(bytes(bd_raw)),
+                0,
+                real_fixt,
+                {PL8_BUILD1B: real_b1b},
+            )
+            bd_spr = bd_fr[bd_idx].convert("RGBA") if bd_fr else None
+            bd_stone = (
+                sum(
+                    1
+                    for p in bd_spr.getdata()
+                    if p[3] > 20
+                    and not _is_water_rgba(p)
+                    and p[0] + p[1] + p[2] >= 260
+                )
+                if bd_spr
+                else 0
+            )
+            if bd_spr is None or bd_stone < 40:
+                lines.append(
+                    f"FAIL  0xBD +9=0x79 overlay lost NS arcade stone={bd_stone}"
+                )
+            else:
+                lines.append(
+                    f"ok    0xBD +9=0x79 keeps NS arcade stone ({bd_stone})"
+                )
+            olive = (150, 160, 70, 255)
+            tan = (200, 180, 140, 255)
+            if not _is_cityfixt_aq_floor(olive) or _is_cityfixt_aq_floor(tan):
+                lines.append("FAIL  aq floor key olive/tan")
+            else:
+                lines.append("ok    aq floor keys olive grass, keeps tan stone")
         else:
             lines.append("ok    0xBC composite skipped (no game dir)")
     except Exception as exc:
