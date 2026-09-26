@@ -18,11 +18,11 @@ footprints are not stretched.
 * **Sidebar card** while the Hospital tool is selected (native 182×132,
   fitted into the 162 px INT_CITY strip). Never pasted onto the iso well
   — that left a painting stuck at ~ (292, 32).
-* **Iso 0xFB only:** one blit after terrain (front iso depth of the
-  3×3, before CITYTOP / walkers), fitted to the union of the nine tall
-  BUILD1B[86–94] sprite dests (zoom 0 = **174×143**, not the 174×90
-  ground diamonds). Grass under each leftover; PL8 skipped. Barracks
-  ``0xE4`` is ``HOUSES1[81–89]``.
+* **Iso 0xFB only:** one blit on the front-most leftover of the 3×3
+  (south corner), fitted to the union of the nine tall BUILD1B[86–94]
+  sprite dests (zoom 0 = **174×143**). Later grass skips opaque PNG
+  pixels; later buildings (market) paint on top. CITYTOP / walkers
+  after. Barracks ``0xE4`` is ``HOUSES1[81–89]``.
 
 Export spec for ``images_new/AHOSPIT.png``: one isometric painting for
 the whole 3×3 (not nine tiles); transparent alpha background (flat
@@ -633,7 +633,7 @@ def selftest(game: Path | None = None) -> list[str]:
             lines.append(f"FAIL  hospital dests {len(dests)} unique={len(unique)} want 2")
         else:
             lines.append("ok    one blit per 0xFB origin (not 9)")
-        from app.city_map import hospital_front_xy, render_iso
+        from app.city_map import hospital_front_xy, iso_sprite_dest, render_iso
 
         if hospital_front_xy(10, 10) != (12, 12):
             lines.append(f"FAIL  front cell {hospital_front_xy(10, 10)} want (12, 12)")
@@ -642,6 +642,14 @@ def selftest(game: Path | None = None) -> list[str]:
         grass = [Image.new("RGBA", (58, 30), (0, 200, 0, 255)) for _ in range(50)]
         sheets["CITYFIXT"] = grass
         sheets[AHOSPIT_SHEET_KEY] = [Image.new("RGBA", (174, 143), (220, 30, 30, 255))]
+        b1b = [Image.new("RGBA", (58, 30), (0, 0, 0, 0)) for _ in range(100)]
+        from app.city_map import _HOSPITAL_Z0_WH
+
+        for var, (bw, bh) in _HOSPITAL_Z0_WH.items():
+            b1b[var] = Image.new("RGBA", (bw, bh), (1, 2, 3, 255))
+        for idx in (0x30, 0x31, 0x32, 0x33):
+            b1b[idx] = Image.new("RGBA", (58, 70), (40, 40, 220, 255))
+        sheets["BUILD1B"] = b1b
         for y in range(pin_city.height):
             for x in range(pin_city.width):
                 if pin_city.tile(x, y).terrain_id != ID_HOSPITAL:
@@ -659,6 +667,26 @@ def selftest(game: Path | None = None) -> list[str]:
                 lines.append(f"FAIL  south grass covered PNG {pix}")
             else:
                 lines.append("ok    grass south of 0xFB does not cover the PNG")
+        market_vars = (0x30, 0x32, 0x31, 0x33)
+        for i, (mx, my) in enumerate(((0, 0), (1, 0), (0, 1), (1, 1))):
+            off = pin_city.offset(12 + mx, 13 + my)
+            pin_city.tiles[off] = 0xFC
+            pin_city.tiles[off + 3] = HOSPITAL_DRAW
+            pin_city.tiles[off + 4] = market_vars[i]
+            pin_city.tiles[off + 5] = i
+        world = render_iso(pin_city, sheets=sheets, zoom=0)
+        msx, msy = tile_iso_xy(12, 13)
+        mpx, mpy = iso_sprite_dest(msx, msy, 70, 30)
+        mx0, my0 = max(gax, mpx), max(gay, mpy)
+        mx1, my1 = min(gax + gaw, mpx + 58), min(gay + gah, mpy + 70)
+        if mx1 <= mx0 or my1 <= my0:
+            lines.append("FAIL  market south of 0xFB does not overlap PNG")
+        else:
+            mpix = world.getpixel(((mx0 + mx1) // 2, (my0 + my1) // 2))
+            if mpix[2] < 180 or mpix[0] > 80:
+                lines.append(f"FAIL  hospital PNG covered market {mpix}")
+            else:
+                lines.append("ok    market south of 0xFB draws on top of the PNG")
         card = still_card_size((182, 132))
         cx, cy = still_screen_xy(card, ox=0)
         if cx < SIDEBAR_X or cx + card[0] > SIDEBAR_X + SIDEBAR_W:

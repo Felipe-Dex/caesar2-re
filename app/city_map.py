@@ -40,7 +40,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageChops, ImageDraw
 
 from app.config import find_file
 
@@ -723,48 +723,34 @@ def hospital_front_xy(
     return best
 
 
-def blit_hospital_overrides(
-    img: Image.Image,
-    city: CityMap,
-    sheets: dict[str, Sequence[Image.Image]] | None,
-    *,
-    zoom: int = 0,
-    facing: int = 0,
-    ox: int = 0,
-    oy: int = 0,
-) -> int:
-    """One AHOSPIT per 0xFB origin, after terrain, before CITYTOP / walkers.
-
-    Origin-time blit loses to later south/east grass (tall AABB). Pasting
-    here is the iso depth of the front-most leftover plus overlapping
-    neighbour diamonds.
-    """
-    from app.image_override import hospital_has_override, hospital_iso_sprite
-
-    if not hospital_has_override(sheets):
-        return 0
-    n = 0
-    for y in range(city.height):
-        for x in range(city.width):
-            t = city.tile(x, y)
-            if t.terrain_id != ID_HOSPITAL or (t.spawn_packed & 0xF) != 0:
-                continue
-            ax, ay, aw, ah = hospital_sprite_aabb(
-                x,
-                y,
-                sheets,
-                zoom=zoom,
-                facing=facing,
-                width=city.width,
-                height=city.height,
-                city=city,
-            )
-            spr = hospital_iso_sprite(sheets, aw, ah)
-            if spr is None:
-                continue
-            img.paste(spr, (ax + ox, ay + oy), spr)
-            n += 1
-    return n
+def _hospital_block_mask(
+    dest_x: int,
+    dest_y: int,
+    dest_w: int,
+    dest_h: int,
+    masks: Sequence[tuple[int, int, Image.Image]],
+) -> Image.Image | None:
+    """L mask, 255 where a hospital PNG is already opaque."""
+    block: Image.Image | None = None
+    for hx, hy, hspr in masks:
+        ix0 = max(dest_x, hx)
+        iy0 = max(dest_y, hy)
+        ix1 = min(dest_x + dest_w, hx + hspr.width)
+        iy1 = min(dest_y + dest_h, hy + hspr.height)
+        if ix1 <= ix0 or iy1 <= iy0:
+            continue
+        if block is None:
+            block = Image.new("L", (dest_w, dest_h), 0)
+        crop = hspr if hspr.mode == "RGBA" else hspr.convert("RGBA")
+        alpha = crop.crop((ix0 - hx, iy0 - hy, ix1 - hx, iy1 - hy)).split()[3]
+        bx, by = ix0 - dest_x, iy0 - dest_y
+        prev = block.crop((bx, by, bx + alpha.width, by + alpha.height))
+        merged = Image.new("L", alpha.size)
+        merged.putdata(
+            [a if a >= b else b for a, b in zip(alpha.getdata(), prev.getdata())]
+        )
+        block.paste(merged, (bx, by))
+    return block
 
 
 def _hospital_try_override(
@@ -777,9 +763,16 @@ def _hospital_try_override(
     cityfixt: Sequence[Image.Image] | None = None,
     tile_w: int = ISO_W,
     tile_h: int = ISO_H,
+    wx: int | None = None,
+    wy: int | None = None,
+    zoom: int = 0,
+    facing: int = 0,
+    map_w: int = MAP_W,
+    map_h: int = MAP_H,
+    hospital_masks: list[tuple[int, int, Image.Image]] | None = None,
 ) -> bool:
-    """Grass under this 0xFB cell; skip BUILD1B[86–94]. PNG is later."""
-    from app.image_override import hospital_has_override
+    """Grass under this 0xFB cell; skip PL8. PNG on the front-most leftover."""
+    from app.image_override import hospital_has_override, hospital_iso_sprite
 
     if tile.terrain_id != ID_HOSPITAL or not hospital_has_override(sheets):
         return False
@@ -794,6 +787,30 @@ def _hospital_try_override(
             tile_h=tile_h,
             lift=0,
         )
+    if wx is None or wy is None:
+        return True
+    ox, oy = hospital_origin_xy(wx, wy, tile)
+    if (wx, wy) != hospital_front_xy(
+        ox, oy, facing=facing, width=map_w, height=map_h
+    ):
+        return True
+    ax, ay, aw, ah = hospital_sprite_aabb(
+        ox,
+        oy,
+        sheets,
+        zoom=zoom,
+        facing=facing,
+        width=map_w,
+        height=map_h,
+    )
+    cx, cy = tile_iso_xy(wx, wy, zoom=zoom, facing=facing, width=map_w, height=map_h)
+    spr = hospital_iso_sprite(sheets, aw, ah)
+    if spr is None:
+        return True
+    px, py = ax - cx + sx, ay - cy + sy
+    img.paste(spr, (px, py), spr)
+    if hospital_masks is not None:
+        hospital_masks.append((px, py, spr))
     return True
 
 
@@ -1400,6 +1417,7 @@ def _blit_iso(
     tile_w: int = ISO_W,
     tile_h: int = ISO_H,
     lift: int = 0,
+    under_hospital: Sequence[tuple[int, int, Image.Image]] | None = None,
 ) -> bool:
     if frames is None or index is None:
         return False
@@ -1409,6 +1427,14 @@ def _blit_iso(
     if spr.width < tile_w // 2:
         return False
     px, py = iso_sprite_dest(sx, sy, spr.height, tile_h)
+    if under_hospital:
+        block = _hospital_block_mask(px, py, spr.width, spr.height, under_hospital)
+        if block is not None:
+            hard = block.point(lambda v: 255 if v > 16 else 0)
+            sa = spr.split()[3] if spr.mode == "RGBA" else Image.new("L", spr.size, 255)
+            mask = ImageChops.multiply(sa, ImageChops.invert(hard))
+            img.paste(spr, (px, py), mask)
+            return True
     img.paste(spr, (px, py), spr)
     return True
 
@@ -2075,6 +2101,7 @@ def _paint_iso_tile(
     wy: int | None = None,
     map_w: int = MAP_W,
     map_h: int = MAP_H,
+    hospital_masks: list[tuple[int, int, Image.Image]] | None = None,
 ) -> None:
     """Blit this cell's LUT sprite at ``(sx, sy)``.
 
@@ -2086,9 +2113,10 @@ def _paint_iso_tile(
     keeps the facing-0 piece). Factory CITYTOP stays on the world tile
     and is replayed after terrain so south extra_rows do not bury jugs.
 
-    Hospital ``0xFB`` + AHOSPIT.png: grass under each cell here;
-    leftover BUILD1B[86–94] skip. The PNG is pasted after terrain
-    (``blit_hospital_overrides``) so south grass cannot cover it.
+    Hospital ``0xFB`` + AHOSPIT.png: grass under each cell; skip
+    BUILD1B[86–94]. The PNG is pasted on the front-most leftover
+    (south corner). Later terrain skips opaque PNG pixels (steps);
+    later buildings (market) paint on top. CITYTOP / walkers after.
     """
     if _hospital_try_override(
         img,
@@ -2099,6 +2127,13 @@ def _paint_iso_tile(
         cityfixt=cityfixt,
         tile_w=tile_w,
         tile_h=tile_h,
+        wx=wx,
+        wy=wy,
+        zoom=zoom,
+        facing=facing,
+        map_w=map_w,
+        map_h=map_h,
+        hospital_masks=hospital_masks,
     ):
         return
     art = sprite_tile if sprite_tile is not None else tile
@@ -2106,6 +2141,7 @@ def _paint_iso_tile(
     # Aqueduct CITYFIXT diamonds have transparent arches. Without a grass
     # underlay the canvas ISO_BG (12,16,28) reads as a solid black box.
     # Reservoir / fountain stay opaque — do not paint under them.
+    avoid = hospital_masks if tile.is_terrain else None
     if is_aqueduct_id(tile.terrain_id) and cityfixt is not None:
         grass_idx = 8 + CITYFIXT_TERRAIN_BIAS
         _blit_iso(
@@ -2117,6 +2153,7 @@ def _paint_iso_tile(
             tile_w=tile_w,
             tile_h=tile_h,
             lift=0,
+            under_hospital=avoid,
         )
     if _blit_iso(
         img,
@@ -2126,6 +2163,7 @@ def _paint_iso_tile(
         sy,
         tile_w=tile_w,
         tile_h=tile_h,
+        under_hospital=avoid,
     ):
         _paint_factory_flag80(
             img,
@@ -2306,6 +2344,7 @@ def render_iso(
         cityfixt = sprites
 
     overlays: list[tuple[int, int, int, int]] = []
+    hospital_masks: list[tuple[int, int, Image.Image]] = []
     for dy in range(city.height):
         for dx in range(city.width):
             wx, wy = draw_to_world(dx, dy, facing, width=city.width, height=city.height)
@@ -2333,10 +2372,10 @@ def render_iso(
                 wy=wy,
                 map_w=city.width,
                 map_h=city.height,
+                hospital_masks=hospital_masks,
             )
             if world.terrain_id == 0xFA and world.draw & 0x80:
                 overlays.append((wx, wy, sx, sy))
-    blit_hospital_overrides(img, city, sheets, zoom=zoom, facing=facing)
     blit_factory_overlays(img, city, overlays, zoom=zoom, sheets=sheets)
     return img
 
@@ -2383,6 +2422,7 @@ def render_iso_view(
         return img, cx, cy
     tall = _MAX_SPRITE_H[z]
     overlays: list[tuple[int, int, int, int]] = []
+    hospital_masks: list[tuple[int, int, Image.Image]] = []
     for dy in range(ty0, ty1 + 1):
         for dx in range(tx0, tx1 + 1):
             wx, wy = draw_to_world(dx, dy, facing, width=city.width, height=city.height)
@@ -2412,12 +2452,10 @@ def render_iso_view(
                 wy=wy,
                 map_w=city.width,
                 map_h=city.height,
+                hospital_masks=hospital_masks,
             )
             if world.terrain_id == 0xFA and world.draw & 0x80:
                 overlays.append((wx, wy, sx, sy))
-    blit_hospital_overrides(
-        img, city, sheets, zoom=z, facing=facing, ox=paste_ox, oy=paste_oy
-    )
     blit_factory_overlays(img, city, overlays, zoom=z, sheets=sheets)
     return img, cx, cy
 
@@ -2649,6 +2687,7 @@ def blit_water_tiles(
     ordered = sorted(members, key=lambda p: (p[1], p[0]))
     n = 0
     overlays: list[tuple[int, int, int, int]] = []
+    hospital_masks: list[tuple[int, int, Image.Image]] = []
     for dx, dy in ordered:
         wx, wy = draw_to_world(dx, dy, facing, width=city.width, height=city.height)
         wx, wy = int(round(wx)), int(round(wy))
@@ -2675,13 +2714,11 @@ def blit_water_tiles(
             wy=wy,
             map_w=city.width,
             map_h=city.height,
+            hospital_masks=hospital_masks,
         )
         if world.terrain_id == 0xFA and world.draw & 0x80:
             overlays.append((wx, wy, sx - x0, sy - y0))
         n += 1
-    blit_hospital_overrides(
-        crop, city, sheets, zoom=z, facing=facing, ox=-x0, oy=-y0
-    )
     blit_factory_overlays(crop, city, overlays, zoom=z, sheets=sheets)
     img.paste(crop, (x0, y0))
     return n
