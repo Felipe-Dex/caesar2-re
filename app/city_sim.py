@@ -217,7 +217,8 @@ class SimState:
     tick_acc: int = 0  # [0x117ACC] ms accumulator
     # A / a 0x28c2f: turbo until sav_year_end 0x34D92 zeros [0xC45A0].
     year_turbo: bool = False
-    year_turbo_catchup: int = 0  # Speed menu Play/Faster to restore after Dec
+    year_turbo_catchup: int = 0  # Speed Play/Faster for Stop mid-year
+    year_turbo_paused: bool = False  # if A started from Pause, Stop restores it
     population: int = 0  # [0x102AB0] — emit needs >= 2
     pop_peak: int = 0  # FAQ latch: unlocks stay after pop drops
     flood_dir: int = 0  # [0x102678] 0…3
@@ -307,14 +308,17 @@ class PhaseResult:
 
 # EXE 0x28c2f A/a: clear pause [0x9CE64], CALL 0x31a9c ([0xC45A0]=1).
 # view_frame 0x3d357 increments when nonzero → >=2 skips the 0x3E4B9 ms gate.
-# sav_year_end 0x34D92 writes 0 at 0x34df7 after Dec wrap. 0x28db0 is dirty
-# rects, not a WAV. Host keeps Speed→Faster at catchup=1 (gated 4×).
+# sav_year_end 0x34D92 writes 0 at 0x34df7, then blocking [72] 0x61389
+# (clock frozen). After the modal, catchup stays 0 unless 0x31a9c runs.
+# Host pauses like P so January stays frozen until Play. Stop mid-year
+# restores the saved Speed. 0x28db0 is dirty-rects, not a WAV.
 YEAR_TURBO_CATCHUP = 2
 
 
 def start_year_turbo(state: SimState) -> None:
-    """A — Accelerate Time until Dec→Jan. Remembers the Speed menu rate."""
+    """A — Accelerate Time until Dec→Jan. Remembers Speed for Stop."""
     if not getattr(state, "year_turbo", False):
+        state.year_turbo_paused = bool(state.paused)
         saved = 0 if state.paused else int(state.catchup)
         if saved >= YEAR_TURBO_CATCHUP:
             saved = 1
@@ -324,15 +328,38 @@ def start_year_turbo(state: SimState) -> None:
     state.catchup = YEAR_TURBO_CATCHUP
 
 
+def stop_year_turbo(state: SimState) -> None:
+    """[75] Stop / click-resume: previous Speed. Does not force pause."""
+    if not getattr(state, "year_turbo", False):
+        return
+    was_paused = bool(state.year_turbo_paused)
+    catchup = 1 if state.year_turbo_catchup else 0
+    state.year_turbo = False
+    state.year_turbo_catchup = 0
+    state.year_turbo_paused = False
+    state.paused = was_paused
+    state.catchup = 0 if was_paused else catchup
+
+
+def pause_at_year_wrap(state: SimState) -> None:
+    """Dec→Jan: drop turbo and pause. Do not restore Play/Faster."""
+    state.year_turbo = False
+    state.year_turbo_catchup = 0
+    state.year_turbo_paused = False
+    state.paused = True
+    state.catchup = 0
+
+
 def end_year_turbo(state: SimState, *, restore: bool = True) -> None:
-    """Dec wrap restores Play/Faster. Speed menu / P pass restore=False."""
+    """Speed menu / P override. restore=True is Stop (previous Speed)."""
+    if restore:
+        stop_year_turbo(state)
+        return
     if not getattr(state, "year_turbo", False):
         return
     state.year_turbo = False
-    if restore:
-        state.catchup = 1 if state.year_turbo_catchup else 0
-        state.paused = False
     state.year_turbo_catchup = 0
+    state.year_turbo_paused = False
 
 
 def _off(x: int, y: int) -> int:
@@ -1334,7 +1361,7 @@ def city_sim_phase(
         wrapped = _phase_wrap(state)
         year_wrapped = wrapped and int(state.year_raw) != year_before
         if year_wrapped:
-            end_year_turbo(state, restore=True)
+            pause_at_year_wrap(state)
             # Host writes sav/LASTYEAR.SAV after this (0x34E2D / F5 write_sav).
         if getattr(state, "city_only", 0) and can and walkers is not None:
             extra = wt.city_only_try_invasion(
@@ -2471,7 +2498,7 @@ def selftest() -> list[str]:
     ok = ok and sim_tick_due(gate, 200) == 4
     lines.append(f"sim_tick_due pause/play/fast: {'ok' if ok else 'FAIL'}")
 
-    from app.city_sim import end_year_turbo, start_year_turbo
+    from app.city_sim import end_year_turbo, start_year_turbo, stop_year_turbo
     from app.messages import peek_message
 
     play = SimState(paused=False, catchup=0, city_only=1)
@@ -2489,13 +2516,21 @@ def selftest() -> list[str]:
     start_year_turbo(fast)
     ok = fast.year_turbo and fast.year_turbo_catchup == 1
     lines.append(f"A turbo remembers Faster: {'ok' if ok else 'FAIL'}")
+    stop_year_turbo(fast)
+    ok = (not fast.year_turbo) and not fast.paused and fast.catchup == 1
+    lines.append(f"Stop mid-year restores Faster: {'ok' if ok else 'FAIL'}")
     paused = SimState(paused=True, catchup=0, city_only=1)
     start_year_turbo(paused)
-    ok = (not paused.paused) and paused.year_turbo and paused.year_turbo_catchup == 0
+    ok = (not paused.paused) and paused.year_turbo and paused.year_turbo_paused
     lines.append(f"A unpauses into turbo: {'ok' if ok else 'FAIL'}")
-    end_year_turbo(fast, restore=False)
-    fast.catchup = 1
-    ok = (not fast.year_turbo) and fast.catchup == 1
+    stop_year_turbo(paused)
+    ok = paused.paused and paused.catchup == 0
+    lines.append(f"Stop restores prior Pause: {'ok' if ok else 'FAIL'}")
+    again = SimState(paused=False, catchup=1, city_only=1)
+    start_year_turbo(again)
+    end_year_turbo(again, restore=False)
+    again.catchup = 1
+    ok = (not again.year_turbo) and again.catchup == 1
     lines.append(f"Speed menu cancels turbo: {'ok' if ok else 'FAIL'}")
 
     tiles = _blank_tiles()
@@ -2524,12 +2559,13 @@ def selftest() -> list[str]:
         and dec.month == 0
         and dec.year_raw == -299
         and not dec.year_turbo
-        and dec.catchup == 1
+        and dec.paused
+        and dec.catchup == 0
         and (year_msg is None or getattr(year_msg, "slot", None) != 83)
     )
     lines.append(
-        f"Dec wrap restores Faster, no [83]: {'ok' if ok else 'FAIL'} "
-        f"turbo={dec.year_turbo} catchup={dec.catchup} slot={getattr(year_msg, 'slot', None)}"
+        f"Dec wrap pauses, no [83]: {'ok' if ok else 'FAIL'} "
+        f"turbo={dec.year_turbo} paused={dec.paused} catchup={dec.catchup}"
     )
     tiles = _blank_tiles()
     dec_play = SimState(
@@ -2537,8 +2573,13 @@ def selftest() -> list[str]:
     )
     start_year_turbo(dec_play)
     city_sim_phase(tiles, dec_play)
-    ok = (not dec_play.year_turbo) and dec_play.catchup == 0 and dec_play.month == 0
-    lines.append(f"Dec wrap restores Play: {'ok' if ok else 'FAIL'}")
+    ok = (
+        not dec_play.year_turbo
+        and dec_play.paused
+        and dec_play.catchup == 0
+        and dec_play.month == 0
+    )
+    lines.append(f"Dec wrap pauses from Play turbo: {'ok' if ok else 'FAIL'}")
 
     tiles = _blank_tiles()
     state = SimState(phase=1, year_raw=-300, month=0, city_only=1)

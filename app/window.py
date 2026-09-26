@@ -86,11 +86,13 @@ from app.menus import (
     cycle_scroll,
     decorate_item,
     help_topic_excerpt,
+    is_turbo_report,
     next_game_speed,
     on_off,
     report_contains,
     report_line_at,
     toggle_pause_action,
+    turbo_report,
 )
 from app.city_map import WATER_FRAME_MS, WATER_FRAMES
 from app.city_overlay import (
@@ -1912,24 +1914,34 @@ def show(ctx: BootContext, *, game: Path) -> None:
     def apply_speed(action: str) -> None:
         """INT_CITY play / faster / pause + Speed menu. A is year-end turbo.
 
-        0x28c2f / 0x31a9c set [0xC45A0]; sav_year_end 0x34df7 clears it.
-        Speed flyout and P cancel turbo without waiting for December.
+        0x28c2f / 0x31a9c set [0xC45A0]; sav_year_end 0x34df7 clears it
+        then blocking [72]. Speed flyout and P cancel turbo. Stop on the
+        [75] box restores the previous rate; Dec wrap pauses instead.
         """
         from app.city_sim import end_year_turbo, start_year_turbo
 
+        nonlocal menu_report
         sim = ctx.sim
         if action == "speed_year":
             start_year_turbo(sim)
-        elif action == "speed_pause":
+            _open_report(turbo_report(ctx.eng))
+            return
+        if action == "speed_pause":
             end_year_turbo(sim, restore=False)
+            if is_turbo_report(menu_report, eng=ctx.eng):
+                menu_report = None
             sim.paused = True
             sim.catchup = 0
         elif action == "speed_play":
             end_year_turbo(sim, restore=False)
+            if is_turbo_report(menu_report, eng=ctx.eng):
+                menu_report = None
             sim.paused = False
             sim.catchup = 0
         elif action == "speed_fast":
             end_year_turbo(sim, restore=False)
+            if is_turbo_report(menu_report, eng=ctx.eng):
+                menu_report = None
             sim.paused = False
             sim.catchup = 1
         else:
@@ -1937,9 +1949,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
         from app.walkers import drawable_walkers
 
         extra = speed_action(sim)
-        if action == "speed_year":
-            extra = _eng_skip(ctx.eng, 75, 0, "Accelerated Time")
-        elif action == "speed_pause" and sim.paused:
+        if action == "speed_pause" and sim.paused:
             extra = _eng_skip(ctx.eng, 8, 2, "Game Paused")
         blit(
             f"{extra}  {sim.date_label}  "
@@ -1994,12 +2004,17 @@ def show(ctx: BootContext, *, game: Path) -> None:
 
     def _close_report() -> None:
         nonlocal menu_report, load_picks, save_picks, save_typed, save_typing
+        from app.city_sim import stop_year_turbo
+
+        was_turbo = is_turbo_report(menu_report, eng=ctx.eng)
         menu_report = None
         load_picks = None
         save_picks = None
         save_typed = ""
         save_typing = False
         title_session.options_open = False
+        if was_turbo:
+            stop_year_turbo(ctx.sim)
         _pump_advisor()
 
     def _open_report(
@@ -2020,9 +2035,15 @@ def show(ctx: BootContext, *, game: Path) -> None:
         blit(extra if extra is not None else report.title)
 
     def _maybe_annual_summary(ph) -> None:
-        """FUN_00061389 after Dec→Jan. City Only [72] numbers. Not [83]."""
+        """FUN_00061389 after Dec→Jan. City Only [72] numbers. Not [83].
+
+        Closes the [75] turbo box first. Clock is already paused.
+        """
+        nonlocal menu_report
         if not getattr(ph, "year_wrapped", False):
             return
+        if is_turbo_report(menu_report, eng=ctx.eng):
+            menu_report = None
         if not getattr(ctx.sim, "city_only", 0):
             return
         if not options.annual_summary:
@@ -3088,6 +3109,9 @@ def show(ctx: BootContext, *, game: Path) -> None:
                         else:
                             save_typing = True
                             _refresh_save_picker()
+                elif is_turbo_report(menu_report, eng=ctx.eng):
+                    _close_report()
+                    blit(last_extra)
                 return True
             _close_report()
             blit(last_extra)
