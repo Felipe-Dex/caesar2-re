@@ -232,7 +232,8 @@ ORACLE_RAW_EAX0 = 0x1F
 # X independently of Y — that fattened RAT_FRON / EMPIRE.PL8 on widescreen.
 FORUM_NATIVE_W = 640
 FORUM_NATIVE_H = 480
-_FORUM_LETTERBOX = (12, 16, 28)
+FORUM_LETTERBOX = (12, 16, 28)
+_FORUM_LETTERBOX = FORUM_LETTERBOX
 # 0x33C3D dest table at 0x95cbb / 0x95cbd (ecx*4, i16 x/y). Skip = ecx+1.
 # E_PARTS2 sprite xy is decorative — using it put Germania Exterior on the sea.
 EMPIRE_HOTSPOTS: tuple[tuple[int, int], ...] = (
@@ -251,7 +252,7 @@ EMPIRE_HIT_H = 28
 EMPIRE_GERMANIA_EXTERIOR = 39  # [5] skip; dest (249, 88) — north, not the Med.
 EMPIRE_CRETA = 17
 # 0x5C621 dialog: 0x59ff8 frame at (0x70,0x80), 0x1A×0x10 tiles of 16.
-# Palette byte 0x11 = C2 blue chrome (not the green hover we painted).
+# EMPIRE.256[0x11] = (93,146,121) green-teal — C2 “quadro verde”, not VGA blue.
 EMPIRE_DLG_X, EMPIRE_DLG_Y = 0x70, 0x80
 EMPIRE_DLG_TILES_W, EMPIRE_DLG_TILES_H = 0x1A, 0x10
 EMPIRE_DLG_W = EMPIRE_DLG_TILES_W * 16
@@ -264,9 +265,15 @@ EMPIRE_FLAVOR_W, EMPIRE_FLAVOR_H = 0x160, 0x64
 EMPIRE_CLOSE_W, EMPIRE_CLOSE_H = 24, 24
 EMPIRE_CLOSE_X = EMPIRE_DLG_X + EMPIRE_DLG_W - EMPIRE_CLOSE_W - 6
 EMPIRE_CLOSE_Y = EMPIRE_DLG_Y + 6
-EMPIRE_BLUE = (16, 44, 96, 240)
-EMPIRE_BLUE_INNER = (8, 28, 72, 255)
-EMPIRE_BLUE_EDGE = (180, 196, 230, 255)
+# E_PARTS2 sprites 44–46: 64×25 @ (286,402), 64×25 @ (358,402), 32×25 @ (429,402).
+EMPIRE_PLATE_X0, EMPIRE_PLATE_X1 = 286, 461
+EMPIRE_PLATE_Y, EMPIRE_PLATE_H = 402, 25
+EMPIRE_CAP_Y = 408  # [33]+1 inside the marble plate band
+EMPIRE_FOOT_Y = 442  # [33]+3 below that frame
+EMPIRE_TEAL = (93, 146, 121, 240)
+EMPIRE_TEAL_INNER = (56, 100, 88, 255)
+EMPIRE_TEAL_EDGE = (200, 216, 180, 255)
+EMPIRE_TEAL_CLOSE = (60, 104, 90, 255)
 EMPIRE_INK = (240, 228, 160, 255)
 EMPIRE_INK_DIM = (210, 200, 140, 255)
 # 0x135A4(skip+0x3A): table 0x93694. skip 1=B30, skip 2=C01 … skip 32=C31.
@@ -1282,6 +1289,37 @@ def forum_to_native(mx: int, my: int, win_w: int, win_h: int) -> tuple[int, int]
     return (int(mx) - ox) // scale, (int(my) - oy) // scale
 
 
+def compose_forum_native(state: ForumState, sim: SimState, *, eng=None) -> Image.Image:
+    """Always 640×480. Never a window-sized Oracle/Empire bitmap."""
+    native = _blit_forum_native(state, sim, eng=eng)
+    if native.size == (FORUM_NATIVE_W, FORUM_NATIVE_H):
+        return native.convert("RGB")
+    return _fit_forum_native(native, (*FORUM_LETTERBOX, 255)).convert("RGB")
+
+
+def letterbox_forum_fb(native: Image.Image, dest_w: int, dest_h: int) -> Image.Image:
+    """Integer nearest-neighbor scale of 640×480, centered in dest.
+
+    Shared by Oracle and Empire. Never ``resize((dest_w, dest_h))``.
+    """
+    fb = native.convert("RGB")
+    if fb.size != (FORUM_NATIVE_W, FORUM_NATIVE_H):
+        fb = _fit_forum_native(fb, (*FORUM_LETTERBOX, 255)).convert("RGB")
+    w = max(1, int(dest_w))
+    h = max(1, int(dest_h))
+    scale, ox, oy = forum_layout(w, h)
+    if scale > 1:
+        fb = fb.resize(
+            (FORUM_NATIVE_W * scale, FORUM_NATIVE_H * scale),
+            Image.Resampling.NEAREST,
+        )
+    if fb.size == (w, h) and ox == 0 and oy == 0:
+        return fb
+    canvas = Image.new("RGB", (w, h), FORUM_LETTERBOX)
+    canvas.paste(fb, (ox, oy))
+    return canvas
+
+
 def button_rect(index: int) -> tuple[int, int, int, int]:
     col, row = index % 4, index // 4
     x = _BTN_X0 + col * (_BTN_W + _BTN_GAP)
@@ -1582,18 +1620,7 @@ def blit_forum(
 ) -> Image.Image:
     """Compose native 640×480 Forum, then integer-upscale into ``frame_size``."""
     w, h = frame_size
-    scale, ox, oy = forum_layout(w, h)
-    native = _blit_forum_native(state, sim, eng=eng)
-    if scale > 1:
-        native = native.resize(
-            (FORUM_NATIVE_W * scale, FORUM_NATIVE_H * scale),
-            Image.Resampling.NEAREST,
-        )
-    if native.size == (w, h) and ox == 0 and oy == 0:
-        return native
-    canvas = Image.new("RGB", (w, h), _FORUM_LETTERBOX)
-    canvas.paste(native, (ox, oy))
-    return canvas
+    return letterbox_forum_fb(compose_forum_native(state, sim, eng=eng), w, h)
 
 
 def _blit_forum_native(state: ForumState, sim: SimState, *, eng=None) -> Image.Image:
@@ -2448,7 +2475,7 @@ def _draw_centurion(draw, font, sim: SimState, eng) -> None:
 def _draw_empire_close(draw) -> None:
     """0x2ddad sprite 0x33 — 24×24 close/X on the blue frame."""
     x, y, w, h = empire_close_rect()
-    draw.rectangle((x, y, x + w - 1, y + h - 1), fill=(32, 64, 120, 255), outline=EMPIRE_BLUE_EDGE)
+    draw.rectangle((x, y, x + w - 1, y + h - 1), fill=EMPIRE_TEAL_CLOSE, outline=EMPIRE_TEAL_EDGE)
     draw.rectangle((x + 1, y + 1, x + w - 2, y + h - 2), outline=(240, 230, 180, 255))
     pad = 6
     draw.line((x + pad, y + pad, x + w - pad - 1, y + h - pad - 1), fill=EMPIRE_INK, width=2)
@@ -2461,6 +2488,10 @@ def _blit_empire_native(state: ForumState, sim: SimState, *, eng=None) -> Image.
         out = _fit_forum_native(state.empire_map, (48, 40, 28, 255))
     else:
         out = Image.new("RGBA", (FORUM_NATIVE_W, FORUM_NATIVE_H), (48, 40, 28, 255))
+    for item in state.empire_parts[44:47]:
+        spr, sx, sy = item
+        plate = spr.convert("RGBA")
+        out.paste(plate, (int(sx), int(sy)), plate)
     draw = ImageDraw.Draw(out)
     font = _serif_font(16)
     small = _serif_font(13)
@@ -2469,10 +2500,11 @@ def _blit_empire_native(state: ForumState, sim: SimState, *, eng=None) -> Image.
     draw.text(((FORUM_NATIVE_W - int(tw)) // 2, 18), title, fill=(16, 12, 8, 255), font=font)
     cap = _eng(eng, 33, 1, "Select province for more info")
     cw = draw.textlength(cap, font=small) if hasattr(draw, "textlength") else 240
-    draw.text(((FORUM_NATIVE_W - int(cw)) // 2, 402), cap, fill=(16, 12, 8, 255), font=small)
+    plate_mid = (EMPIRE_PLATE_X0 + EMPIRE_PLATE_X1) // 2
+    draw.text((plate_mid - int(cw) // 2, EMPIRE_CAP_Y), cap, fill=(16, 12, 8, 255), font=small)
     foot = _eng(eng, 33, 3, "Right Click to Return to Forum")
     fw = draw.textlength(foot, font=small) if hasattr(draw, "textlength") else 260
-    draw.text(((FORUM_NATIVE_W - int(fw)) // 2, 448), foot, fill=(240, 230, 200, 255), font=small)
+    draw.text(((FORUM_NATIVE_W - int(fw)) // 2, EMPIRE_FOOT_Y), foot, fill=(240, 230, 200, 255), font=small)
     pick = state.empire_pick
     if pick and 1 <= pick <= len(EMPIRE_HOTSPOTS):
         name = _eng(eng, 5, pick, "Unknown Province")
@@ -2484,14 +2516,14 @@ def _blit_empire_native(state: ForumState, sim: SimState, *, eng=None) -> Image.
             outline=(200, 32, 24, 255),
             width=2,
         )
-        # 0x59ff8 blue chrome (0x117a60=0x11) + 0x2ddad close/X.
+        # 0x59ff8 teal chrome (EMPIRE.256[0x11]) + 0x2ddad close/X.
         panel = (
             EMPIRE_DLG_X,
             EMPIRE_DLG_Y,
             EMPIRE_DLG_X + EMPIRE_DLG_W,
             EMPIRE_DLG_Y + EMPIRE_DLG_H,
         )
-        draw.rectangle(panel, fill=EMPIRE_BLUE, outline=EMPIRE_BLUE_EDGE)
+        draw.rectangle(panel, fill=EMPIRE_TEAL, outline=EMPIRE_TEAL_EDGE)
         draw.text((EMPIRE_NAME_X, EMPIRE_NAME_Y), name, fill=EMPIRE_INK, font=font)
         draw.text((EMPIRE_STAT_X, EMPIRE_STAT_Y), status, fill=EMPIRE_INK_DIM, font=small)
         box = (
@@ -2500,7 +2532,7 @@ def _blit_empire_native(state: ForumState, sim: SimState, *, eng=None) -> Image.
             EMPIRE_FLAVOR_X + EMPIRE_FLAVOR_W,
             EMPIRE_FLAVOR_Y + EMPIRE_FLAVOR_H,
         )
-        draw.rectangle(box, fill=EMPIRE_BLUE_INNER, outline=EMPIRE_BLUE_EDGE)
+        draw.rectangle(box, fill=EMPIRE_TEAL_INNER, outline=EMPIRE_TEAL_EDGE)
         fy = EMPIRE_FLAVOR_Y + 6
         for line in _wrap_oracle_text(flavor, 46)[:6]:
             draw.text((EMPIRE_FLAVOR_X + 8, fy), line, fill=EMPIRE_INK, font=small)
@@ -3370,20 +3402,41 @@ def selftest() -> list[str]:
     else:
         lines.append("ok    Rome / Personal / Legion / Merchant / Empire blit 640x480")
     fat = Image.new("RGB", (FORUM_NATIVE_W, FORUM_NATIVE_H), (90, 70, 50))
-    owide = blit_forum(
-        (1280, 720),
-        ForumState(kind=KIND_ORACLE, oracle_back=fat),
+    owide = letterbox_forum_fb(
+        compose_forum_native(
+            ForumState(kind=KIND_ORACLE, oracle_back=fat),
+            SimState(city_only=1),
+        ),
+        1920,
+        1080,
+    )
+    osc, oox, ooy = forum_layout(1920, 1080)
+    emp_lb = letterbox_forum_fb(
+        compose_forum_native(ForumState(kind=KIND_EMPIRE), SimState(city_only=1)),
+        1920,
+        1080,
+    )
+    if osc != 2 or (oox, ooy) != (320, 60):
+        lines.append(f"FAIL  oracle widescreen layout {osc, oox, ooy}")
+    elif owide.getpixel((4, 4)) != FORUM_LETTERBOX:
+        lines.append("FAIL  oracle 16:9 stretched (no letterbox)")
+    elif owide.getpixel((1915, 4)) != FORUM_LETTERBOX:
+        lines.append("FAIL  oracle 16:9 missing right bar")
+    elif owide.getpixel((oox + 8, ooy + 8)) == FORUM_LETTERBOX:
+        lines.append("FAIL  oracle FB empty after letterbox")
+    elif emp_lb.getpixel((4, 4)) != FORUM_LETTERBOX:
+        lines.append("FAIL  empire 16:9 helper drifted from Oracle")
+    else:
+        lines.append("ok    Oracle/Empire share letterbox_forum_fb 16:9 bars")
+    wide_src = Image.new("RGB", (1920, 1080), (90, 70, 50))
+    forced = compose_forum_native(
+        ForumState(kind=KIND_ORACLE, oracle_back=wide_src),
         SimState(city_only=1),
     )
-    osc, oox, ooy = forum_layout(1280, 720)
-    if osc != 1 or (oox, ooy) != (320, 120):
-        lines.append(f"FAIL  oracle widescreen layout {osc, oox, ooy}")
-    elif owide.getpixel((4, 4)) != _FORUM_LETTERBOX:
-        lines.append("FAIL  oracle widescreen stretched (no letterbox)")
-    elif owide.getpixel((oox + 8, ooy + 8)) == _FORUM_LETTERBOX:
-        lines.append("FAIL  oracle FB empty after letterbox")
+    if forced.size != (FORUM_NATIVE_W, FORUM_NATIVE_H):
+        lines.append(f"FAIL  compose_forum_native {forced.size}")
     else:
-        lines.append("ok    Oracle 640×480 integer scale + letterbox")
+        lines.append("ok    compose_forum_native stays 640×480")
     col_fat = Image.new("RGBA", (192, 337), (200, 160, 80, 255))
     locked = _lock_oracle_column(col_fat)
     if locked.size != (ORACLE_COL_W, ORACLE_COL_H):
@@ -3411,10 +3464,11 @@ def selftest() -> list[str]:
     sea = ForumState(kind=KIND_EMPIRE)
     click_forum(sea, 180, 280, SimState(city_only=1))
     mapped = ForumState(kind=KIND_EMPIRE)
+    msc, mox, moy = forum_layout(1280, 720)
     click_forum(
         mapped,
-        oox + gx + 4,
-        ooy + gy + 4,
+        mox + gx + 4,
+        moy + gy + 4,
         SimState(city_only=1),
         frame_size=(1280, 720),
     )
@@ -3463,7 +3517,16 @@ def selftest() -> list[str]:
     elif "Govern this Province" in creta.empire_flavor:
         lines.append("FAIL  career Govern this Province leaked")
     else:
-        lines.append("ok    flavor ink inside 0x57f48 blue frame")
+        lines.append("ok    flavor ink inside 0x59ff8 teal frame")
+    fill = dframe.getpixel((EMPIRE_DLG_X + 20, EMPIRE_DLG_Y + 20))
+    if fill[1] < 100 or fill[1] <= fill[2]:
+        lines.append(f"FAIL  empire dialog not teal {fill}")
+    else:
+        lines.append("ok    Empire dialog fill EMPIRE.256[0x11] teal")
+    if EMPIRE_CAP_Y != 408 or EMPIRE_FOOT_Y != 442:
+        lines.append(f"FAIL  empire footer y {EMPIRE_CAP_Y} {EMPIRE_FOOT_Y}")
+    else:
+        lines.append("ok    Empire caption y=408 / footer y=442")
     creta.empire_pick = EMPIRE_CRETA
     creta.empire_flavor = empire_flavor_text(EMPIRE_CRETA)
     rx, ry, rw, rh = empire_close_rect()
@@ -3476,10 +3539,10 @@ def selftest() -> list[str]:
     creta.empire_flavor = "island"
     cbox = blit_forum((640, 480), creta, SimState(city_only=1))
     xpix = cbox.getpixel((rx + 4, ry + 4))
-    if xpix[2] < 80:
-        lines.append(f"FAIL  close gadget not blue {xpix}")
+    if xpix[1] < 80 or xpix[1] <= xpix[2]:
+        lines.append(f"FAIL  close gadget not teal {xpix}")
     else:
-        lines.append("ok    close gadget painted on blue frame")
+        lines.append("ok    close gadget painted on teal frame")
     sim_g = SimState(city_only=1)
     goods = bytearray(768)
     struct.pack_into("<i", goods, 1 * 48 + 8, 2)

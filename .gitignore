@@ -87,6 +87,10 @@ logs/
 app/**/*.png
 app/**/*.PNG
 
+# One-off RE pin scratch (do not commit)
+tools/_pin_*.py
+notes/_pin_*.txt
+
 # Python
 __pycache__/
 *.pyc

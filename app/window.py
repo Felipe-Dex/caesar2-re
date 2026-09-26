@@ -31,6 +31,8 @@ from app.city_chrome import (
     speed_action,
 )
 from app.forum import (
+    FORUM_NATIVE_H,
+    FORUM_NATIVE_W,
     KIND_CHROME,
     KIND_EMPIRE,
     KIND_ORACLE,
@@ -38,6 +40,8 @@ from app.forum import (
     blit_forum,
     blit_pause_square,
     click_forum,
+    compose_forum_native,
+    forum_layout,
     is_forum_building,
     open_forum,
     type_forum_key,
@@ -880,6 +884,11 @@ def show(ctx: BootContext, *, game: Path) -> None:
     ui_item = host.create_image(0, 0, anchor="nw")
     well_item = host.create_image(0, TOP_BAR_H, anchor="nw")
     front_item = host.create_image(0, 0, anchor="nw")
+    _lb_fill = "#0c101c"
+    lb_n = host.create_rectangle(0, 0, 0, 0, fill=_lb_fill, outline="", tags="forum_lb")
+    lb_s = host.create_rectangle(0, 0, 0, 0, fill=_lb_fill, outline="", tags="forum_lb")
+    lb_w = host.create_rectangle(0, 0, 0, 0, fill=_lb_fill, outline="", tags="forum_lb")
+    lb_e = host.create_rectangle(0, 0, 0, 0, fill=_lb_fill, outline="", tags="forum_lb")
     well_photo: ImageTk.PhotoImage | None = None
     ui_photo: ImageTk.PhotoImage | None = None
     front_photo: ImageTk.PhotoImage | None = None
@@ -1032,6 +1041,39 @@ def show(ctx: BootContext, *, game: Path) -> None:
         ox = chrome_ox(win_w)
         return (0, TOP_BAR_H, SIDEBAR_X + ox, win_h)
 
+    def _forum_canvas_size() -> tuple[int, int]:
+        """Canvas client pixels — never the 640×480 requested size alone."""
+        try:
+            host.update_idletasks()
+        except tk.TclError:
+            pass
+        return (
+            max(SCREEN_W, int(win_w), int(host.winfo_width() or 0)),
+            max(SCREEN_H, int(win_h), int(host.winfo_height() or 0)),
+        )
+
+    def _forum_letterbox_mask(
+        fw: int,
+        fh: int,
+        ox: int,
+        oy: int,
+        bw: int,
+        bh: int,
+        *,
+        show: bool,
+    ) -> None:
+        if not show:
+            host.coords(lb_n, 0, 0, 0, 0)
+            host.coords(lb_s, 0, 0, 0, 0)
+            host.coords(lb_w, 0, 0, 0, 0)
+            host.coords(lb_e, 0, 0, 0, 0)
+            return
+        host.coords(lb_n, 0, 0, fw, oy)
+        host.coords(lb_s, 0, oy + bh, fw, fh)
+        host.coords(lb_w, 0, oy, ox, oy + bh)
+        host.coords(lb_e, ox + bw, oy, fw, oy + bh)
+        host.tag_raise("forum_lb")
+
     def _set_layer(item: int, img: Image.Image | None, which: str) -> None:
         nonlocal well_photo, ui_photo, front_photo
         if img is None:
@@ -1058,6 +1100,9 @@ def show(ctx: BootContext, *, game: Path) -> None:
         t0 = time.perf_counter()
         if extra is not None:
             last_extra = extra
+        if forum_state is None or forum_state.kind not in (KIND_ORACLE, KIND_EMPIRE):
+            host.coords(ui_item, 0, 0)
+            _forum_letterbox_mask(win_w, win_h, 0, 0, win_w, win_h, show=False)
         ox = chrome_ox(win_w)
         shown = extra if extra is not None else last_extra
         extra_alert = False
@@ -1072,19 +1117,39 @@ def show(ctx: BootContext, *, game: Path) -> None:
             shown = f"{prev.message}  tesouro {ctx.sim.treasury}"
             extra_alert = False
         if forum_state is not None:
-            # Canvas pixels only — root HWND includes the title bar and
-            # made Oracle's 640×480 FB look fat when the image was shown
-            # in a shorter well.
-            fw = max(SCREEN_W, int(host.winfo_width() or win_w))
-            fh = max(SCREEN_H, int(host.winfo_height() or win_h))
-            frame = blit_forum((fw, fh), forum_state, ctx.sim, eng=ctx.eng)
-            # Oracle / Empire are the 640×480 FB. City HUD extra reused the
-            # chrome button name (leftover ORACLE / EMPIRE MAP strip).
+            # Same dest for Oracle and Empire. Do not use the 640×480
+            # requested canvas size — that early-returned a raw 4:3
+            # PhotoImage and the packed 16:9 HWND showed fat RAT_FRON.
+            fw, fh = _forum_canvas_size()
             if forum_state.kind in (KIND_ORACLE, KIND_EMPIRE):
                 last_extra = None
+                native = compose_forum_native(forum_state, ctx.sim, eng=ctx.eng)
+                scale, ox, oy = forum_layout(fw, fh)
+                if scale > 1:
+                    shown_fb = native.resize(
+                        (FORUM_NATIVE_W * scale, FORUM_NATIVE_H * scale),
+                        Image.Resampling.NEAREST,
+                    )
+                else:
+                    shown_fb = native
                 if menu_report is not None:
+                    frame = blit_forum((fw, fh), forum_state, ctx.sim, eng=ctx.eng)
                     frame = blit_menu_report(frame, menu_report)
+                    _set_layer(well_item, None, "well")
+                    _set_layer(front_item, None, "front")
+                    _set_layer(ui_item, frame.convert("RGB"), "ui")
+                    host.coords(ui_item, 0, 0)
+                    _forum_letterbox_mask(fw, fh, ox, oy, shown_fb.width, shown_fb.height, show=True)
+                else:
+                    _set_layer(well_item, None, "well")
+                    _set_layer(front_item, None, "front")
+                    _set_layer(ui_item, shown_fb.convert("RGB"), "ui")
+                    host.coords(ui_item, ox, oy)
+                    _forum_letterbox_mask(
+                        fw, fh, ox, oy, shown_fb.width, shown_fb.height, show=True
+                    )
             else:
+                frame = blit_forum((fw, fh), forum_state, ctx.sim, eng=ctx.eng)
                 frame = compose_city_hud(
                     frame,
                     ctx,
@@ -1094,9 +1159,11 @@ def show(ctx: BootContext, *, game: Path) -> None:
                     report=menu_report,
                     extra_alert=extra_alert,
                 )
-            _set_layer(well_item, None, "well")
-            _set_layer(front_item, None, "front")
-            _set_layer(ui_item, frame.convert("RGB"), "ui")
+                _set_layer(well_item, None, "well")
+                _set_layer(front_item, None, "front")
+                _set_layer(ui_item, frame.convert("RGB"), "ui")
+                host.coords(ui_item, 0, 0)
+                _forum_letterbox_mask(fw, fh, 0, 0, fw, fh, show=False)
             _prof_note(t0)
             return
         if not map_mode:
@@ -1129,6 +1196,8 @@ def show(ctx: BootContext, *, game: Path) -> None:
             _set_layer(well_item, None, "well")
             _set_layer(front_item, None, "front")
             _set_layer(ui_item, frame.convert("RGB"), "ui")
+            host.coords(ui_item, 0, 0)
+            _forum_letterbox_mask(win_w, win_h, 0, 0, win_w, win_h, show=False)
             _prof_note(t0)
             return
         ww, wh = world_wh()
@@ -3416,10 +3485,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
                 event.y,
                 ctx.sim,
                 eng=ctx.eng,
-                frame_size=(
-                    max(SCREEN_W, int(host.winfo_width() or win_w)),
-                    max(SCREEN_H, int(host.winfo_height() or win_h)),
-                ),
+                frame_size=_forum_canvas_size(),
             )
             stem = forum_state.oracle_sfx or forum_state.empire_sfx
             if stem:
