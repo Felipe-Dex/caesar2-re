@@ -346,11 +346,12 @@ def seed_watch_from_city(sim, tiles: bytearray) -> MessageWatch:
     if not getattr(sim, "city_only", 0):
         return watch
 
-    from app.unlocks import note_population, peak_population
+    from app.unlocks import note_population, peak_population, seed_unlock_step
 
     pop = int(getattr(sim, "population", 0))
     note_population(sim, pop)
     peak = peak_population(sim)
+    seed_unlock_step(sim, peak)
     _houses, temples, fires, _ = _city_counts(tiles)
     staffed = _staffed(sim)
     ready = max(0, int(getattr(sim, "plebs_ready", 0)))
@@ -601,12 +602,19 @@ def scan_city_messages(
     # Annual Summary (sav_year_end 0x34e14). No 58c87 site loads EAX=0x54
     # ([83] Another Year Passes). Do not enqueue congrat on wrap.
 
+    # EXE 0x44337: [114] only when [0x102AB0] >= gate AND [0x102C3C]
+    # equals that step (Colosseum = 2400 and step 4). inc the step so a
+    # later pop flicker cannot re-fire. Peak still unlocks the palette.
+    step = int(getattr(sim, "unlock_step", 0) or 0)
+    gates = list(UNLOCK_LABEL.items())
+    while step < len(gates) and pop >= gates[step][0]:
+        gate, name = gates[step]
+        extra = name
+        if enqueue(sim, _make(eng, f"unlock:{gate}", 114, extra=extra)):
+            fired.append(f"unlock:{name}")
+        step += 1
+    sim.unlock_step = step
     if peak > watch.peak:
-        for gate, name in UNLOCK_LABEL.items():
-            if watch.peak < gate <= peak:
-                extra = name
-                if enqueue(sim, _make(eng, f"unlock:{gate}", 114, extra=extra)):
-                    fired.append(f"unlock:{name}")
         watch.peak = peak
     if pop > watch.pop:
         for thresh, slot in POP_MILESTONE:
@@ -751,6 +759,33 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  janiculan unlock {got}")
     else:
         lines.append("ok    New Structure Available at pop 400")
+
+    sim = SimState(city_only=1, population=2390, pop_peak=2500, treasury=100)
+    init_city_only_labor(sim)
+    sim.unlock_step = 5
+    sim.population = 2450
+    got = scan_city_messages(sim, tiles)
+    if any(x.startswith("unlock:") for x in got):
+        lines.append(f"FAIL  coliseum flicker re-announce {got}")
+    else:
+        lines.append("ok    Coliseum [114] stays latched when pop flickers 2400")
+
+    sim = SimState(city_only=1, population=2399, pop_peak=2399, treasury=100)
+    init_city_only_labor(sim)
+    sim.unlock_step = 4
+    sim.population = 2400
+    sim.pop_peak = 2400
+    got = scan_city_messages(sim, tiles)
+    if "unlock:Coliseum" not in got:
+        lines.append(f"FAIL  coliseum first announce {got}")
+    elif int(getattr(sim, "unlock_step", 0)) != 5:
+        lines.append(f"FAIL  coliseum step {sim.unlock_step}")
+    else:
+        got2 = scan_city_messages(sim, tiles)
+        if "unlock:Coliseum" in got2:
+            lines.append(f"FAIL  coliseum second announce {got2}")
+        else:
+            lines.append("ok    Coliseum [114] once at pop 2400 / step 4")
 
     sim = SimState(city_only=1, population=199, pop_peak=199, treasury=100)
     init_city_only_labor(sim)

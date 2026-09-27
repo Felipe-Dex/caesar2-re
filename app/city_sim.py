@@ -219,8 +219,9 @@ class SimState:
     year_turbo: bool = False
     year_turbo_catchup: int = 0  # Speed Play/Faster for Stop mid-year
     year_turbo_paused: bool = False  # if A started from Pause, Stop restores it
-    population: int = 0  # [0x102AB0] — emit needs >= 2
-    pop_peak: int = 0  # FAQ latch: unlocks stay after pop drops
+    population: int = 0  # [0x102AB0] chunk 32 — emit needs >= 2
+    pop_peak: int = 0  # [0x102A94] chunk 409 — FAQ / 0x441C8 peak
+    unlock_step: int = 0  # [0x102C3C] chunk 411 — 58c87 [114] step 0..6
     flood_dir: int = 0  # [0x102678] 0…3
     fire_ignited: int = 0  # one 69A37 per 0x9E–0xA1 pass
     disease_infected: int = 0  # +11 0x30 leftover; [80] Disease EAX=0x51
@@ -457,6 +458,8 @@ def load_sim_from_sav(
         history=_history_from_sav(data),
         labor_index=labor_index,
         population=_chunk_i32(chunks, 32, 0),
+        pop_peak=_chunk_i32(chunks, 409, 0),
+        unlock_step=_chunk_i32(chunks, 411, 0),
         employed_pct=_chunk_i32(chunks, 31, 0),
         plebs_ready=_chunk_i32(chunks, 52, 0),
         plebs_estimate=_chunk_i32(chunks, 55, 0),
@@ -795,6 +798,9 @@ def evolve_row(
         else:
             raw = i8(tiles[off + 15])
         cap, _gate = housing_cap_detail(tiles, x, y, population=population)
+        # 0x42360 reads +15 after 40d08 already clipped. Only raise here
+        # so hut climb (cap<=20) still works; do not re-clip or merge
+        # tests that stamp a high +15 without a library lose the upgrade.
         raised = service_target_lv(raw, cap)
         lv = raised if raised > raw else raw
         if lv != raw:
@@ -3320,6 +3326,96 @@ def selftest() -> list[str]:
     lines.append(
         f"villa +8 reaches edge 1x1: {'ok' if ok else 'FAIL'} "
         f"villa={villa_raw} insula={ins_raw}"
+    )
+
+    # 40d08 library<100 → cap 62. 0xA1 stay includes 62 (no id change).
+    # library 50% with hospital 100% clips below 62 → devolve to 0xA0.
+    from app.city_paint import (
+        cap_housing_plus15,
+        housing_cap_detail,
+        library_cover_percent,
+    )
+
+    def _serviced_palace(tiles: bytearray, x: int, y: int) -> None:
+        for i, (dx, dy) in enumerate(
+            ((0, 0), (1, 0), (2, 0), (0, 1), (1, 1), (2, 1), (0, 2), (1, 2), (2, 2))
+        ):
+            o = _off(x + dx, y + dy)
+            tiles[o] = 0xA1
+            tiles[o + 1] = 0x01
+            tiles[o + 5] = i
+            tiles[o + 10] = 0xFC
+            tiles[o + 12] = 0x3F
+            tiles[o + 13] = 0x01 | 0x08 | 0x10 | 0x20
+            tiles[o + 15] = 64
+            tiles[o + 17] = 100
+
+    def _working_civic(tiles: bytearray, x: int, y: int, tid: int) -> None:
+        o = _off(x, y)
+        tiles[o] = tid
+        tiles[o + 1] = 0x01
+        tiles[o + 5] = 0
+        r = _off(x, y - 1)
+        tiles[r] = 0x52
+        tiles[r + 1] = FLAG_PAD
+        tiles[r + 10] = 0x0C
+
+    tiles = _blank_tiles()
+    _serviced_palace(tiles, 20, 20)
+    _working_civic(tiles, 8, 8, 0xF5)
+    _working_civic(tiles, 12, 8, 0xFB)
+    _working_civic(tiles, 16, 8, 0xFB)
+    po = _off(20, 20)
+    lib92 = library_cover_percent(tiles, population=1304)
+    cap92, gate92 = housing_cap_detail(tiles, 20, 20, population=1304)
+    cap_housing_plus15(tiles, 20, 3, population=1304)
+    lv92 = i8(tiles[po + 15])
+    u, d, m = evolve_row(tiles, 20, decay=False, population=1304)
+    ok = (
+        lib92 == 92
+        and cap92 == 62
+        and "library cover>=100" in gate92
+        and lv92 == 62
+        and tiles[po] == 0xA1
+        and d == 0
+    )
+    lines.append(
+        f"palace library 92 clip 62 stay 0xA1: {'ok' if ok else 'FAIL'} "
+        f"lib={lib92} cap={cap92} +15={lv92} id={tiles[po]:#x} d={d} {gate92}"
+    )
+    from app.city_overlay import _QUERY_EVOLVE_FB, query_evolve_lines
+
+    q78 = query_evolve_lines(
+        housing=True,
+        grade=0xA1 - 0x82,
+        lv=lv92,
+        splash=0x39,
+        plus10=0xFC,
+        plus14=0,
+        entertainment=9,
+        security=2,
+        hospital=100,
+        library=lib92,
+    )
+    if _QUERY_EVOLVE_FB[78] not in " ".join(q78) or _QUERY_EVOLVE_FB[81] in " ".join(q78):
+        lines.append(f"FAIL  palace library 92 Query {q78}")
+    else:
+        lines.append("ok    palace library 92 Query [60]+78")
+
+    tiles = _blank_tiles()
+    _serviced_palace(tiles, 20, 20)
+    _working_civic(tiles, 8, 8, 0xF5)
+    _working_civic(tiles, 12, 8, 0xFB)
+    _working_civic(tiles, 16, 8, 0xFB)
+    _working_civic(tiles, 4, 8, 0xFB)
+    lib50 = library_cover_percent(tiles, population=2400)
+    cap50, gate50 = housing_cap_detail(tiles, 20, 20, population=2400)
+    cap_housing_plus15(tiles, 20, 3, population=2400)
+    u, d, m = evolve_row(tiles, 20, decay=False, population=2400)
+    ok = lib50 == 50 and cap50 < 62 and tiles[po] == 0xA0 and d == 1
+    lines.append(
+        f"palace library 50 devolve 0xA0: {'ok' if ok else 'FAIL'} "
+        f"lib={lib50} cap={cap50} id={tiles[po]:#x} d={d} {gate50}"
     )
 
     from app.messages import selftest as message_selftest

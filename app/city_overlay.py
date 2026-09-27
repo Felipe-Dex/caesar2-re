@@ -858,10 +858,9 @@ def query_evolve_lines(
             lv, splash, plus10, plus14, entertainment, security, hospital, library
         )
         # 0xA1 stay 62..125 vs +15 cap 64: 0x62a59 never takes +87.
-        # A leftover evolve-to-next gate (library<100 @ cap 62) at lv==64
-        # is unparked and falls to [60]+60. Last house cannot grow; the
-        # 0x62eb5 terminal for lv>=0x40 is [60]+81. [60]+42 is forum 0xA5
-        # (id-0x7B), not housing.
+        # library<100 writes cap 62 (40d08 0x41089). After that clip,
+        # lv==62 parks [60]+78. Mid-cycle +15 still 64 is unparked and
+        # 0x62eb5 emits [60]+81. [60]+42 is forum 0xA5, not housing.
         if skip == 60 and grade == len(EVOLVE_MIN) - 1 and lv >= 64:
             skip = 81
     out = [_eng_skip(eng, 60, skip, _QUERY_EVOLVE_FB[skip])]
@@ -2559,6 +2558,23 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  query_place 0xA1 land {query_place(pal, 4, 4).lines}")
     else:
         lines.append("ok    Query Large Palace LV 64 footer is [60]+81")
+    clipped = query_evolve_lines(
+        housing=True,
+        grade=0xA1 - ID_HOUSING_LO,
+        lv=62,
+        splash=0x39,
+        plus10=0xFC,
+        plus14=0,
+        entertainment=9,
+        security=2,
+        hospital=100,
+        library=92,
+    )
+    clip_join = " ".join(clipped)
+    if _QUERY_EVOLVE_FB[78] not in clip_join or _QUERY_EVOLVE_FB[81] in clip_join:
+        lines.append(f"FAIL  query 0xA1 lv=62 library 92 {clipped}")
+    else:
+        lines.append("ok    Large Palace +15=62 library 92 → [60]+78 not +81")
     from app.city_sim import SimState as _QSim
 
     mid = CityMap()

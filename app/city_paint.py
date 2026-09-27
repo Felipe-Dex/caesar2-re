@@ -1495,34 +1495,29 @@ def _housing_service_cap(
         return 44, "need more entertainment"
     if not _block_and(tiles, x, y, size, 13, 0x20):
         return 46, "need +13&0x20"
+    # 40d08 tail: [0x102668] library / [0x1026bc] hospital, not pop.
+    # library<100 writes cap 62 (0x3e). 0xA1 stay 62..125 so the tile
+    # stays Large Palace; next Query parks [60]+78 when +15==62.
     if lib < 20:
         return 46, "need library cover>=20"
-    if population < 20:
-        return 46, "need pop>=20"
     if ent <= 6:
         return 48, "need more entertainment"
-    if population < 40:
-        return 50, "need pop>=40"
     if lib < 40:
         return 50, "need library cover>=40"
-    if population < 80:
-        return 52, "need pop>=80"
     if hosp < 80:
         return 52, "need hospital cover>=80"
-    if population < 60:
-        return 54, "need pop>=60"
     if lib < 60:
         return 54, "need library cover>=60"
     if ent <= 7:
         return 56, "need more entertainment"
-    if population < 100:
-        return 58, "need pop>=100"
-    if population < 80:
-        return 58, "need pop>=80"
+    if hosp < 100:
+        return 58, "need hospital cover>=100"
+    if lib < 80:
+        return 58, "need library cover>=80"
     if ent <= 8:
         return 60, "need more entertainment"
-    if population < 100:
-        return 62, "need pop>=100"
+    if lib < 100:
+        return 62, "need library cover>=100"
     return 64, "palace-cap"
 
 
@@ -1576,7 +1571,12 @@ def refresh_land_value(
 def cap_housing_plus15(
     tiles: bytearray, y0: int, n: int, *, population: int = 0
 ) -> int:
-    """FUN_00040d08 — write service-allowed +15 on housing origins."""
+    """FUN_00040d08 — write service-allowed +15 on every housing tile.
+
+    Pads remap to the origin for the gate walk (6db57), then 0x41157
+    clips *this* cell. Villa/palace ``_block_lv`` is a 3×3 max — leaving
+    pads at 64 hid a library cap of 62.
+    """
     written = 0
     for y in range(y0, min(MAP_H, y0 + n)):
         for x in range(MAP_W):
@@ -1584,11 +1584,16 @@ def cap_housing_plus15(
             hid = tiles[off]
             if hid < ID_HOUSING_LO or hid > ID_HOUSING_HI:
                 continue
-            if tiles[off + 5] & 0xF:
-                continue
             grade = hid - ID_HOUSING_LO
             size = HOUSE_SIZE[grade]
-            cap, _gate = _housing_service_cap(tiles, x, y, size, population)
+            piece = tiles[off + 5] & 0xF
+            ox, oy = x, y
+            if size > 1 and piece:
+                ox = x - (piece % size)
+                oy = y - (piece // size)
+                if not _in_map(ox, oy):
+                    ox, oy = x, y
+            cap, _gate = _housing_service_cap(tiles, ox, oy, size, population)
             cur = i8(tiles[off + 15])
             new = service_target_lv(cur, cap)
             if new != cur:
