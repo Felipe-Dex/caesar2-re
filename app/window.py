@@ -486,7 +486,7 @@ def overlay_span_preview(
             else:
                 pdraw = piece_draw
             spr = building_sprite_image(
-                tid, pdraw, variant, sheets, zoom=zoom, dry=dry
+                tid, pdraw, variant, sheets, zoom=zoom, dry=dry, facing=facing
             )
             if spr is None:
                 continue

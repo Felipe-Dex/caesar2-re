@@ -89,11 +89,11 @@ VAR_TOWER_ALONE = 0x80
 # Aqueduct-through-wall. 67a6a writes +3=0x08 +4=+9=3/7 (BUILD1B
 # end-caps). Blitting those punches a hole and hides the pipe. Host
 # keeps +4 at 3/7 (charge must not bump it) and blits the CITYFIXT
-# aqueduct from +9 — same frames as grass 0xCF/0xD0 — with wall
-# straight 4/0 under the diamond. A keyed overlay keeps the stone
-# but drops the grass diamond; on the wall walkway that reads as
-# isolated stubs (1c2e04e). +9 is the pipe dry (LUT 0x94D8F), not
-# the wall axis.
+# aqueduct from +9 — same frames and dest as grass 0xCF/0xD0. Do
+# not underlay BUILD1B wall: extra_rows sit above the diamond and
+# the next iso tile's wall covers this arcade (328839c stubs on
+# the walkway). Replay the arcade after tall neighbours. +9 is
+# the pipe dry (LUT 0x94D8F), not the wall axis.
 ID_AQUEDUCT_WALL_EW = 0xBC
 ID_AQUEDUCT_WALL_NS = 0xBD
 VAR_WALL_STRAIGHT_NS = 0x00
@@ -126,9 +126,18 @@ def aqueduct_wall_pipe_dry(tile: Tile) -> int:
     return _AQ_WALL_PIPE_DRY.get(tile.terrain_id, 0x79)
 
 
-def aqueduct_wall_cityfixt_index(tile: Tile) -> int:
-    """CITYFIXT frame for 0xBC/0xBD — wet +4 from +9, never BUILD1B 3/7."""
+def aqueduct_wall_cityfixt_index(tile: Tile, facing: int = 0) -> int:
+    """CITYFIXT frame for 0xBC/0xBD — wet +4 from facing-0 +9.
+
+    Same NESW walk as grass ``0xCF``/``0xD0`` (``rotate_aqueduct_dry``).
+    ``tile`` must be the world cell, not an already-rotated paint copy.
+    """
     dry = aqueduct_wall_pipe_dry(tile)
+    f = int(facing) & 3
+    if f:
+        from app.place import rotate_aqueduct_dry
+
+        dry = rotate_aqueduct_dry(dry, f)
     var = aqueduct_wet_plus4(dry, tile.coverage & 3)
     if var >= len(_LUT_CITYFIXT_BLD):
         var = dry
@@ -1617,7 +1626,7 @@ def _shimmer_iso_tile(
     sheets: dict[str, Sequence[Image.Image]] | None,
     facing: int = 0,
 ) -> bool:
-    frames, idx = _tile_frames(tile, water_frame, cityfixt, sheets, facing=facing)
+    frames, idx = _tile_frames(tile, water_frame, cityfixt, sheets, facing=0)
     if frames is None or idx is None or not (0 <= idx < len(frames)):
         return False
     spr = _prepare_iso_sprite(frames[idx], tile_h)
@@ -1662,7 +1671,7 @@ def _tile_frames(
     # strips the diamond and leaves stub-sized pieces — that is why
     # 1c2e04e did not change the live City Only window.
     if tile.terrain_id in (ID_AQUEDUCT_WALL_EW, ID_AQUEDUCT_WALL_NS):
-        aq_idx = aqueduct_wall_cityfixt_index(tile)
+        aq_idx = aqueduct_wall_cityfixt_index(tile, facing)
         fixt = cityfixt
         if fixt is None and sheets is not None:
             fixt = sheets.get(PL8_CITYFIXT)
@@ -1739,6 +1748,7 @@ def building_sprite_image(
     zoom: int = 0,
     dry: int | None = None,
     charge: int = 0,
+    facing: int = 0,
 ) -> Image.Image | None:
     """RGBA building sprite for a ghost stamp (same LUT as city_tile_draw_building)."""
     raw = bytearray(TILE_BYTES)
@@ -1750,7 +1760,7 @@ def building_sprite_image(
     raw[10] = charge & 3
     tile = Tile.unpack(bytes(raw))
     cityfixt = sheets.get(PL8_CITYFIXT) if sheets else None
-    frames, idx = _tile_frames(tile, 0, cityfixt, sheets)
+    frames, idx = _tile_frames(tile, 0, cityfixt, sheets, facing=facing)
     tile_w, tile_h = iso_tile_size(zoom)
     if frames is None or idx is None or not (0 <= idx < len(frames)):
         return None
@@ -2241,6 +2251,49 @@ def blit_disease_flags(
     return n
 
 
+def _replay_aqueduct_wall_arcades(
+    img: Image.Image,
+    city: CityMap,
+    cells: Sequence[tuple[int, int, int, int]],
+    *,
+    tile_w: int,
+    tile_h: int,
+    water_frame: int,
+    cityfixt: Sequence[Image.Image] | None,
+    sheets: dict[str, Sequence[Image.Image]] | None,
+    facing: int = 0,
+) -> None:
+    """CITYFIXT arcade for 0xBC/0xBD after tall wall / tower / gate neighbours.
+
+    Iso order paints the next BUILD1B extra_rows over this diamond. Grass
+    0xD0 does not have that neighbour. Replay matches the grass dest.
+    """
+    if not cells:
+        return
+    grass_idx = 8 + CITYFIXT_TERRAIN_BIAS
+    for wx, wy, sx, sy in cells:
+        world = city.tile(wx, wy)
+        if world.terrain_id not in (ID_AQUEDUCT_WALL_EW, ID_AQUEDUCT_WALL_NS):
+            continue
+        if cityfixt is not None:
+            _blit_iso(
+                img,
+                cityfixt,
+                grass_idx,
+                sx,
+                sy,
+                tile_w=tile_w,
+                tile_h=tile_h,
+                lift=0,
+            )
+        frames, idx = _tile_frames(
+            world, water_frame, cityfixt, sheets, facing=facing
+        )
+        _blit_iso(
+            img, frames, idx, sx, sy, tile_w=tile_w, tile_h=tile_h
+        )
+
+
 def _paint_iso_tile(
     img: Image.Image,
     tile: Tile,
@@ -2297,33 +2350,25 @@ def _paint_iso_tile(
     ):
         return
     art = sprite_tile if sprite_tile is not None else tile
-    frames, idx = _tile_frames(art, water_frame, cityfixt, sheets, facing=facing)
+    # 0xBC/0xBD CITYFIXT walks facing-0 +9 (same as grass 0xCF/0xD0).
+    # ``art`` is already rotated — using it with facing would swap twice.
+    frame_src = (
+        tile
+        if tile.terrain_id in (ID_AQUEDUCT_WALL_EW, ID_AQUEDUCT_WALL_NS)
+        else art
+    )
+    frames, idx = _tile_frames(
+        frame_src, water_frame, cityfixt, sheets, facing=facing
+    )
     # Aqueduct CITYFIXT diamonds have transparent arches. Without a grass
     # underlay the canvas ISO_BG (12,16,28) reads as a solid black box.
     # Reservoir / fountain stay opaque — do not paint under them.
-    # 0xBC/0xBD sit on the wall walkway: BUILD1B straight first, then the
-    # same CITYFIXT arcade as a grass 0xCF/0xD0 (no color-key overlay).
+    # 0xBC/0xBD use the same grass + CITYFIXT dest as 0xCF/0xD0. A tall
+    # BUILD1B underlay is covered by the next wall in iso order.
     avoid = hospital_masks if tile.is_terrain else None
-    painted_wall = False
-    if art.terrain_id in (ID_AQUEDUCT_WALL_EW, ID_AQUEDUCT_WALL_NS) and sheets:
-        wall_idx = (
-            VAR_WALL_STRAIGHT_EW
-            if art.terrain_id == ID_AQUEDUCT_WALL_EW
-            else VAR_WALL_STRAIGHT_NS
-        )
-        painted_wall = _blit_iso(
-            img,
-            sheets.get(PL8_BUILD1B),
-            wall_idx,
-            sx,
-            sy,
-            tile_w=tile_w,
-            tile_h=tile_h,
-            under_hospital=avoid,
-        )
     if (
         is_aqueduct_id(tile.terrain_id)
-        or (art.terrain_id in (ID_AQUEDUCT_WALL_EW, ID_AQUEDUCT_WALL_NS) and not painted_wall)
+        or art.terrain_id in (ID_AQUEDUCT_WALL_EW, ID_AQUEDUCT_WALL_NS)
     ) and cityfixt is not None:
         grass_idx = 8 + CITYFIXT_TERRAIN_BIAS
         _blit_iso(
@@ -2527,6 +2572,7 @@ def render_iso(
 
     overlays: list[tuple[int, int, int, int]] = []
     hospital_masks: list[tuple[int, int, Image.Image]] = []
+    aq_walls: list[tuple[int, int, int, int]] = []
     for dy in range(city.height):
         for dx in range(city.width):
             wx, wy = draw_to_world(dx, dy, facing, width=city.width, height=city.height)
@@ -2556,8 +2602,21 @@ def render_iso(
                 map_h=city.height,
                 hospital_masks=hospital_masks,
             )
+            if world.terrain_id in (ID_AQUEDUCT_WALL_EW, ID_AQUEDUCT_WALL_NS):
+                aq_walls.append((wx, wy, sx, sy))
             if world.terrain_id == 0xFA and world.draw & 0x80:
                 overlays.append((wx, wy, sx, sy))
+    _replay_aqueduct_wall_arcades(
+        img,
+        city,
+        aq_walls,
+        tile_w=tile_w,
+        tile_h=tile_h,
+        water_frame=water_frame,
+        cityfixt=cityfixt,
+        sheets=sheets,
+        facing=facing,
+    )
     blit_factory_overlays(img, city, overlays, zoom=zoom, sheets=sheets)
     return img
 
@@ -2605,6 +2664,7 @@ def render_iso_view(
     tall = _MAX_SPRITE_H[z]
     overlays: list[tuple[int, int, int, int]] = []
     hospital_masks: list[tuple[int, int, Image.Image]] = []
+    aq_walls: list[tuple[int, int, int, int]] = []
     for dy in range(ty0, ty1 + 1):
         for dx in range(tx0, tx1 + 1):
             wx, wy = draw_to_world(dx, dy, facing, width=city.width, height=city.height)
@@ -2636,8 +2696,21 @@ def render_iso_view(
                 map_h=city.height,
                 hospital_masks=hospital_masks,
             )
+            if world.terrain_id in (ID_AQUEDUCT_WALL_EW, ID_AQUEDUCT_WALL_NS):
+                aq_walls.append((wx, wy, sx, sy))
             if world.terrain_id == 0xFA and world.draw & 0x80:
                 overlays.append((wx, wy, sx, sy))
+    _replay_aqueduct_wall_arcades(
+        img,
+        city,
+        aq_walls,
+        tile_w=tile_w,
+        tile_h=tile_h,
+        water_frame=water_frame,
+        cityfixt=cityfixt,
+        sheets=sheets,
+        facing=facing,
+    )
     blit_factory_overlays(img, city, overlays, zoom=z, sheets=sheets)
     return img, cx, cy
 
@@ -2870,6 +2943,7 @@ def blit_water_tiles(
     n = 0
     overlays: list[tuple[int, int, int, int]] = []
     hospital_masks: list[tuple[int, int, Image.Image]] = []
+    aq_walls: list[tuple[int, int, int, int]] = []
     for dx, dy in ordered:
         wx, wy = draw_to_world(dx, dy, facing, width=city.width, height=city.height)
         wx, wy = int(round(wx)), int(round(wy))
@@ -2898,9 +2972,22 @@ def blit_water_tiles(
             map_h=city.height,
             hospital_masks=hospital_masks,
         )
+        if world.terrain_id in (ID_AQUEDUCT_WALL_EW, ID_AQUEDUCT_WALL_NS):
+            aq_walls.append((wx, wy, sx - x0, sy - y0))
         if world.terrain_id == 0xFA and world.draw & 0x80:
             overlays.append((wx, wy, sx - x0, sy - y0))
         n += 1
+    _replay_aqueduct_wall_arcades(
+        crop,
+        city,
+        aq_walls,
+        tile_w=tile_w,
+        tile_h=tile_h,
+        water_frame=water_frame,
+        cityfixt=cityfixt,
+        sheets=sheets,
+        facing=facing,
+    )
     blit_factory_overlays(crop, city, overlays, zoom=z, sheets=sheets)
     img.paste(crop, (x0, y0))
     return n
@@ -3598,6 +3685,29 @@ def selftest() -> list[str]:
                 )
             else:
                 lines.append("ok    0xBC +9=0x76 blits same CITYFIXT as 0xD0")
+            _f1, bc_f1 = _tile_frames(
+                Tile.unpack(bytes(raw_combo)),
+                0,
+                real_fixt,
+                {PL8_BUILD1B: real_b1b},
+                facing=1,
+            )
+            want_ns_f1 = _LUT_CITYFIXT_BLD[0x79] + CITYFIXT_TERRAIN_BIAS
+            grass_cf = bytearray(grass_d0)
+            grass_cf[0] = 0xCF
+            grass_cf[4] = 0x79
+            _g1, cf_idx = _tile_frames(
+                Tile.unpack(bytes(grass_cf)),
+                0,
+                real_fixt,
+                {PL8_CITYFIXT: real_fixt},
+            )
+            if bc_f1 != want_ns_f1 or cf_idx != want_ns_f1:
+                lines.append(
+                    f"FAIL  0xBC facing 1 blit {bc_f1} vs 0xCF {cf_idx} want {want_ns_f1}"
+                )
+            else:
+                lines.append("ok    0xBC facing 1 blits same CITYFIXT as 0xCF")
             wet_raw = bytearray(TILE_BYTES)
             wet_raw[0] = ID_AQUEDUCT_WALL_EW
             wet_raw[3] = SHEET_BUILD1B

@@ -1958,6 +1958,21 @@ def _wall_run_is_ns(
     return True
 
 
+def _wall_combo_pipe_dry(
+    city: CityMap,
+    x: int,
+    y: int,
+    pending: set[tuple[int, int]] | None,
+    ns: bool,
+) -> int:
+    """CITYFIXT dry for 0xBC/0xBD. Isolated cells keep the through-arcade."""
+    mask = _pipe_mask(city, x, y, pending)
+    along = 0x05 if ns else 0x0A
+    if mask == 0:
+        mask = along
+    return _aqueduct_variant(aqueduct_id_for(mask))
+
+
 def _write_aqueduct_wall_cell(
     city: CityMap,
     x: int,
@@ -1974,7 +1989,7 @@ def _write_aqueduct_wall_cell(
     ns = _wall_run_is_ns(city, x, y, pending, horizontal=horizontal)
     tid = ID_AQUEDUCT_WALL_NS if ns else ID_AQUEDUCT_WALL_EW
     var = VAR_AQUEDUCT_WALL_NS if ns else VAR_AQUEDUCT_WALL_EW
-    dry = _aqueduct_variant(aqueduct_id_for(_pipe_mask(city, x, y, pending)))
+    dry = _wall_combo_pipe_dry(city, x, y, pending, ns)
     _write_building(
         city, x, y, tid, FLAG_PIPE | FLAG_WALL, DRAW_WALL, var, dry=dry
     )
@@ -2024,7 +2039,7 @@ def aqueduct_preview_cells(
             ns = _wall_run_is_ns(city, x, y, pending)
             tid = ID_AQUEDUCT_WALL_NS if ns else ID_AQUEDUCT_WALL_EW
             var = VAR_AQUEDUCT_WALL_NS if ns else VAR_AQUEDUCT_WALL_EW
-            dry = _aqueduct_variant(aqueduct_id_for(mask))
+            dry = _wall_combo_pipe_dry(city, x, y, pending, ns)
             out.append((x, y, tid, var, dry))
             continue
         if _is_road_combo_cell(city, x, y):
@@ -2382,7 +2397,7 @@ def wall_preview_cells(
             ns = _wall_run_is_ns(city, x, y, pending)
             tid = ID_AQUEDUCT_WALL_NS if ns else ID_AQUEDUCT_WALL_EW
             var = VAR_AQUEDUCT_WALL_NS if ns else VAR_AQUEDUCT_WALL_EW
-            dry = _aqueduct_variant(aqueduct_id_for(_pipe_mask(city, x, y, pending)))
+            dry = _wall_combo_pipe_dry(city, x, y, pending, ns)
             out.append((x, y, tid, var, dry))
             continue
         tid = wall_id_for(mask)
