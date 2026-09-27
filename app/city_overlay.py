@@ -28,8 +28,14 @@ from app.city_map import (
 )
 from app.city_paint import (
     BATH_SPLASH_BIT,
+    FACTORY_OCC_EXTRA,
+    FACTORY_OCC_R,
+    GOODS_RAW,
+    GOODS_SUPPLIED,
+    GOODS_SURPLUS,
     HOUSE_OCCUPANCY,
     HOUSE_SIZE,
+    ID_FACTORY,
     ID_HOUSING_HI,
     ID_HOUSING_LO,
     ID_HOSPITAL,
@@ -41,7 +47,9 @@ from app.city_paint import (
     entertainment_level,
     entertainment_level_block,
     factory_type_name,
+    goods_i32,
     hospital_cover_percent,
+    housing_occupancy_box,
     library_cover_percent,
     paint_land_value,
     paint_plus12_amenities,
@@ -896,6 +904,206 @@ def query_water_line(splash: int, eng=None) -> str:
     return _eng_skip(eng, 60, 4, "NO Water Supply")
 
 
+# C2.ENG [62]+0…+7 == [60]+109…+116. 0x62F28 EAX=0x3F EDX=stock.
+_FACTORY_CAP_FB: tuple[str, ...] = (
+    "The business is not producing.",
+    "The business is barely producing.",
+    "The business is running at quarter capacity.",
+    "The business is running at low capacity.",
+    "The business is running at half capacity.",
+    "The business is running at over half capacity.",
+    "The business is running well.",
+    "The business is running at maximum output!",
+)
+
+# 0x62F28 / 0x63235 limiter → C2.ENG [60] skip. 0x27071 EAX=0x3D.
+_FACTORY_LIMIT_FB: dict[int, str] = {
+    48: "Output is at a maximum -- you cannot raise it any further!",
+    49: (
+        "Output could be raised by increasing the supply of raw materials "
+        "from your province."
+    ),
+    50: "Output is suffering from excessive industry tax rates.",
+    51: (
+        "Competition for customers in this line of business hampers "
+        "its profitability."
+    ),
+    52: (
+        "Output could be raised by expanding export routes from your province."
+    ),
+    53: "Industry saturation is stifling this business' output.",
+    54: "Lack of local access to a market is limiting business growth.",
+    55: "Lack of any export market is limiting business growth.",
+    56: "This business has an insufficient local workforce.",
+    57: "Output is limited at the moment by insufficient city-wide demand.",
+    58: (
+        "Fierce competition in this trade is severely affecting profitability."
+    ),
+    90: "This building needs access to a road to function effectively.",
+}
+
+
+def factory_workforce_stage(tiles: bytearray, x: int, y: int, plus9: int) -> int:
+    """0x644bf: +9 bits 0–1, then 41b33 occupancy bumps (0x644e1)."""
+    stage = plus9 & 0x03
+    occ = housing_occupancy_box(
+        tiles, x, y, radius=FACTORY_OCC_R, extra=FACTORY_OCC_EXTRA
+    )
+    if occ > 0x82:
+        return stage + 4
+    if occ > 0x5A:
+        return stage + 3
+    if occ > 0x32:
+        return stage + 2
+    if occ > 0x0A:
+        return stage + 1
+    return stage
+
+
+def factory_limiter2_skip(
+    *,
+    labor: int,
+    raw: int,
+    population: int,
+    market: int,
+    province_links: int,
+) -> int:
+    """0x63235 — fallback when stock is below 7 and supplied is not the cap."""
+    if labor < 0:
+        return 50
+    if raw < 0xC8 and population >= 0xC8:
+        return 58
+    if market == 0:
+        return 54
+    if province_links <= 0:
+        return 52
+    if raw < 0x258 and population >= 0x258:
+        return 51
+    return 57
+
+
+def factory_limiter_skip(
+    *,
+    stock: int,
+    stage: int,
+    market: int,
+    supplied: int,
+    raw: int,
+    labor: int,
+    province_links: int,
+    population: int,
+    has_road: bool,
+) -> int:
+    """0x62F28 picks [60]+48…+58 or +90 from stock / goods / labor / road."""
+    extra = dict(
+        labor=labor,
+        raw=raw,
+        population=population,
+        market=market,
+        province_links=province_links,
+    )
+    if stock >= 7:
+        return 48
+    if stock == 6:
+        if supplied <= 0x63:
+            return 49
+        return factory_limiter2_skip(**extra)
+    if stock == 5:
+        if supplied <= 0x4B:
+            return 49
+        if stage <= 2:
+            return 56
+        return factory_limiter2_skip(**extra)
+    if stock == 4:
+        if province_links > 0:
+            return factory_limiter2_skip(**extra)
+        return 55
+    if stock == 3:
+        if supplied <= 0x32:
+            return 49
+        if stage <= 1:
+            return 56
+        return factory_limiter2_skip(**extra)
+    if stock == 2:
+        if supplied <= 0x22:
+            return 49
+        return factory_limiter2_skip(**extra)
+    if stock == 1:
+        if supplied <= 0x14:
+            return 49
+        if raw <= 0x32:
+            return 53
+        return factory_limiter2_skip(**extra)
+    if not has_road:
+        return 90
+    if supplied <= 0:
+        return 49
+    if stage <= 0:
+        return 56
+    if raw <= 0:
+        return 53
+    return factory_limiter2_skip(**extra)
+
+
+def query_factory_lines(
+    city: CityMap,
+    ox: int,
+    oy: int,
+    *,
+    eng=None,
+    sim=None,
+) -> list[str]:
+    """0x62F28 factory Query body: capacity, limiter, jars, surplus."""
+    t = city.tile(ox, oy)
+    nibble = t.special & 0xF
+    plus9 = t.overlay_anim
+    stock = (plus9 & 0xF0) >> 4
+    if stock > 7:
+        stock = 7
+    stage = factory_workforce_stage(city.tiles, ox, oy, plus9)
+    market = plus9 & 0x0C
+    goods = getattr(sim, "goods", None) if sim is not None else None
+    supplied = goods_i32(goods, nibble, GOODS_SUPPLIED)
+    raw = goods_i32(goods, nibble, GOODS_RAW)
+    surplus = goods_i32(goods, nibble, GOODS_SURPLUS)
+    labor = int(getattr(sim, "factory_labor", 0) or 0) if sim is not None else 0
+    if sim is not None:
+        from app.forum import labor_shutoff
+
+        if "factory" in labor_shutoff(sim):
+            labor = 0
+    province_links = (
+        int(getattr(sim, "province_links", 0) or 0) if sim is not None else 0
+    )
+    population = int(getattr(sim, "population", 0) or 0) if sim is not None else 0
+    has_road, _forum = civic_edge_access(city.tiles, ox, oy, 3)
+    skip = factory_limiter_skip(
+        stock=stock,
+        stage=stage,
+        market=market,
+        supplied=supplied,
+        raw=raw,
+        labor=labor,
+        province_links=province_links,
+        population=population,
+        has_road=has_road,
+    )
+    cap_fb = _FACTORY_CAP_FB[stock]
+    kind = _eng_skip(eng, 61, nibble, factory_type_name(nibble))
+    good = _eng_skip(eng, 15, nibble + 1, kind)
+    producing = _eng_skip(eng, 62, 8, "Producing")
+    jars = _eng_skip(eng, 62, 9, "of 7 jars.")
+    surplus_pre = _eng_skip(eng, 62, 10, "Surplus of ")
+    units = _eng_skip(eng, 62, 11, "units of ")
+    in_prov = _eng_skip(eng, 62, 12, "in the province.")
+    return [
+        _eng_skip(eng, 62, stock, cap_fb),
+        _eng_skip(eng, 60, skip, _FACTORY_LIMIT_FB[skip]),
+        f"{producing} {stock} {jars}",
+        f"{surplus_pre}{surplus} {units}{good} {in_prov}",
+    ]
+
+
 # 0x63845 right column (ebx=0xF8). 0x64337 fills via 6dba2 (+13) / 6dc09 (+14).
 # Gardens / plaza / aqueduct have no [60] proximity skip — land value only.
 _QUERY_PROXIMITY: tuple[tuple[int, int, int, str, str], ...] = (
@@ -1100,7 +1308,14 @@ def query_place(city: CityMap, x: int, y: int, eng=None, sim=None) -> PlaceInfo:
     city = query_display_city(city, sim)
     t = city.tile(x, y)
     tid = t.terrain_id
+    ox, oy = x, y
+    if tid == ID_FACTORY:
+        ox, oy = civic_stamp_origin(city.tiles, x, y, 3)
+        t = city.tile(ox, oy)
+        tid = t.terrain_id
     name = building_name(tid, eng)
+    if tid == ID_FACTORY:
+        name = _eng_skip(eng, 61, t.special & 0xF, factory_type_name(t.special))
     if t.is_river and t.is_pad:
         name = "Bridge"
     elif t.is_river:
@@ -1112,7 +1327,6 @@ def query_place(city: CityMap, x: int, y: int, eng=None, sim=None) -> PlaceInfo:
     splash = t.desirability
     amenity12 = t.unknown12
     ent_size = 1
-    ox, oy = x, y
     land = i8(t.industry)
     if t.is_housing:
         ox, oy, ent_size = _housing_query_origin(t, x, y)
@@ -1139,15 +1353,8 @@ def query_place(city: CityMap, x: int, y: int, eng=None, sim=None) -> PlaceInfo:
     if tid == 0xBE or (0xCB <= tid <= 0xD6):
         charge = t.coverage & 3
         lines.append(f"pipe +1&0xC0={t.flags & 0xC0:#x}  charge +10&3={charge}")
-    if tid == 0xFA:
-        kind = factory_type_name(t.special)
-        stock = (t.overlay_anim & 0xF0) >> 4
-        lines.append(f"{kind}  +19={t.special & 0xF}  stock {stock}")
-        if t.draw & 0x80:
-            if t.spawn_packed & 0xF:
-                lines.append("output jugs (flag80)")
-            else:
-                lines.append("goods label (flag80)")
+    if tid == ID_FACTORY:
+        lines.extend(query_factory_lines(city, ox, oy, eng=eng, sim=sim))
     if tid == 0xD7 or 0xDB <= tid <= 0xDE:
         if 0xDB <= tid <= 0xDE and not (splash & 4):
             lines.append("fountain dry (needs charged reservoir ring)")
@@ -1221,7 +1428,7 @@ def query_place(city: CityMap, x: int, y: int, eng=None, sim=None) -> PlaceInfo:
         evolve_lv = i8(ot.industry)
         evolve_tid = ot.terrain_id
     # 0x63845 amenity dialog (not factory 0x62F28).
-    if tid != 0xFA:
+    if tid != ID_FACTORY:
         lines.extend(query_proximity_lines(splash, plus14, eng))
     if tid in (ID_HOSPITAL, ID_LIBRARY):
         ox, oy = civic_stamp_origin(city.tiles, x, y)
@@ -1264,24 +1471,24 @@ def query_place(city: CityMap, x: int, y: int, eng=None, sim=None) -> PlaceInfo:
                         "this dwelling's ability to grow further.",
                     )
                 )
-    # FUN_00062a59: one C2.ENG [60] status sentence. 0x8B +15==20 with
-    # no entertainment is a normal stay (18..20 vs 0x96235), not a sim bug.
-    sec_n = security_score(plus10, tile_inside_walls(city.tiles, ox, oy))
-    lines.extend(
-        query_evolve_lines(
-            housing=t.is_housing,
-            grade=evolve_tid - ID_HOUSING_LO,
-            lv=evolve_lv,
-            splash=splash,
-            plus10=plus10,
-            plus14=plus14,
-            entertainment=amenity12,
-            security=sec_n,
-            hospital=hosp,
-            library=lib,
-            eng=eng,
+    # FUN_00062a59 housing; 0x627c9 0xFA → 0x62F28 (not [60]+35).
+    if tid != ID_FACTORY:
+        sec_n = security_score(plus10, tile_inside_walls(city.tiles, ox, oy))
+        lines.extend(
+            query_evolve_lines(
+                housing=t.is_housing,
+                grade=evolve_tid - ID_HOUSING_LO,
+                lv=evolve_lv,
+                splash=splash,
+                plus10=plus10,
+                plus14=plus14,
+                entertainment=amenity12,
+                security=sec_n,
+                hospital=hosp,
+                library=lib,
+                eng=eng,
+            )
         )
-    )
     if tile_is_burning(tid, t.draw, t.unknown16):
         lines.append(f"on fire  timer +16={t.unknown16}")
     elif ID_HOUSING_LO <= tid <= ID_HOUSING_HI:
@@ -1562,6 +1769,8 @@ _QUERY_PARA_PREFIXES: tuple[str, ...] = (
     "The business ",
     "There are no people",
     "Producing",
+    "Surplus of ",
+    "Fierce competition",
 )
 
 
@@ -1999,10 +2208,116 @@ def selftest() -> list[str]:
     city_fac.tiles[foff + 19] = 1
     qfac = query_place(city_fac, 4, 4)
     joined_fac = " ".join(qfac.lines)
-    if "Winery" not in joined_fac:
+    if qfac.name != "Winery" or "Winery" not in joined_fac:
         lines.append(f"FAIL  query factory type {qfac.lines}")
+    elif _FACTORY_CAP_FB[0] not in joined_fac:
+        lines.append(f"FAIL  query factory month-1 cap {qfac.lines}")
+    elif (
+        _FACTORY_LIMIT_FB[90] not in joined_fac
+        and _FACTORY_LIMIT_FB[56] not in joined_fac
+    ):
+        lines.append(f"FAIL  query factory limiter {qfac.lines}")
+    elif _QUERY_EVOLVE_FB[35] in joined_fac:
+        lines.append(f"FAIL  query factory still [60]+35 {qfac.lines}")
     else:
-        lines.append("ok    query Factory Winery +19=1")
+        lines.append("ok    query Winery [62]+0 not producing, no [60]+35")
+
+    from app.city_paint import CITY_ONLY_LABOR, factory_produce, seed_city_only_good
+    from app.city_sim import SimState
+
+    live = bytearray(768)
+    seed_city_only_good(live, 0)
+    city_bak = CityMap()
+    boff = city_bak.offset(10, 10)
+    city_bak.tiles[boff] = 0xFA
+    city_bak.tiles[boff + 3] = 0x8C
+    city_bak.tiles[boff + 19] = 0
+    road = city_bak.offset(10, 9)
+    city_bak.tiles[road] = 0x52
+    city_bak.tiles[road + 1] = 0x20
+    sim_bak = SimState(city_only=1, factory_labor=CITY_ONLY_LABOR, goods=live)
+    q1 = query_place(city_bak, 10, 10, sim=sim_bak)
+    j1 = " ".join(q1.lines)
+    stock1 = (city_bak.tiles[boff + 9] & 0xF0) >> 4
+    if stock1 != 0 or _FACTORY_CAP_FB[0] not in j1:
+        lines.append(f"FAIL  bakery month-1 {q1.lines} stock={stock1}")
+    elif _FACTORY_LIMIT_FB[56] not in j1:
+        lines.append(f"FAIL  bakery month-1 workforce {q1.lines}")
+    else:
+        lines.append("ok    bakery month-1 stock 0 [60]+56 workforce")
+    factory_produce(
+        city_bak.tiles,
+        10,
+        10,
+        goods=live,
+        labor=CITY_ONLY_LABOR,
+        province_links=0,
+        city_only=True,
+    )
+    stock2 = (city_bak.tiles[boff + 9] & 0xF0) >> 4
+    q2 = query_place(city_bak, 10, 10, sim=sim_bak)
+    j2 = " ".join(q2.lines)
+    if stock2 <= 0 or stock2 >= 7:
+        lines.append(f"FAIL  bakery month-2 stock {stock2}")
+    elif _FACTORY_CAP_FB[stock2] not in j2:
+        lines.append(f"FAIL  bakery month-2 cap {q2.lines}")
+    elif _FACTORY_LIMIT_FB[54] not in j2 and _FACTORY_LIMIT_FB[52] not in j2:
+        lines.append(f"FAIL  bakery month-2 limiter {q2.lines}")
+    elif "of 7 jars." not in j2:
+        lines.append(f"FAIL  bakery jars {q2.lines}")
+    else:
+        lines.append(f"ok    bakery month-2 stock {stock2} [62]+{stock2} limiter")
+
+    starve = bytearray(city_bak.tiles)
+    factory_produce(starve, 10, 10, goods=live, labor=0, province_links=0)
+    sim_starved = SimState(city_only=1, factory_labor=0, goods=live)
+    city_starved = CityMap()
+    city_starved.tiles = starve
+    qs = query_place(city_starved, 10, 10, sim=sim_starved)
+    js = " ".join(qs.lines)
+    stock_s = (starve[boff + 9] & 0xF0) >> 4
+    if stock_s != 0:
+        lines.append(f"FAIL  bakery starved stock {stock_s}")
+    elif _FACTORY_CAP_FB[0] not in js:
+        lines.append(f"FAIL  bakery starved cap {qs.lines}")
+    else:
+        lines.append("ok    bakery starved labor stock 0 [62]+0")
+
+    full = bytearray(768)
+    seed_city_only_good(full, 0)
+    city_full = CityMap()
+    f2 = city_full.offset(10, 10)
+    city_full.tiles[f2] = 0xFA
+    city_full.tiles[f2 + 3] = 0x8C
+    city_full.tiles[f2 + 9] = 0x0C
+    city_full.tiles[f2 + 19] = 0
+    city_full.tiles[road] = 0x52
+    city_full.tiles[road + 1] = 0x20
+    factory_produce(
+        city_full.tiles,
+        10,
+        10,
+        goods=full,
+        labor=CITY_ONLY_LABOR,
+        province_links=3,
+        city_only=True,
+    )
+    sim_full = SimState(
+        city_only=0,
+        factory_labor=CITY_ONLY_LABOR,
+        province_links=3,
+        goods=full,
+        population=800,
+    )
+    qf = query_place(city_full, 10, 10, sim=sim_full)
+    jf = " ".join(qf.lines)
+    stock_f = (city_full.tiles[f2 + 9] & 0xF0) >> 4
+    if stock_f < 3:
+        lines.append(f"FAIL  bakery full stock {stock_f} {qf.lines}")
+    elif _QUERY_EVOLVE_FB[35] in jf:
+        lines.append(f"FAIL  bakery full still evolve {qf.lines}")
+    else:
+        lines.append(f"ok    bakery full labor stock {stock_f} no [60]+35")
 
     city = CityMap()
     city.tiles[city.offset(0, 0)] = 0xBE
