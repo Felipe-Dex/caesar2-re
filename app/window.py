@@ -94,6 +94,7 @@ from app.menus import (
     cycle_scroll,
     decorate_item,
     help_topic_excerpt,
+    is_annual_summary_report,
     is_turbo_report,
     next_game_speed,
     on_off,
@@ -1408,7 +1409,9 @@ def show(ctx: BootContext, *, game: Path) -> None:
                     report=menu_report,
                     extra_alert=extra_alert,
                 )
-            if ctx.sim.paused:
+            if ctx.sim.paused and not is_annual_summary_report(
+                menu_report, eng=ctx.eng
+            ):
                 pause_spr = chrome.frames[6] if len(chrome.frames) > 6 else None
                 frame = blit_pause_square(
                     frame,
@@ -2055,8 +2058,9 @@ def show(ctx: BootContext, *, game: Path) -> None:
         """INT_CITY play / faster / pause + Speed menu. A is year-end turbo.
 
         0x28c2f / 0x31a9c set [0xC45A0]; sav_year_end 0x34df7 clears it
-        then blocking [72]. Speed flyout and P cancel turbo. Stop on the
-        [75] box restores the previous rate; Dec wrap pauses instead.
+        then blocking [72] (0x61389 draw + 0x2e9fc wait). Speed flyout
+        and P cancel turbo. Stop on the [75] box restores the previous
+        rate; Dec wrap holds time in the [72] modal, not P-pause.
         """
         from app.city_sim import end_year_turbo, start_year_turbo
 
@@ -2149,11 +2153,16 @@ def show(ctx: BootContext, *, game: Path) -> None:
 
         return bool(messagebox.askyesno(root.title(), question, parent=root))
 
+    def _annual_hold() -> bool:
+        """sav_year_end 0x34D92 is still inside 0x2e9fc — clock does not run."""
+        return is_annual_summary_report(menu_report, eng=ctx.eng)
+
     def _close_report() -> None:
         nonlocal menu_report, load_picks, save_picks, save_typed, save_typing
         from app.city_sim import stop_year_turbo
 
         was_turbo = is_turbo_report(menu_report, eng=ctx.eng)
+        was_annual = is_annual_summary_report(menu_report, eng=ctx.eng)
         menu_report = None
         load_picks = None
         save_picks = None
@@ -2162,6 +2171,8 @@ def show(ctx: BootContext, *, game: Path) -> None:
         title_session.options_open = False
         if was_turbo:
             stop_year_turbo(ctx.sim)
+        if was_annual:
+            ctx.sim.paused = False
         _pump_advisor()
 
     def _open_report(
@@ -2184,7 +2195,8 @@ def show(ctx: BootContext, *, game: Path) -> None:
     def _maybe_annual_summary(ph) -> None:
         """FUN_00061389 after Dec→Jan. City Only [72] numbers. Not [83].
 
-        Closes the [75] turbo box first. Clock is already paused.
+        Closes the [75] turbo box first. Clock is held while this
+        report is open (sav_year_end 0x2e9fc), without P-pause chrome.
         """
         nonlocal menu_report
         if not getattr(ph, "year_wrapped", False):
@@ -2657,6 +2669,8 @@ def show(ctx: BootContext, *, game: Path) -> None:
             if not map_mode:
                 title_music.tick()
             return
+        if _annual_hold():
+            return
         from app.sim import on_clock_step, sim_tick_due
         from app.walkers import (
             advance_walker_slides,
@@ -2939,12 +2953,16 @@ def show(ctx: BootContext, *, game: Path) -> None:
         if alt and key in {"f", "f1", "f3", "d"}:
             return
         if key in {"p"} or ch == "p":
+            if _annual_hold():
+                return
             apply_speed(toggle_pause_action(ctx.sim))
             return
         if key in {"c"} or ch == "c":
             _open_census()
             return
         if key in {"a"} or ch == "a":
+            if _annual_hold():
+                return
             apply_speed("speed_year")
             return
         if key in {"space"}:
@@ -2987,11 +3005,14 @@ def show(ctx: BootContext, *, game: Path) -> None:
             set_zoom(2)
             return
         if key in {"t"}:
-            sim_step()
+            if not _annual_hold():
+                sim_step()
         elif key in {"m"} or ch == "m":
-            month_step()
+            if not _annual_hold():
+                month_step()
         elif key in {"e"}:
-            evolve_pass()
+            if not _annual_hold():
+                evolve_pass()
         elif key in {"left"}:
             pan(-step, 0)
         elif key in {"right"}:
@@ -3336,6 +3357,9 @@ def show(ctx: BootContext, *, game: Path) -> None:
                 elif is_turbo_report(menu_report, eng=ctx.eng):
                     _close_report()
                     blit(last_extra)
+                elif is_annual_summary_report(menu_report, eng=ctx.eng):
+                    _close_report()
+                    blit(last_extra)
                 return True
             _close_report()
             blit(last_extra)
@@ -3596,8 +3620,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
 
     def on_right(event: tk.Event) -> None:  # type: ignore[type-arg]
         nonlocal tool, band_start, band_cur, pending_click, drag, menu_open
-        nonlocal overlay_flyout, place_dlg, menu_report, load_picks
-        nonlocal save_picks, save_typed, save_typing
+        nonlocal overlay_flyout, place_dlg
         if forum_state is not None:
             _forum_back()
             return
@@ -3615,17 +3638,16 @@ def show(ctx: BootContext, *, game: Path) -> None:
                 _sfx("click")
                 _start_from_skill()
             return
+        if menu_report is not None:
+            _close_report()
+            blit(last_extra)
+            return
         aborted = band_start is not None
         band_start = None
         band_cur = None
         pending_click = None
         drag = None
         menu_open = None
-        menu_report = None
-        load_picks = None
-        save_picks = None
-        save_typed = ""
-        save_typing = False
         overlay_flyout = False
         palette.close()
         # EXE 0x329EF / overlay Cancel: right-click drops the build tool.

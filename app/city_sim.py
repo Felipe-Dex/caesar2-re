@@ -331,9 +331,10 @@ class PhaseResult:
 
 # EXE 0x28c2f A/a: clear pause [0x9CE64], CALL 0x31a9c ([0xC45A0]=1).
 # view_frame 0x3d357 increments when nonzero → >=2 skips the 0x3E4B9 ms gate.
-# sav_year_end 0x34D92 writes 0 at 0x34df7, then blocking [72] 0x61389
-# (clock frozen). After the modal, catchup stays 0 unless 0x31a9c runs.
-# Host pauses like P so January stays frozen until Play. Stop mid-year
+# sav_year_end 0x34D92 writes 0 at 0x34df7 ([0xC45A0] only — not [0x9CE64]),
+# draws [72] at 0x61389, then waits on 0x2e9fc. Clock is frozen because
+# the call is still inside 0x34D92, not because P-pause chrome is up.
+# After dismiss, catchup stays 0 unless 0x31a9c runs. Stop mid-year
 # restores the saved Speed. 0x28db0 is dirty-rects, not a WAV.
 YEAR_TURBO_CATCHUP = 2
 
@@ -365,11 +366,16 @@ def stop_year_turbo(state: SimState) -> None:
 
 
 def pause_at_year_wrap(state: SimState) -> None:
-    """Dec→Jan: drop turbo and pause. Do not restore Play/Faster."""
+    """Dec→Jan: drop turbo. Do not raise P / [0x9CE64] pause chrome.
+
+    EXE 0x34df7 zeros [0xC45A0] then blocks in [72] / 0x2e9fc. The host
+    holds the clock while Annual Summary is open (window.py). Dismiss
+    resumes at Play (catchup 0) with no leftover pause.
+    """
     state.year_turbo = False
     state.year_turbo_catchup = 0
     state.year_turbo_paused = False
-    state.paused = True
+    state.paused = False
     state.catchup = 0
 
 
@@ -2601,12 +2607,12 @@ def selftest() -> list[str]:
         and dec.month == 0
         and dec.year_raw == -299
         and not dec.year_turbo
-        and dec.paused
+        and not dec.paused
         and dec.catchup == 0
         and (year_msg is None or getattr(year_msg, "slot", None) != 83)
     )
     lines.append(
-        f"Dec wrap pauses, no [83]: {'ok' if ok else 'FAIL'} "
+        f"Dec wrap drops turbo, no pause/[83]: {'ok' if ok else 'FAIL'} "
         f"turbo={dec.year_turbo} paused={dec.paused} catchup={dec.catchup}"
     )
     tiles = _blank_tiles()
@@ -2617,11 +2623,11 @@ def selftest() -> list[str]:
     city_sim_phase(tiles, dec_play)
     ok = (
         not dec_play.year_turbo
-        and dec_play.paused
+        and not dec_play.paused
         and dec_play.catchup == 0
         and dec_play.month == 0
     )
-    lines.append(f"Dec wrap pauses from Play turbo: {'ok' if ok else 'FAIL'}")
+    lines.append(f"Dec wrap resumes Play (no pause chrome): {'ok' if ok else 'FAIL'}")
 
     tiles = _blank_tiles()
     state = SimState(phase=1, year_raw=-300, month=0, city_only=1)
