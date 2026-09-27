@@ -108,7 +108,7 @@ _MAP_MAX = MAP_W - 1  # 79; diagonal edge uses 78 ('N')
 # for city roads; the host also stamps 0x20 on aqueduct T/cross
 # (0xD5/0xD6) and leftover grass, which put walkers on the pipe.
 # Shared: city roads 0x52–0x5C, bridges 0x4E–0x51, plaza 0x7C–0x7E
-# (plaza stays walkable even if +1 lost 0x20).
+# (plaza stays walkable even if +1 lost 0x20), Gate 0xC0 (+1=0x24 pad).
 # Clerks (type 1) also use forum interiors 0xAE–0xB9 (no FLAG_PAD)
 # so they can *cross* the courtyard to reach a road. Spawn / seat /
 # pick_pad prefer 0x52–0x5C (and plaza) — they must not patrol 0xAE–0xB9.
@@ -119,6 +119,7 @@ ID_BRIDGE_LO = 0x4E
 ID_BRIDGE_HI = 0x51
 ID_PLAZA_LO = 0x7C
 ID_PLAZA_HI = 0x7E
+ID_GATE = 0xC0
 ID_FORUM_LO = 0xAE
 ID_FORUM_HI = 0xB9
 TYPE_CLERK = 1
@@ -251,6 +252,8 @@ def is_walker_road(tiles: bytearray, off: int, type_id: int | None = None) -> bo
     if ID_FORUM_LO <= tid <= ID_FORUM_HI:
         return type_id == TYPE_CLERK
     if ID_PLAZA_LO <= tid <= ID_PLAZA_HI:
+        return True
+    if tid == ID_GATE:
         return True
     if not (flags & FLAG_PAD):
         return False
@@ -2974,6 +2977,9 @@ def selftest() -> list[str]:
     plaza = _tile_off(16, 10)
     tiles[plaza] = 0x7C
     tiles[plaza + _TILE_FLAGS] = 0x00
+    gate = _tile_off(17, 10)
+    tiles[gate] = ID_GATE
+    tiles[gate + _TILE_FLAGS] = 0x24
     ok = (
         walker_dest_ok(tiles, forum, 1) == 1
         and walker_dest_ok(tiles, forum, 2) == 0
@@ -2984,12 +2990,15 @@ def selftest() -> list[str]:
         and walker_dest_ok(tiles, plaza, 2) == 1
         and walker_dest_ok(tiles, plaza, 4) == 1
         and walker_dest_ok(tiles, road, 2) == 1
+        and walker_dest_ok(tiles, gate, 2) == 1
+        and walker_dest_ok(tiles, gate, 5) == 1
     )
     lines.append(
-        f"dest_ok per type forum/plaza: {'ok' if ok else 'FAIL'} "
+        f"dest_ok per type forum/plaza/gate: {'ok' if ok else 'FAIL'} "
         f"clerk_f={walker_dest_ok(tiles, forum, 1)} "
         f"trader_f={walker_dest_ok(tiles, forum, 2)} "
-        f"trader_p={walker_dest_ok(tiles, plaza, 2)}"
+        f"trader_p={walker_dest_ok(tiles, plaza, 2)} "
+        f"trader_g={walker_dest_ok(tiles, gate, 2)}"
     )
 
     reset_clock()

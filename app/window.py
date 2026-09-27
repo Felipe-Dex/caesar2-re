@@ -3,7 +3,7 @@
 Play path paints visible iso diamonds into the camera well — never the
 ~4640×2400 world bitmap. Walker / water ticks dirty that well only
 (``video_blit_dirty`` 0x29849 stand-in). City Only keys follow
-C2MANUAL.DOC p.48 (P pause, C census, A faster, Space cancel build,
+C2MANUAL.DOC p.48 (P pause, C census, A year-end turbo, Space cancel build,
 F/F2 forum, F1 city, F3 province, F4 load, F5 save list then last slot,
 1/2/3 zoom, Esc dismiss). Off-map debug: 1 title, 2 CITYFIXT, 3 enter map, Space/T sim
 slot, A audio. Arrow keys pan. Housing / Roads / Clear / Aqueduct
@@ -27,17 +27,25 @@ from app.city_chrome import (
     SIDEBAR_W,
     SIDEBAR_X,
     TOP_BAR_H,
+    blit_tool_cost,
     chrome_ox,
     speed_action,
 )
 from app.forum import (
+    FORUM_NATIVE_H,
+    FORUM_NATIVE_W,
     KIND_CHROME,
+    KIND_EMPIRE,
+    KIND_ORACLE,
     ForumState,
     blit_forum,
     blit_pause_square,
     click_forum,
+    compose_forum_native,
     is_forum_building,
+    scale_forum_fb,
     open_forum,
+    type_forum_key,
 )
 from app.menus import (
     DIS_BARBARIAN,
@@ -86,11 +94,13 @@ from app.menus import (
     cycle_scroll,
     decorate_item,
     help_topic_excerpt,
+    is_turbo_report,
     next_game_speed,
     on_off,
     report_contains,
     report_line_at,
     toggle_pause_action,
+    turbo_report,
 )
 from app.city_map import WATER_FRAME_MS, WATER_FRAMES
 from app.city_overlay import (
@@ -112,6 +122,7 @@ from app.city_overlay import (
     place_dialog_contains,
     query_place,
 )
+from app.image_override import blit_tool_still, override_stamp, still_stem_for_tool
 from app.palette import PaletteState, action_for_tool
 from app.title import (
     ACTION_CAREER,
@@ -137,7 +148,11 @@ from app.title import (
 from app.place import (
     DRAW_AQUEDUCT,
     DRAW_GARDEN,
+    DRAW_GATE,
     DRAW_WALL,
+    ID_AQUEDUCT_WALL_EW,
+    ID_AQUEDUCT_WALL_NS,
+    ID_GATE,
     ID_RUBBLE,
     SPAN_TOOLS,
     STAMP_TOOLS,
@@ -146,6 +161,7 @@ from app.place import (
     TOOL_CLEAR,
     TOOL_FOUNTAIN,
     TOOL_GARDEN,
+    TOOL_HOSPITAL,
     TOOL_PLAZA,
     TOOL_PREFECTURE,
     TOOL_QUERY,
@@ -158,12 +174,14 @@ from app.place import (
     DragPreview,
     aqueduct_preview_cells,
     canvas_to_view,
+    cost_hud_text,
     garden_preview_cells,
     wall_preview_cells,
     in_map,
     preview_span,
     screen_to_tile,
     stamp_ghost_pieces,
+    tool_unit_cost,
     try_place,
     try_place_span,
     view_to_canvas,
@@ -336,10 +354,12 @@ def overlay_stamp_ghost(
     """One N×N stamp: translucent building sprites, or a single footprint bbox."""
     from app.city_map import (
         building_sprite_image,
+        hospital_sprite_aabb,
         iso_sprite_dest,
         iso_tile_size,
         tile_iso_xy,
     )
+    from app.image_override import hospital_has_override, hospital_iso_sprite
 
     overlay = Image.new("RGBA", view.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
@@ -349,7 +369,21 @@ def overlay_stamp_ghost(
     outline = (255, 255, 255, 200) if not preview.refuse else (255, 180, 160, 220)
     cells = [c for c in preview.cells if in_map(c[0], c[1])]
     painted = False
-    if sheets and cells:
+    if sheets and cells and preview.tool == TOOL_HOSPITAL and hospital_has_override(sheets):
+        ox = min(c[0] for c in preview.cells)
+        oy = min(c[1] for c in preview.cells)
+        ax, ay, aw, ah = hospital_sprite_aabb(
+            ox, oy, sheets, zoom=zoom, facing=facing
+        )
+        spr = hospital_iso_sprite(sheets, aw, ah)
+        if spr is not None:
+            ghost = _as_ghost(spr, refuse=bool(preview.refuse))
+            vx, vy = canvas_to_view(
+                ax, ay, cam_x, cam_y, canvas_w, canvas_h, screen_w=screen_w, screen_h=screen_h
+            )
+            overlay.paste(ghost, (vx, vy), ghost)
+            painted = True
+    if sheets and cells and not painted:
         ox = min(c[0] for c in preview.cells)
         oy = min(c[1] for c in preview.cells)
         th = iso_tile_size(zoom)[1]
@@ -442,8 +476,18 @@ def overlay_span_preview(
 
         th = iso_tile_size(zoom)[1]
         painted = False
-        for tx, ty, tid, variant in piece_rows:
-            spr = building_sprite_image(tid, piece_draw, variant, sheets, zoom=zoom)
+        for row in piece_rows:
+            tx, ty, tid, variant = row[0], row[1], row[2], row[3]
+            dry = row[4] if len(row) > 4 else None
+            if tid == ID_GATE:
+                pdraw = DRAW_GATE
+            elif tid in (ID_AQUEDUCT_WALL_EW, ID_AQUEDUCT_WALL_NS):
+                pdraw = DRAW_WALL
+            else:
+                pdraw = piece_draw
+            spr = building_sprite_image(
+                tid, pdraw, variant, sheets, zoom=zoom, dry=dry
+            )
             if spr is None:
                 continue
             ghost = _as_ghost(spr, refuse=bool(preview.refuse))
@@ -511,6 +555,13 @@ def _eng_skip(eng, slot: int, n: int, fallback: str) -> str:
         if got:
             return got
     return fallback
+
+
+def _tool_cost_line(tool: str | None, eng, preview: DragPreview | None = None) -> str:
+    """FUN_00061A67: pending total [0x102438], else unit [0x102434]."""
+    if preview is not None and preview.cost > 0:
+        return cost_hud_text(preview.cost, eng)
+    return cost_hud_text(tool_unit_cost(tool), eng)
 
 
 def _hud_font() -> ImageFont.ImageFont:
@@ -847,9 +898,19 @@ def show(ctx: BootContext, *, game: Path) -> None:
     ui_item = host.create_image(0, 0, anchor="nw")
     well_item = host.create_image(0, TOP_BAR_H, anchor="nw")
     front_item = host.create_image(0, 0, anchor="nw")
+    _lb_fill = "#0c101c"
+    lb_n = host.create_rectangle(0, 0, 0, 0, fill=_lb_fill, outline="", tags="forum_lb")
+    lb_s = host.create_rectangle(0, 0, 0, 0, fill=_lb_fill, outline="", tags="forum_lb")
+    lb_w = host.create_rectangle(0, 0, 0, 0, fill=_lb_fill, outline="", tags="forum_lb")
+    lb_e = host.create_rectangle(0, 0, 0, 0, fill=_lb_fill, outline="", tags="forum_lb")
+    # Oracle/Empire: Frame is the letterbox. Label is ONLY the 4:3 FB.
+    # Canvas create_image + pack(fill=BOTH) stretched PhotoImage to the HWND.
+    fb_cover = tk.Frame(root, bg=_lb_fill, highlightthickness=0, bd=0)
+    fb_shot = tk.Label(fb_cover, bd=0, highlightthickness=0, bg=_lb_fill)
     well_photo: ImageTk.PhotoImage | None = None
     ui_photo: ImageTk.PhotoImage | None = None
     front_photo: ImageTk.PhotoImage | None = None
+    fb_photo: ImageTk.PhotoImage | None = None
     win_w = SCREEN_W
     win_h = SCREEN_H
     _in_blit = False
@@ -862,6 +923,8 @@ def show(ctx: BootContext, *, game: Path) -> None:
     logo_frames: list[tuple[str, Image.Image]] = []
     logo_i = -1
     logo_after: str | None = None
+    intro_clip = None
+    intro_after: str | None = None
     if not ctx.start_in_map:
         logo_frames = load_boot_logos(game)
         if logo_frames:
@@ -899,6 +962,8 @@ def show(ctx: BootContext, *, game: Path) -> None:
     tool: str | None = None
     pl8_zooms = assets.available_map_zooms(game)
     chrome = CityChrome.load(game)
+    still_cache: dict = {}
+    sheet_override_stamp: dict[int, tuple] = {}
     palette = PaletteState()
     menu_open: int | None = None
     minimap_rect: tuple[int, int, int, int] | None = None
@@ -995,6 +1060,77 @@ def show(ctx: BootContext, *, game: Path) -> None:
         ox = chrome_ox(win_w)
         return (0, TOP_BAR_H, SIDEBAR_X + ox, win_h)
 
+    def _forum_canvas_size() -> tuple[int, int]:
+        """Widget client pixels — never the 640×480 requested canvas size alone."""
+        try:
+            host.update_idletasks()
+        except tk.TclError:
+            pass
+        widths = [int(win_w), int(host.winfo_width() or 0), int(root.winfo_width() or 0)]
+        heights = [int(win_h), int(host.winfo_height() or 0)]
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            rect = wintypes.RECT()
+            for widget in (host, root):
+                hwnd = int(widget.winfo_id())
+                if ctypes.windll.user32.GetClientRect(hwnd, ctypes.byref(rect)):
+                    widths.append(int(rect.right - rect.left))
+                    heights.append(int(rect.bottom - rect.top))
+        except (AttributeError, OSError, ValueError, tk.TclError):
+            pass
+        return (max(SCREEN_W, max(widths)), max(SCREEN_H, max(heights)))
+
+    def _forum_letterbox_mask(
+        fw: int,
+        fh: int,
+        ox: int,
+        oy: int,
+        bw: int,
+        bh: int,
+        *,
+        show: bool,
+    ) -> None:
+        if not show:
+            host.coords(lb_n, 0, 0, 0, 0)
+            host.coords(lb_s, 0, 0, 0, 0)
+            host.coords(lb_w, 0, 0, 0, 0)
+            host.coords(lb_e, 0, 0, 0, 0)
+            return
+        host.coords(lb_n, 0, 0, fw, oy)
+        host.coords(lb_s, 0, oy + bh, fw, fh)
+        host.coords(lb_w, 0, oy, ox, oy + bh)
+        host.coords(lb_e, ox + bw, oy, fw, oy + bh)
+        host.tag_raise("forum_lb")
+
+    def _hide_forum_fb() -> None:
+        nonlocal fb_photo
+        fb_cover.place_forget()
+        fb_shot.place_forget()
+        fb_shot.configure(image="")
+        fb_photo = None
+
+    def _show_forum_fb(native: Image.Image) -> tuple[int, int]:
+        """Same Oracle/Empire display: 4:3 Label, Frame bars. No image expand."""
+        nonlocal fb_photo, ui_photo
+        fw, fh = _forum_canvas_size()
+        shown, _scale, ox, oy = scale_forum_fb(native, fw, fh)
+        fb_photo = ImageTk.PhotoImage(shown.convert("RGB"), master=fb_shot)
+        fb_shot.configure(image=fb_photo)
+        fb_cover.place(x=0, y=0, relwidth=1, relheight=1)
+        # Intrinsic PhotoImage size only — never relwidth/relheight/width/height.
+        fb_shot.place(x=ox, y=oy)
+        host.itemconfig(ui_item, image="")
+        ui_photo = None
+        host.coords(ui_item, 0, 0)
+        _forum_letterbox_mask(fw, fh, 0, 0, fw, fh, show=False)
+        try:
+            fb_cover.lift()
+        except tk.TclError:
+            pass
+        return fw, fh
+
     def _set_layer(item: int, img: Image.Image | None, which: str) -> None:
         nonlocal well_photo, ui_photo, front_photo
         if img is None:
@@ -1021,6 +1157,10 @@ def show(ctx: BootContext, *, game: Path) -> None:
         t0 = time.perf_counter()
         if extra is not None:
             last_extra = extra
+        if forum_state is None or forum_state.kind not in (KIND_ORACLE, KIND_EMPIRE):
+            _hide_forum_fb()
+            host.coords(ui_item, 0, 0)
+            _forum_letterbox_mask(win_w, win_h, 0, 0, win_w, win_h, show=False)
         ox = chrome_ox(win_w)
         shown = extra if extra is not None else last_extra
         extra_alert = False
@@ -1032,27 +1172,49 @@ def show(ctx: BootContext, *, game: Path) -> None:
             extra_alert = True
         prev = current_preview()
         if prev is not None:
-            shown = f"{prev.message}  tesouro {ctx.sim.treasury}"
+            shown = _tool_cost_line(tool, ctx.eng, prev) or prev.message
             extra_alert = False
         if forum_state is not None:
-            frame = blit_forum((win_w, win_h), forum_state, ctx.sim, eng=ctx.eng)
-            frame = compose_city_hud(
-                frame,
-                ctx,
-                shown,
-                menu_open=menu_open,
-                options=options,
-                report=menu_report,
-                extra_alert=extra_alert,
-            )
-            _set_layer(well_item, None, "well")
-            _set_layer(front_item, None, "front")
-            _set_layer(ui_item, frame.convert("RGB"), "ui")
+            fw, fh = _forum_canvas_size()
+            if forum_state.kind in (KIND_ORACLE, KIND_EMPIRE):
+                # One display path: Frame letterbox + 4:3 Label.
+                # Canvas PhotoImage was StretchBlt'd to the packed 16:9 HWND.
+                last_extra = None
+                native = compose_forum_native(forum_state, ctx.sim, eng=ctx.eng)
+                if menu_report is not None:
+                    native = blit_menu_report(native, menu_report)
+                    if native.size != (FORUM_NATIVE_W, FORUM_NATIVE_H):
+                        native = scale_forum_fb(native, FORUM_NATIVE_W, FORUM_NATIVE_H)[0]
+                _set_layer(well_item, None, "well")
+                _set_layer(front_item, None, "front")
+                _show_forum_fb(native)
+            else:
+                frame = blit_forum((fw, fh), forum_state, ctx.sim, eng=ctx.eng)
+                frame = compose_city_hud(
+                    frame,
+                    ctx,
+                    shown,
+                    menu_open=menu_open,
+                    options=options,
+                    report=menu_report,
+                    extra_alert=extra_alert,
+                )
+                _set_layer(well_item, None, "well")
+                _set_layer(front_item, None, "front")
+                _set_layer(ui_item, frame.convert("RGB"), "ui")
+                host.coords(ui_item, 0, 0)
+                _forum_letterbox_mask(fw, fh, 0, 0, fw, fh, show=False)
             _prof_note(t0)
             return
         if not map_mode:
             if logo_i >= 0 and logo_i < len(logo_frames):
                 frame = _fit(logo_frames[logo_i][1]).convert("RGB")
+            elif intro_clip is not None:
+                snap = intro_clip.snapshot()
+                if snap is not None:
+                    frame = _fit(snap).convert("RGB")
+                else:
+                    frame = Image.new("RGB", (SCREEN_W, SCREEN_H), (0, 0, 0))
             elif offmap == "title":
                 if title_session.screen == SCREEN_SKILL:
                     frame = compose_skill(
@@ -1074,6 +1236,8 @@ def show(ctx: BootContext, *, game: Path) -> None:
             _set_layer(well_item, None, "well")
             _set_layer(front_item, None, "front")
             _set_layer(ui_item, frame.convert("RGB"), "ui")
+            host.coords(ui_item, 0, 0)
+            _forum_letterbox_mask(win_w, win_h, 0, 0, win_w, win_h, show=False)
             _prof_note(t0)
             return
         ww, wh = world_wh()
@@ -1139,6 +1303,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
             ox,
             overlay_id,
             tool,
+            _tool_cost_line(tool, ctx.eng, prev),
             speed_action(ctx.sim),
             ctx.sim.date_label,
             int(ctx.sim.treasury),
@@ -1156,6 +1321,9 @@ def show(ctx: BootContext, *, game: Path) -> None:
                 speed=speed_action(ctx.sim),
                 ox=ox,
                 facing=map_facing,
+            )
+            frame = blit_tool_cost(
+                frame, _tool_cost_line(tool, ctx.eng, prev), ox=ox
             )
             vp = (cam_x, cam_y, zoom, ww, wh, win_w, win_h)
             if overlay_has_legend(overlay_id):
@@ -1214,6 +1382,9 @@ def show(ctx: BootContext, *, game: Path) -> None:
                 )
             if build_flyout:
                 frame = palette.blit(frame, selected=tool, ox=ox)
+            frame = blit_tool_still(
+                frame, game, tool, ox=ox, cache=still_cache
+            )
             if place_dlg is not None:
                 frame = blit_place_dialog(frame, place_dlg)
             # Query stays in front. Non-disaster banners wait; disasters
@@ -1253,17 +1424,20 @@ def show(ctx: BootContext, *, game: Path) -> None:
             host.coords(well_item, wx0, wy0)
             _set_layer(ui_item, ui_cache, "ui")
             _set_layer(well_item, well, "well")
+            layer = Image.new("RGBA", (win_w, win_h), (0, 0, 0, 0))
             if build_flyout:
                 # Flyout sits left of the 162 px chrome, over the iso well.
                 # Keep it on front so Play can still dirty the well only.
-                layer = Image.new("RGBA", (win_w, win_h), (0, 0, 0, 0))
+                layer = palette.blit(layer, selected=tool, ox=ox)
+            layer = blit_tool_still(
+                layer, game, tool, ox=ox, cache=still_cache
+            )
+            has_front = build_flyout or still_stem_for_tool(tool) is not None
+            # Still lives in the sidebar strip; Space / other tool clears it.
+            if has_front:
                 host.coords(front_item, 0, 0)
                 host.tag_raise(front_item)
-                _set_layer(
-                    front_item,
-                    palette.blit(layer, selected=tool, ox=ox),
-                    "front",
-                )
+                _set_layer(front_item, layer, "front")
             else:
                 _set_layer(front_item, None, "front")
         _prof_note(t0)
@@ -1276,12 +1450,16 @@ def show(ctx: BootContext, *, game: Path) -> None:
             how = f"scale zoom {zoom}"
         names = "+".join(sheets) if sheets else "cached"
         tw, th = city_map.iso_tile_size(zoom)
-        return (
+        line = (
             f"mapa {ctx.city.source}  zoom={zoom} ({tw}x{th} {how})  "
             f"pan={cam_x},{cam_y}  walkers={n_walkers}  "
             f"{overlay_name(overlay_id, ctx.eng)}  "
             f"água {water_frame}/{WATER_FRAMES} {WATER_FRAME_MS}ms  ({names})"
         )
+        cost = _tool_cost_line(tool, ctx.eng)
+        if cost:
+            return f"{cost}  {line}"
+        return line
 
     def _ltlmen(at_zoom: int):
         from app.walkers import load_ltlmen_frames
@@ -1322,10 +1500,16 @@ def show(ctx: BootContext, *, game: Path) -> None:
         use_pl8 = at_zoom in pl8_zooms
         zoom_used_pl8[at_zoom] = use_pl8
         remember_rivers()
-        if use_pl8 and at_zoom not in pl8_sheets:
+        stamp = override_stamp(game, "AHOSPIT")
+        need = use_pl8 and (
+            at_zoom not in pl8_sheets or sheet_override_stamp.get(at_zoom) != stamp
+        )
+        if need:
             sheets = assets.load_city_map_sheets(game, zoom=at_zoom)
             pl8_sheets[at_zoom] = sheets
+            sheet_override_stamp[at_zoom] = stamp
             ctx.n_sprites = sum(len(v) for v in sheets.values())
+            _invalidate_live()
         map_ready = True
         return pl8_sheets.get(at_zoom)
 
@@ -1593,6 +1777,10 @@ def show(ctx: BootContext, *, game: Path) -> None:
         nonlocal place_dlg
         if advisor_dlg is not None:
             return
+        # Annual Summary [72] (and other reports) stay in front. 58c87
+        # congrat must not cover FUN_00061389. Resume after _close_report.
+        if menu_report is not None:
+            return
         from app.messages import advisor_show_policy, peek_message, pop_message
 
         nxt = peek_message(ctx.sim)
@@ -1820,6 +2008,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
         ph, w = n.phase, n.walkers
         _refresh_after_sim(houses_changed=ph.houses_changed > 0)
         _maybe_annual_summary(ph)
+        _maybe_lastyear(ph)
         _maybe_win_lose()
         _play_labor_sfx()
         _pump_advisor()
@@ -1847,6 +2036,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
         date = format_hud_date(ctx.sim.date)
         _refresh_after_sim(houses_changed=ph.houses_changed > 0)
         _maybe_annual_summary(ph)
+        _maybe_lastyear(ph)
         _maybe_win_lose()
         _play_labor_sfx()
         _pump_advisor()
@@ -1862,15 +2052,36 @@ def show(ctx: BootContext, *, game: Path) -> None:
         )
 
     def apply_speed(action: str) -> None:
-        """INT_CITY play / faster / pause + Speed menu. Original starts unpaused."""
+        """INT_CITY play / faster / pause + Speed menu. A is year-end turbo.
+
+        0x28c2f / 0x31a9c set [0xC45A0]; sav_year_end 0x34df7 clears it
+        then blocking [72]. Speed flyout and P cancel turbo. Stop on the
+        [75] box restores the previous rate; Dec wrap pauses instead.
+        """
+        from app.city_sim import end_year_turbo, start_year_turbo
+
+        nonlocal menu_report
         sim = ctx.sim
+        if action == "speed_year":
+            start_year_turbo(sim)
+            _open_report(turbo_report(ctx.eng))
+            return
         if action == "speed_pause":
+            end_year_turbo(sim, restore=False)
+            if is_turbo_report(menu_report, eng=ctx.eng):
+                menu_report = None
             sim.paused = True
             sim.catchup = 0
         elif action == "speed_play":
+            end_year_turbo(sim, restore=False)
+            if is_turbo_report(menu_report, eng=ctx.eng):
+                menu_report = None
             sim.paused = False
             sim.catchup = 0
         elif action == "speed_fast":
+            end_year_turbo(sim, restore=False)
+            if is_turbo_report(menu_report, eng=ctx.eng):
+                menu_report = None
             sim.paused = False
             sim.catchup = 1
         else:
@@ -1900,7 +2111,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
         tool = None
         forum_state = open_forum(ctx.sim, ctx.city.tiles, game)
         _sfx("forum")
-        blit(_eng_skip(ctx.eng, 28, 8, "PLEBS"))
+        blit(_eng_skip(ctx.eng, 28, 0, "CLEAR FORUM"))
 
     def _leave_forum() -> None:
         nonlocal forum_state
@@ -1916,6 +2127,13 @@ def show(ctx: BootContext, *, game: Path) -> None:
             return False
         if forum_state.kind != KIND_CHROME:
             forum_state.kind = KIND_CHROME
+            forum_state.oracle_advice = None
+            forum_state.oracle_sfx = ""
+            forum_state.empire_pick = None
+            forum_state.empire_flavor = ""
+            forum_state.empire_sfx = ""
+            forum_state.field_focus = ""
+            forum_state.field_edit = ""
             blit(_eng_skip(ctx.eng, 28, 0, "CLEAR FORUM"))
             return True
         _leave_forum()
@@ -1933,12 +2151,18 @@ def show(ctx: BootContext, *, game: Path) -> None:
 
     def _close_report() -> None:
         nonlocal menu_report, load_picks, save_picks, save_typed, save_typing
+        from app.city_sim import stop_year_turbo
+
+        was_turbo = is_turbo_report(menu_report, eng=ctx.eng)
         menu_report = None
         load_picks = None
         save_picks = None
         save_typed = ""
         save_typing = False
         title_session.options_open = False
+        if was_turbo:
+            stop_year_turbo(ctx.sim)
+        _pump_advisor()
 
     def _open_report(
         report: MenuReport,
@@ -1958,14 +2182,37 @@ def show(ctx: BootContext, *, game: Path) -> None:
         blit(extra if extra is not None else report.title)
 
     def _maybe_annual_summary(ph) -> None:
-        """FUN_00061389 after Dec→Jan. City Only only. Not Hail / Fire."""
+        """FUN_00061389 after Dec→Jan. City Only [72] numbers. Not [83].
+
+        Closes the [75] turbo box first. Clock is already paused.
+        """
+        nonlocal menu_report
         if not getattr(ph, "year_wrapped", False):
             return
+        if is_turbo_report(menu_report, eng=ctx.eng):
+            menu_report = None
         if not getattr(ctx.sim, "city_only", 0):
             return
         if not options.annual_summary:
             return
         _open_report(annual_summary_report(ctx.sim, eng=ctx.eng))
+
+    def _maybe_lastyear(ph) -> None:
+        """sav_year_end 0x34E2D lastyear.sav after [72]. Same write_sav as F5."""
+        if not getattr(ph, "year_wrapped", False):
+            return
+        from app.sav import maybe_write_lastyear
+        from app.sim_log import write
+
+        try:
+            dest = maybe_write_lastyear(
+                True, ctx.city, ctx.walkers, ctx.sim, game=game
+            )
+        except (OSError, ValueError):
+            return
+        if dest is None:
+            return
+        write(f"sav_write  {dest}  {dest.stat().st_size} B")
 
     def _maybe_win_lose() -> None:
         """0x59b06 / 0x59aa7 reports. Not Career [115]+ Emperor letters."""
@@ -2210,6 +2457,69 @@ def show(ctx: BootContext, *, game: Path) -> None:
             picks=picks,
         )
 
+    def _stop_intro() -> None:
+        nonlocal intro_clip, intro_after
+        if intro_after is not None:
+            try:
+                root.after_cancel(intro_after)
+            except (tk.TclError, ValueError):
+                pass
+            intro_after = None
+        if intro_clip is not None:
+            intro_clip.close()
+            intro_clip = None
+
+    def _enter_title_menu() -> None:
+        """BACKGRND [38] — music_load_xmi forum1.xmi after intro.smk."""
+        _stop_intro()
+        if ctx.play_audio and options.music:
+            ctx.audio_status = title_music.start(game)
+        blit(ctx.audio_status)
+
+    def _on_intro_tick() -> None:
+        nonlocal intro_after
+        intro_after = None
+        if intro_clip is None:
+            return
+        if intro_clip.finished:
+            _enter_title_menu()
+            return
+        blit(None)
+        intro_after = root.after(
+            max(16, int(getattr(intro_clip, "delay_ms", 83))),
+            _on_intro_tick,
+        )
+
+    def _start_intro() -> None:
+        """smk_play 0x5AB3D intro.smk — gold CAESAR II card, SMK audio."""
+        nonlocal intro_clip, intro_after
+        _stop_intro()
+        from app.advisor_video import (
+            INTRO_H,
+            INTRO_W,
+            AdvisorClip,
+            find_ffmpeg,
+            resolve_intro_video,
+        )
+
+        path = resolve_intro_video(game)
+        if path is None or find_ffmpeg() is None:
+            _enter_title_menu()
+            return
+        clip = AdvisorClip(
+            path, mute=not ctx.play_audio, dest_w=INTRO_W, dest_h=INTRO_H
+        )
+        if not clip.begin():
+            clip.close()
+            _enter_title_menu()
+            return
+        intro_clip = clip
+        ctx.audio_status = (
+            f"intro {path.name} (smk_play 0x5AB3D; SMK audio, not forum1)"
+        )
+        blit(None)
+        intro_after = root.after(clip.delay_ms, _on_intro_tick)
+
     def _skip_logos() -> None:
         nonlocal logo_i, logo_after
         logo_i = -1
@@ -2220,6 +2530,10 @@ def show(ctx: BootContext, *, game: Path) -> None:
                 pass
             logo_after = None
 
+    def _boot_after_logos() -> None:
+        _skip_logos()
+        _start_intro()
+
     def _advance_logo() -> None:
         nonlocal logo_i, logo_after
         logo_after = None
@@ -2228,7 +2542,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
         logo_i += 1
         if logo_i >= len(logo_frames):
             logo_i = -1
-            blit(None)
+            _boot_after_logos()
             return
         blit(None)
         logo_after = root.after(LOGO_MS, _advance_logo)
@@ -2249,8 +2563,10 @@ def show(ctx: BootContext, *, game: Path) -> None:
 
     def _title_click(x: int, y: int) -> None:
         if logo_i >= 0:
-            _skip_logos()
-            blit(None)
+            _boot_after_logos()
+            return
+        if intro_clip is not None:
+            _enter_title_menu()
             return
         if menu_report is not None:
             if report_contains(x, y):
@@ -2371,6 +2687,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
             if ph.houses_changed > 0:
                 _refresh_after_sim(houses_changed=True)
             _maybe_annual_summary(ph)
+            _maybe_lastyear(ph)
             _maybe_win_lose()
             _play_labor_sfx()
             _pump_advisor()
@@ -2537,7 +2854,11 @@ def show(ctx: BootContext, *, game: Path) -> None:
     def on_key(event: tk.Event) -> None:  # type: ignore[type-arg]
         """City Only: C2MANUAL.DOC Keyboard Commands. Debug keys only off-map."""
         key = event.keysym.lower()
-        ch = (getattr(event, "char", "") or "").lower()
+        ch = (getattr(event, "char", "") or "")
+        if forum_state is not None and type_forum_key(forum_state, ctx.sim, key, ch):
+            blit(last_extra)
+            return
+        ch = ch.lower()
         mods = int(getattr(event, "state", 0) or 0)
         alt = bool(mods & 0x20008)
         step = PAN_STEP[city_map.clamp_zoom(zoom)]
@@ -2552,8 +2873,10 @@ def show(ctx: BootContext, *, game: Path) -> None:
                     blit(None)
                     return
                 if logo_i >= 0:
-                    _skip_logos()
-                    blit(None)
+                    _boot_after_logos()
+                    return
+                if intro_clip is not None:
+                    _enter_title_menu()
                     return
                 if title_session.screen == SCREEN_SKILL:
                     title_session.apply(ACTION_SKILL_BACK)
@@ -2568,8 +2891,10 @@ def show(ctx: BootContext, *, game: Path) -> None:
             return
         if not map_mode:
             if logo_i >= 0 and key not in {"q"}:
-                _skip_logos()
-                blit(None)
+                _boot_after_logos()
+                return
+            if intro_clip is not None and key not in {"q"}:
+                _enter_title_menu()
                 return
             if title_session.screen == SCREEN_SKILL:
                 if key in {"return", "kp_enter"}:
@@ -2620,7 +2945,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
             _open_census()
             return
         if key in {"a"} or ch == "a":
-            apply_speed("speed_fast")
+            apply_speed("speed_year")
             return
         if key in {"space"}:
             _cancel_build()
@@ -2719,7 +3044,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
             _sfx("click")
             blit(f"Query {place_dlg.name}  tesouro {ctx.sim.treasury}")
             return
-        place_dlg = query_place(ctx.city, x, y, ctx.eng)
+        place_dlg = query_place(ctx.city, x, y, ctx.eng, ctx.sim)
         _sfx("click")
         blit(f"Query {place_dlg.name}  tesouro {ctx.sim.treasury}")
 
@@ -2812,7 +3137,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
             tool = picked.tool
             _close_query()
         _sfx("click")
-        blit(f"{picked.message}  tesouro {ctx.sim.treasury}")
+        blit(picked.message)
 
     def pick_overlay(idx: int) -> None:
         nonlocal overlay_id, overlay_flyout, tool, place_dlg
@@ -3008,6 +3333,9 @@ def show(ctx: BootContext, *, game: Path) -> None:
                         else:
                             save_typing = True
                             _refresh_save_picker()
+                elif is_turbo_report(menu_report, eng=ctx.eng):
+                    _close_report()
+                    blit(last_extra)
                 return True
             _close_report()
             blit(last_extra)
@@ -3086,10 +3414,8 @@ def show(ctx: BootContext, *, game: Path) -> None:
                 band_cur = hit
                 pending_click = None
                 prev = current_preview()
-                extra = (
-                    f"{prev.message}  tesouro {ctx.sim.treasury}"
-                    if prev is not None
-                    else None
+                extra = _tool_cost_line(tool, ctx.eng, prev) or (
+                    prev.message if prev is not None else None
                 )
                 blit(extra)
             return
@@ -3117,10 +3443,8 @@ def show(ctx: BootContext, *, game: Path) -> None:
             if hit is not None:
                 band_cur = hit
             prev = current_preview()
-            extra = (
-                f"{prev.message}  tesouro {ctx.sim.treasury}"
-                if prev is not None
-                else None
+            extra = _tool_cost_line(tool, ctx.eng, prev) or (
+                prev.message if prev is not None else None
             )
             blit(extra)
             return
@@ -3205,8 +3529,13 @@ def show(ctx: BootContext, *, game: Path) -> None:
                 event.y,
                 ctx.sim,
                 eng=ctx.eng,
-                frame_size=(win_w, win_h),
+                frame_size=_forum_canvas_size(),
             )
+            stem = forum_state.oracle_sfx or forum_state.empire_sfx
+            if stem:
+                forum_state.oracle_sfx = ""
+                forum_state.empire_sfx = ""
+                sfx.play_raw(stem)
             if msg == "exit":
                 _sfx("click")
                 _leave_forum()
@@ -3237,7 +3566,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
             if picked.tool is not None:
                 tool = picked.tool
             _sfx("click")
-            blit(f"{picked.message}  tesouro {ctx.sim.treasury}")
+            blit(picked.message)
             return
         hit = chrome.hit_test(event.x, event.y, ox=ox)
         if hit is not None:
@@ -3278,7 +3607,11 @@ def show(ctx: BootContext, *, game: Path) -> None:
             blit(last_extra)
             return
         if not map_mode:
-            if title_session.screen == SCREEN_SKILL and logo_i < 0:
+            if (
+                title_session.screen == SCREEN_SKILL
+                and logo_i < 0
+                and intro_clip is None
+            ):
                 _sfx("click")
                 _start_from_skill()
             return
@@ -3342,19 +3675,37 @@ def show(ctx: BootContext, *, game: Path) -> None:
             set_zoom(zoom + 1)
 
     def on_resize(event: tk.Event) -> None:  # type: ignore[type-arg]
-        """Larger window → larger iso clip. Same PL8 zoom, same pan."""
+        """Larger window → larger iso clip. Same PL8 zoom, same pan.
+
+        Size the well from the canvas, not the toplevel. Root Configure
+        includes the title bar; using that HWND fattened Oracle columns.
+        """
         nonlocal win_w, win_h
-        if _in_blit or event.widget is not root:
+        if _in_blit:
             return
-        nw = max(SCREEN_W, int(event.width))
-        nh = max(SCREEN_H, int(event.height))
+        if event.widget is host:
+            nw = max(SCREEN_W, int(event.width))
+            nh = max(SCREEN_H, int(event.height))
+        elif event.widget is root:
+            nw = max(SCREEN_W, int(host.winfo_width() or event.width))
+            nh = max(SCREEN_H, int(host.winfo_height() or event.height))
+        else:
+            return
         if nw == win_w and nh == win_h:
             return
         win_w, win_h = nw, nh
         blit(last_extra)
 
+    def _fb_to_host(event: tk.Event, handler) -> None:  # type: ignore[type-arg]
+        """Label clicks are local; add place() origin so hits stay in 640×480."""
+        if event.widget is fb_shot:
+            event.x += int(fb_shot.winfo_x())
+            event.y += int(fb_shot.winfo_y())
+        handler(event)
+
     root.bind("<Key>", on_key)
     root.bind("<Configure>", on_resize)
+    host.bind("<Configure>", on_resize)
     host.bind("<Button-1>", on_press)
     host.bind("<B1-Motion>", on_motion)
     host.bind("<ButtonRelease-1>", on_release)
@@ -3362,8 +3713,13 @@ def show(ctx: BootContext, *, game: Path) -> None:
     host.bind("<MouseWheel>", on_wheel)
     host.bind("<Button-4>", on_wheel)
     host.bind("<Button-5>", on_wheel)
+    fb_cover.bind("<Button-1>", lambda e: _fb_to_host(e, on_press))
+    fb_cover.bind("<Button-3>", lambda e: _fb_to_host(e, on_right))
+    fb_shot.bind("<Button-1>", lambda e: _fb_to_host(e, on_press))
+    fb_shot.bind("<Button-3>", lambda e: _fb_to_host(e, on_right))
     def on_close() -> None:
         _stop_advisor_video()
+        _stop_intro()
         title_music.stop()
         sfx.close()
         _skip_logos()
@@ -3381,10 +3737,11 @@ def show(ctx: BootContext, *, game: Path) -> None:
         root.title("Caesar II")
         if ctx.play_audio:
             options.music = True
-            ctx.audio_status = title_music.start(game)
-        blit(ctx.audio_status if logo_i < 0 else None)
         if logo_i >= 0:
+            blit(None)
             logo_after = root.after(LOGO_MS, _advance_logo)
+        else:
+            _start_intro()
     water_after = root.after(WATER_FRAME_MS, on_water)
     sim_after = root.after(TICK_MS, clock_step)
     root.mainloop()

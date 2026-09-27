@@ -75,9 +75,13 @@ RATINGS_SEED_CHUNK = 341
 RANK_CHUNK = 291
 HISTORY_COUNT_CHUNK = 338
 POP_CHUNK = 32
+POP_PEAK_CHUNK = 409  # [0x102A94] 0x441C8 peak
+UNLOCK_STEP_CHUNK = 411  # [0x102C3C] 0x44337 [114] step
 GOODS_CHUNK = 339
 FACTORY_LABOR_CHUNK = 140
+LAND_ADJ_CHUNK = 139  # [0x102ad4] 40695 housing bonus
 PROVINCE_LINKS_CHUNK = 276
+CONSTRUCT_YTD_CHUNK = 155  # [0x102A2C] YTD constructions (0x30B2C / 0x2F3FB)
 
 # Named File→Save vs sav_year_end lastyear.sav (REVERSE.md / FELIPE vs LASTYEAR).
 _NAMED_FLAGS = (0, 4, 0, 0)
@@ -89,6 +93,8 @@ _LASTYEAR_FLAGS = (0, 0, 1, 0x01)
 # (CITY.SAV, FELIPE01.SAV, CAESAR2.SAV).
 SAV_SUBDIR = "sav"
 DEFAULT_SAV_NAME = "CITY.SAV"
+# sav_year_end 0x34D92 / string 0x90b40 lastyear.sav (DOS 8.3).
+LASTYEAR_NAME = "LASTYEAR.SAV"
 SAVE_NEW_LABEL = "[ new ]"
 # MenuReport fits ~12 lines; keep one for [ new ].
 SAVE_PICKER_LIMIT = 11
@@ -163,6 +169,7 @@ HOST_OWNED_CHUNKS: frozenset[int] = frozenset(
         36,
         37,
         46,
+        CONSTRUCT_YTD_CHUNK,
         LABOR_READY_CHUNK,
         WELFARE_CHUNK,
         LABOR_EST_CHUNK,
@@ -174,11 +181,26 @@ HOST_OWNED_CHUNKS: frozenset[int] = frozenset(
         288,
         289,
         RANK_CHUNK,
+        194,
+        195,
+        196,
+        197,
+        198,
+        199,
+        200,
+        203,
+        400,
+        402,
+        403,
+        410,
+        POP_PEAK_CHUNK,
+        UNLOCK_STEP_CHUNK,
         YEAR_SEED_CHUNK,
         HISTORY_COUNT_CHUNK,
         RATINGS_SEED_CHUNK,
         GOODS_CHUNK,
         FACTORY_LABOR_CHUNK,
+        LAND_ADJ_CHUNK,
         PROVINCE_LINKS_CHUNK,
         WRAP3_CHUNK,
         CHUNK_CITY_ONLY,
@@ -431,20 +453,36 @@ def owned_payloads(
         35: _i32(getattr(sim, "ind_tax_last", 0)),
         36: _i32(getattr(sim, "construct_last", 0)),
         37: _i32(getattr(sim, "operating_last", 0)),
+        CONSTRUCT_YTD_CHUNK: _i32(getattr(sim, "construct_ytd", 0)),
         46: _i32(getattr(sim, "rating_avg", 0)),
         LABOR_READY_CHUNK: _i32(getattr(sim, "plebs_ready", 0)),
         WELFARE_CHUNK: _i32(getattr(sim, "welfare", 0)),
         LABOR_EST_CHUNK: _i32(getattr(sim, "plebs_estimate", 0)),
         LABOR_TABLE_CHUNK: _labor_table(sim),
         FACTORY_LABOR_CHUNK: _i32(getattr(sim, "factory_labor", 0)),
+        LAND_ADJ_CHUNK: _i32(getattr(sim, "land_value_adj", 0)),
         157: _i32(tribute),
+        194: _i32(getattr(sim, "legion_wages", 0)),
+        195: _i32(getattr(sim, "conscription", 0)),
+        196: _i32(getattr(sim, "cohorts", 0)),
+        197: _i32(getattr(sim, "auxiliaries", 0)),
+        198: _i32(getattr(sim, "soldiers", 0)),
+        199: _i32(getattr(sim, "soldiers_ready", 0)),
+        200: _i32(getattr(sim, "soldiers_training", 0)),
+        203: _i32(getattr(sim, "legion_heavy", 0)),
+        400: _i32(getattr(sim, "gift_avg", 0)),
+        402: _i32(getattr(sim, "savings", 0)),
+        403: _i32(getattr(sim, "salary", 0)),
+        410: _i32(getattr(sim, "imperial_favor", 0)),
+        POP_PEAK_CHUNK: _i32(getattr(sim, "pop_peak", 0)),
+        UNLOCK_STEP_CHUNK: _i32(getattr(sim, "unlock_step", 0)),
         CHUNK_PID: _i32(getattr(sim, "pid", 0)),
         PROVINCE_LINKS_CHUNK: _i32(getattr(sim, "province_links", 0)),
         286: _i32(getattr(sim, "rating_empire", 0)),
         287: _i32(getattr(sim, "rating_peace", 0)),
         288: _i32(getattr(sim, "rating_prosperity", 0)),
         289: _i32(getattr(sim, "rating_culture", 0)),
-        RANK_CHUNK: _i32(0),
+        RANK_CHUNK: _i32(getattr(sim, "rank", 0)),
         YEAR_SEED_CHUNK: _i32(getattr(sim, "year_raw", -300)),
         HISTORY_COUNT_CHUNK: _i32(0),
         GOODS_CHUNK: bytes(getattr(sim, "goods", b"") or bytes(768)),
@@ -500,6 +538,28 @@ def write_sav(
         build_sav_bytes(city, walkers, sim, game=game, sizes=sizes, path=dest)
     )
     return dest
+
+
+def maybe_write_lastyear(
+    year_wrapped: bool,
+    city: CityMap | bytearray | bytes,
+    walkers: Sequence[Walker] | bytearray | bytes,
+    sim: SimState,
+    *,
+    game: Path | None = None,
+    root: Path | None = None,
+) -> Path | None:
+    """Dec→Jan autosave. Same write_sav as F5; 8.3 overwrite.
+
+    EXE: ``lastyear.sav`` at ``0x90b40``. ``sav_write`` ``0x70174`` from
+    ``sav_year_end`` ``0x34D92`` — ``0x34DC4`` then RET (skips [72]), or
+    ``0x34E2D`` after Annual Summary ``0x61389``. Host always overwrites
+    ``sav/LASTYEAR.SAV`` and still opens [72].
+    """
+    if not year_wrapped:
+        return None
+    dest = dest_path(game, root=root, name=LASTYEAR_NAME)
+    return write_sav(dest, city, walkers, sim, game=game)
 
 
 def selftest() -> list[str]:
@@ -565,6 +625,7 @@ def selftest() -> list[str]:
     fresh.sim.tax_rate = 7
     fresh.sim.industrial_tax = 4
     fresh.sim.treasury = 11900
+    fresh.sim.construct_ytd = 700
     fresh.sim.labor_assigned = [20, 13, 4, 4, 0, 0, 0]
     fresh.sim.welfare = 9
     if PLEBS_CHUNK_VA[LABOR_TABLE_CHUNK] != PLEBS_TABLE_VA:
@@ -648,6 +709,21 @@ def selftest() -> list[str]:
             )
         else:
             lines.append("ok    skill 16 / pid 223 / treasury 28")
+        ytd_raw = struct.unpack_from("<i", chunks[CONSTRUCT_YTD_CHUNK], 0)[0]
+        if sim.construct_ytd != 700 or ytd_raw != 700:
+            lines.append(f"FAIL  chunk 155 construct_ytd={sim.construct_ytd} raw={ytd_raw}")
+        else:
+            lines.append("ok    chunk 155 [0x102A2C] construct YTD 700")
+        fresh.sim.pop_peak = 2500
+        fresh.sim.unlock_step = 5
+        write_sav(dest, fresh.city, fresh.walkers, fresh.sim, sizes=sizes)
+        sim2 = load_sim_from_sav(dest, sizes)
+        if sim2.pop_peak != 2500 or sim2.unlock_step != 5:
+            lines.append(
+                f"FAIL  chunk 409/411 peak={sim2.pop_peak} step={sim2.unlock_step}"
+            )
+        else:
+            lines.append("ok    chunks 409/411 pop peak + [114] unlock step")
         if city.tiles[off] != 0x82:
             lines.append("FAIL  tent origin not in reloaded map")
         owned_nonzero = 0
@@ -700,4 +776,48 @@ def selftest() -> list[str]:
             lines.append(f"FAIL  dest_path name= {named}")
         else:
             lines.append("ok    dest_path name= sanitizes 8.3")
+        slot = dest_path(name=LASTYEAR_NAME, root=Path(tmp))
+        if slot != Path(tmp) / SAV_SUBDIR / LASTYEAR_NAME:
+            lines.append(f"FAIL  lastyear dest {slot}")
+        else:
+            lines.append("ok    dest_path name=LASTYEAR.SAV is 8.3")
+        from app.city_sim import city_sim_phase
+
+        fresh.sim.phase = 0xD6
+        fresh.sim.month = 0
+        feb = city_sim_phase(fresh.city.tiles, fresh.sim, fresh.walkers)
+        if maybe_write_lastyear(
+            feb.year_wrapped, fresh.city, fresh.walkers, fresh.sim, root=Path(tmp)
+        ) is not None:
+            lines.append("FAIL  Jan-Feb wrote lastyear.sav")
+        else:
+            lines.append("ok    Jan-Feb does not write LASTYEAR.SAV")
+        fresh.sim.phase = 0xD6
+        fresh.sim.month = 11
+        fresh.sim.year_raw = -300
+        jan = city_sim_phase(fresh.city.tiles, fresh.sim, fresh.walkers)
+        dest = maybe_write_lastyear(
+            jan.year_wrapped, fresh.city, fresh.walkers, fresh.sim, root=Path(tmp)
+        )
+        want = Path(tmp) / SAV_SUBDIR / LASTYEAR_NAME
+        n = dest.stat().st_size if dest is not None else 0
+        flags = dest.read_bytes()[:4] if dest is not None else b""
+        if dest != want or n != SAV_SIZE or flags != bytes(_LASTYEAR_FLAGS):
+            lines.append(
+                f"FAIL  year wrap lastyear dest={dest} n={n} flags={flags!r}"
+            )
+        else:
+            lines.append(f"ok    year wrap writes sav/{LASTYEAR_NAME} {n} B")
+        again = maybe_write_lastyear(
+            True, fresh.city, fresh.walkers, fresh.sim, root=Path(tmp)
+        )
+        if (
+            dest is None
+            or again is None
+            or again != dest
+            or again.stat().st_size != SAV_SIZE
+        ):
+            lines.append("FAIL  lastyear overwrite")
+        else:
+            lines.append(f"ok    year wrap overwrites sav/{LASTYEAR_NAME} {SAV_SIZE} B")
     return lines

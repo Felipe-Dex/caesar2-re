@@ -27,6 +27,8 @@ Pinned play/bind sites (mapped VA):
   pick is silent (no ``a09.wav``, ``unused.wav``, or ``poscl.wav``).
 - ``forum.wav`` is copied in ``city_sfx_bind_wavs`` ``0x12F2A`` (ambience
   table). Host plays it once on Forum enter.
+- Oracle rating click is ``0x57450`` → ``0x135a4`` EAX ``0x1f…0x2c``
+  (``B02.RAW``…``B15.RAW``). Play the full clip, not ``A01.RAW``.
 - ``unused.wav`` bind ``0x129B2`` / str ``0x90448`` is the EXE labor
   phrase name. City Only plays ``a09.wav`` (playtest). File may be
   absent on a flat 1.1A tree.
@@ -44,6 +46,7 @@ Pinned play/bind sites (mapped VA):
 from __future__ import annotations
 
 import ctypes
+import io
 import os
 import struct
 import subprocess
@@ -63,11 +66,18 @@ PREFERRED_RAW = "A01.RAW"
 # Career Promotion [69]+4 VO ("You have fulfilled the mandate…").
 # raw_name_bank 0x93694 index 0. Not title music.
 MANDATE_RAW = "A01.RAW"
-# c2_main 0x10288 / music_load_xmi 0x12279 — Miles MDI after intro.smk.
+# Gold CAESAR II card is intro.smk (smk_play 0x5AB3D @ 0x10279). Audio is
+# SMK smackaud, not an XMI. title.xmi is not in the EXE. cityprov.xmi is
+# city/province (edx=0), not this card. A01.RAW is Career mandate VO.
+INTRO_AUDIO = "intro.smk"
+# c2_main 0x10288 / music_load_xmi 0x12279 — Miles MDI AFTER intro.smk,
+# with title_screen 0x5D37F BACKGRND.PL8 + C2.ENG [38].
 TITLE_XMI = "forum1.xmi"
 VA_BOOT_INTRO_SMK = 0x1027E
 VA_BOOT_TITLE_XMI = 0x1028D
 VA_MUSIC_LOAD_XMI = 0x12279
+VA_VIDEO_PREPARE = 0x59C87
+VA_TITLE_SCREEN = 0x5D37F
 _MAX_LIVE = 3
 
 # Event → EXE 8.3 name. Do not map City Only start to A01.
@@ -307,6 +317,51 @@ def resolve_wav(game: Path | None, name: str) -> Path | None:
     return None
 
 
+def resolve_raw(game: Path | None, stem: str) -> Path | None:
+    """Oracle / advisor voice: ``B02.wav`` in wav/ or sound/, else ``B02.RAW``."""
+    if not stem:
+        return None
+    base = Path(stem).name
+    if "." in base:
+        base = base.rsplit(".", 1)[0]
+    for name in (f"{base}.wav", f"{base}.WAV"):
+        hit = resolve_wav(game, name)
+        if hit is not None:
+            return hit
+    for name in (f"{base}.raw", f"{base}.RAW"):
+        if game is not None:
+            hit = find_file(game, name)
+            if hit is not None:
+                return hit
+        for folder_name in ("sound", "SOUND"):
+            if game is None:
+                break
+            folder = _ci_dir(game, folder_name)
+            if folder is None:
+                continue
+            hit = _ci_file(folder, name)
+            if hit is not None:
+                return hit
+        repo_sound = _ci_dir(REPO_ROOT, "sound")
+        if repo_sound is not None:
+            hit = _ci_file(repo_sound, name)
+            if hit is not None:
+                return hit
+    return None
+
+
+def raw_to_wav_bytes(path: Path) -> bytes:
+    """Unsigned 8-bit PCM mono @ 22050 Hz → RIFF WAV (full clip)."""
+    samples = path.read_bytes()
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(1)
+        wav.setframerate(RAW_RATE)
+        wav.writeframes(samples)
+    return buf.getvalue()
+
+
 def play_raw_preview(game: Path, name: str = PREFERRED_RAW) -> str:
     """Play a short RAW clip. Returns a status string; never raises to the UI."""
     path = find_file(game, name)
@@ -338,8 +393,17 @@ def play_raw_preview(game: Path, name: str = PREFERRED_RAW) -> str:
     return f"playing {path.name} ({len(samples)} B @ {RAW_RATE} Hz, async)"
 
 
+def intro_card_audio(*, city_only: bool, play_audio: bool) -> str:
+    """Gold CAESAR II still: intro.smk smackaud. Not forum1 / cityprov / A01."""
+    if not play_audio:
+        return "skip"
+    if city_only:
+        return "city_sfx"
+    return INTRO_AUDIO
+
+
 def title_boot_audio(*, city_only: bool, play_audio: bool) -> str:
-    """EXE title path: forum1.xmi. Never A01.RAW (mandate / Promotion)."""
+    """BACKGRND [38] menu: forum1.xmi. Never A01.RAW (mandate / Promotion)."""
     if not play_audio:
         return "skip"
     if city_only:
@@ -383,7 +447,8 @@ def _xmi_evnt(data: bytes) -> bytes | None:
 def xmi_to_smf(data: bytes) -> bytes:
     """Miles XMIDI (FORM XDIR / CAT XMID) → SMF type 0 for WinMM sequencer.
 
-    Title boot loads ``forum1.xmi`` via ``music_load_xmi`` ``0x12279``.
+    BACKGRND menu loads ``forum1.xmi`` via ``music_load_xmi`` ``0x12279``.
+    The gold CAESAR II card is ``intro.smk`` audio, not this XMI.
     """
     evnt = _xmi_evnt(data)
     if not evnt:
@@ -465,7 +530,7 @@ def xmi_to_smf(data: bytes) -> bytes:
 
 
 class TitleMusic:
-    """WinMM MCI sequencer for ``forum1.xmi``. Not waveOut / city SFX."""
+    """WinMM MCI sequencer for BACKGRND-menu ``forum1.xmi``. Not intro SMK."""
 
     def __init__(self) -> None:
         self.enabled = False
@@ -875,6 +940,29 @@ class SfxPlayer:
             return f"sfx {name}"
         return f"skip sfx: no audio device for {path.name}"
 
+    def play_raw(self, stem: str) -> str:
+        """Play a RAW-bank stem (Oracle B02–B15). Empty if muted / missing."""
+        if not self.enabled or not stem:
+            return ""
+        path = resolve_raw(self.game, stem)
+        if path is None:
+            return f"skip raw: {stem} not found"
+        play_path = path
+        tmp: Path | None = None
+        if path.suffix.lower() == ".raw":
+            tmp = Path(tempfile.gettempdir()) / f"c2_oracle_{path.stem}.wav"
+            tmp.write_bytes(raw_to_wav_bytes(path))
+            play_path = tmp
+        if self._play_winmm(play_path, loops=0):
+            return f"raw {stem}"
+        if self._play_pygame(play_path):
+            return f"raw {stem}"
+        if self._play_ffplay(play_path):
+            return f"raw {stem}"
+        if self._play_winsound(play_path, loop=False):
+            return f"raw {stem}"
+        return f"skip raw: no audio device for {path.name}"
+
     def start_ambience(self) -> str:
         """No-op. EXE does not start gardenb/fountn at city enter."""
         return ""
@@ -1155,6 +1243,8 @@ def selftest(game: Path | None = None) -> list[str]:
     player = SfxPlayer(game, enabled=False)
     if player.play("place") or player._live or player.start_ambience() or player._ambience_live:
         lines.append("FAIL  muted SfxPlayer spawned audio")
+    elif player.play_raw("B02"):
+        lines.append("FAIL  muted Oracle RAW played")
     elif player._winmm:
         lines.append("FAIL  muted SfxPlayer opened WinMM")
     else:
@@ -1264,14 +1354,20 @@ def selftest(game: Path | None = None) -> list[str]:
             lines.append(f"FAIL  Windows SFX backend {backend!r} (want winmm)")
         else:
             lines.append("ok    Windows SFX backend winmm")
+    card = intro_card_audio(city_only=False, play_audio=True)
     plan = title_boot_audio(city_only=False, play_audio=True)
     city_plan = title_boot_audio(city_only=True, play_audio=True)
-    if plan != TITLE_XMI or MANDATE_RAW.split(".")[0].lower() in plan.lower():
-        lines.append(f"FAIL  title boot {plan!r} (want {TITLE_XMI})")
+    if card != INTRO_AUDIO or card == TITLE_XMI:
+        lines.append(f"FAIL  intro card {card!r} (want {INTRO_AUDIO})")
+    elif plan != TITLE_XMI or MANDATE_RAW.split(".")[0].lower() in plan.lower():
+        lines.append(f"FAIL  title menu {plan!r} (want {TITLE_XMI})")
     elif city_plan != "city_sfx":
         lines.append(f"FAIL  city-only title plan {city_plan!r}")
     else:
-        lines.append("ok    title boot forum1.xmi; city-only skip; no A01 mandate")
+        lines.append(
+            "ok    intro card intro.smk; BACKGRND menu forum1.xmi; "
+            "city-only skip; no A01 mandate"
+        )
     try:
         from app.config import resolve_game_dir
 

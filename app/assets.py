@@ -1,4 +1,8 @@
-"""Load original install files. Decoders live in tools/ — do not fork the format."""
+"""Load original install files. Decoders live in tools/ — do not fork the format.
+
+``images_new/{stem}.png`` (repo, gitignored) overrides a single-blit PL8
+before the retail file. Higher-res is OK — fitted to the native dest.
+"""
 
 from __future__ import annotations
 
@@ -174,8 +178,21 @@ def load_pl8_image(
     *,
     first_only: bool = False,
     sheet_cap: int = SHEET_CAP,
+    skip_override: bool = False,
 ) -> tuple[Image.Image, Path, int]:
-    """Decode one PL8 via tools/decode_pl8.py. Returns (image, path, n_sprites)."""
+    """Decode one PL8 via tools/decode_pl8.py. Returns (image, path, n_sprites).
+
+    ``images_new/{stem}.png`` wins for single-blit PL8s (AHOSPIT, AHOUSE,
+    backgrnd, …) and is scaled into the native dest. Multi-sprite sheets
+    stay on the PL8.
+    """
+    if not skip_override:
+        from app.image_override import overlay_single_image
+
+        over = overlay_single_image(game, pl8_name)
+        if over is not None:
+            img, path = over
+            return img, path, 1
     pl8 = find_file(game, pl8_name)
     if pl8 is None:
         raise FileNotFoundError(f"{pl8_name} not found in {game}")
@@ -198,6 +215,12 @@ def load_pl8_image(
 
 def load_pl8_frames(game: Path, pl8_name: str) -> tuple[list[Image.Image], Path]:
     """Decode every sprite in one PL8. Used by the city-map iso blit."""
+    from app.image_override import overlay_single_image
+
+    over = overlay_single_image(game, pl8_name)
+    if over is not None:
+        img, path = over
+        return [img], path
     pl8 = find_file(game, pl8_name)
     if pl8 is None:
         raise FileNotFoundError(f"{pl8_name} not found in {game}")
@@ -211,6 +234,12 @@ def load_pl8_sprites_xy(
     game: Path, pl8_name: str
 ) -> list[tuple[Image.Image, int, int]]:
     """Decode every sprite and keep the PL8 draw offset (x, y)."""
+    from app.image_override import overlay_single_image
+
+    over = overlay_single_image(game, pl8_name)
+    if over is not None:
+        img, _path = over
+        return [(img, 0, 0)]
     pl8 = find_file(game, pl8_name)
     if pl8 is None:
         raise FileNotFoundError(f"{pl8_name} not found in {game}")
@@ -253,6 +282,9 @@ def load_city_map_sheets(
         except (OSError, ValueError):
             continue
         out[key] = frames
+    from app.image_override import apply_ahospit_iso
+
+    apply_ahospit_iso(out, game)
     return out
 
 

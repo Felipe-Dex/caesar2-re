@@ -77,7 +77,7 @@ class HostOptions:
     music: bool = False
     sound: bool = True
     animations: bool = True
-    auto_save: bool = False  # leftover — host does not write lastyear.sav
+    auto_save: bool = False  # leftover; wrap always overwrites sav/LASTYEAR.SAV
     annual_summary: bool = True  # [56]+6 / FUN_00061389 panel
     scroll_step: int = 1  # 1…3 × PAN_STEP
 
@@ -311,6 +311,30 @@ def help_topic_excerpt(game: Path | None, topic: int, fallback_title: str) -> Me
     return MenuReport(title[:40], lines)
 
 
+def turbo_report(eng=None) -> MenuReport:
+    """C2.ENG [75] Accelerated Time box while A turbo runs.
+
+    Title + wait line. Last row is the Stop gadget — EXE [75]+4
+    ``Click here to continue`` (any key/click resumes; 0x2eaa4).
+    """
+    title = _eng(eng, 75, 0, "Accelerated Time")
+    body = _eng(
+        eng,
+        75,
+        1,
+        "Time is being accelerated whilst you wait! "
+        "Pressing a key or clicking the mouse button will resume normal time.",
+    )
+    stop = _eng(eng, 75, 4, "Click here to continue")
+    return MenuReport(title, (*_wrap_adv(body, 44), "", stop))
+
+
+def is_turbo_report(report: MenuReport | None, *, eng=None) -> bool:
+    if report is None:
+        return False
+    return report.title == _eng(eng, 75, 0, "Accelerated Time")
+
+
 def about_report(eng) -> MenuReport:
     title = _eng(eng, 10, 0, "Caesar II - Version 1.1")
     date = _eng(eng, 10, 1, "October 5, 1995")
@@ -353,8 +377,18 @@ def blit_menu_report(frame: Image.Image, report: MenuReport) -> Image.Image:
     draw.rectangle((x0, y0, x0 + w - 1, y0 + h - 1), outline=(200, 180, 90, 255))
     draw.text((x0 + 8, y0 + 6), report.title[:42], fill=(255, 228, 160, 255), font=font)
     y = y0 + 24
-    for line in report.lines:
-        draw.text((x0 + 8, y), line[:46], fill=(220, 230, 210, 255), font=font)
+    last = max((i for i, line in enumerate(report.lines) if line), default=-1)
+    gadget = last >= 0 and "continue" in report.lines[last].lower()
+    for i, line in enumerate(report.lines):
+        if gadget and i == last:
+            draw.rectangle(
+                (x0 + 6, y - 1, x0 + w - 7, y + 12),
+                fill=(40, 56, 36, 255),
+                outline=(200, 180, 90, 255),
+            )
+            draw.text((x0 + 8, y), line[:46], fill=(255, 228, 160, 255), font=font)
+        else:
+            draw.text((x0 + 8, y), line[:46], fill=(220, 230, 210, 255), font=font)
         y += 13
         if y > y0 + h - 18:
             break
@@ -676,6 +710,11 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  Disasters title {DISASTER_TITLE!r}")
     else:
         lines.append("ok    Disasters menu lists Fire / Disease / Barbarian / Riot")
+    turbo = turbo_report()
+    if turbo.title != "Accelerated Time" or "Click here to continue" not in turbo.lines:
+        lines.append(f"FAIL  turbo box {turbo}")
+    else:
+        lines.append("ok    [75] Accelerated Time box has Stop/continue line")
     if report_line_at(_REPORT_X + 8, _REPORT_Y + 24, 3) != 0:
         lines.append("FAIL  report_line_at first line")
     elif report_line_at(_REPORT_X + 8, _REPORT_Y + 24 + 13, 2) != 1:

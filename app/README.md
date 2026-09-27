@@ -36,7 +36,7 @@ Or, if that `python` is already on PATH:
 python -m app
 ```
 
-**Title / menu** (default, no `--city-only`): Sierra `LOGO1.PL8` then Impressions `LOGO2.PL8` if they resolve from the install, then `title_screen` `backgrnd.pl8` + C2.ENG buttons. **Start a New Game** opens **New Game Options** (`C2.ENG` [38]+24, picker `0x5CF80`) — Construction Kit: Campaign locked to `NO -- City-only Mode`, **Choose a Skill Level** Novice…Impossible! (0…4), then **Start this Game**. That skill is the same byte `start_city_assignment` already reads (treasury / ratings seed / Need / labor / invasions). **Load** is the existing `*.sav` / F4 list. **Options** is Music / Sound / Animations. **Quit** asks `Exit to DOS?`. **Campaign?** is listed gray — click shows `[38]+1` (*full campaign game*), it does not start Career.
+**Title / menu** (default, no `--city-only`): Sierra `LOGO1.PL8` then Impressions `LOGO2.PL8` if they resolve, then `intro.smk` (gold CAESAR II card + SMK audio), then `title_screen` `backgrnd.pl8` + C2.ENG `[38]` buttons with `forum1.xmi`. **Start a New Game** opens **New Game Options** (`C2.ENG` [38]+24, picker `0x5CF80`) — Construction Kit: Campaign locked to `NO -- City-only Mode`, **Choose a Skill Level** Novice…Impossible! (0…4), then **Start this Game**. That skill is the same byte `start_city_assignment` already reads (treasury / ratings seed / Need / labor / invasions). **Load** is the existing `*.sav` / F4 list. **Options** is Music / Sound / Animations. **Quit** asks `Exit to DOS?`. **Campaign?** is listed gray — click shows `[38]+1` (*full campaign game*), it does not start Career.
 
 **City Only** (`--new --city-only` / `city-only.bat`) skips title **and** the skill picker and opens already on the iso map. Host default skill is **2 Normal** (treasury 12000) — same as `--skill` when omitted. EXE INF default is Novice (0) + City Only; the host skip keeps Normal. Skill `0…4`:
 
@@ -49,7 +49,9 @@ python -m app --new --city-only --check --no-audio
 
 Or double-click `game.bat` at the repo root for the title/menu (`python -m app`), or `city-only.bat` to skip into City Only (`python -m app --new --city-only`).
 
-Hail on map enter is text + ``congrat`` talking-head **with** audio when Sound is on (EXE table [79] is ``congrat.smk``). Dec→Jan New Year [83] uses the same clip with audio (Annual Summary panel still opens). Pop milestones and New Structure play the same clip with audio. Do **not** play ``A01.RAW`` on City Only start. Other advisor clips play mp4 audio unless Options Sound is off or you pass ``--no-audio``. Do not copy game mp4s into git.
+Hail on map enter is text + ``congrat`` talking-head **with** audio when Sound is on (EXE table [79] is ``congrat.smk``). Dec→Jan is the **Annual Summary** numbers panel (C2.ENG [72] / ``FUN_00061389``), not New Year [83] ``congrat``. Pop milestones and New Structure play the same clip with audio. Do **not** play ``A01.RAW`` on City Only start. Other advisor clips play mp4 audio unless Options Sound is off or you pass ``--no-audio``. Do not copy game mp4s into git.
+
+**Higher-res stills** (`images_new/{stem}.png`, gitignored): same rule as `videos_new` — the file may be larger / different resolution than 1995. The host fits it into the original sprite dest (LANCZOS, keep aspect, letterbox). `AHOSPIT.png` is the Hospital **sidebar card** (182×132 fitted into the 162 px strip — not pasted on the map) while the tool is selected, and **one** iso blit on the front leftover of the 3×3 (south corner; later grass does not cover steps, later buildings do) covering the tall BUILD1B[86–94] dest union (**174×143** at zoom 0, not the 174×90 ground diamonds). Export: one isometric painting for the whole 3×3, transparent alpha (flat green/black is keyed out, not required), C2 camera, higher res OK. Barracks `0xE4` stays `HOUSES1[81–89]`. Space / pick another tool clears the card. Drop more 8.3 stems (`ABATHS.png`, `AHOUSE.png`, …). Do not commit PNGs.
 
 City SFX (place / click / fire / destroy / overlay / forum) play from the retail WAV names when Sound is on. Default ``python -m app --new --city-only`` is **not** muted — you should hear ``place.wav`` / ``poscl.wav`` etc. Click is ``poscl.wav`` (``miles_init`` ``0x117E4``). City ambience is the EXE proximity mixer (``0x12A8F`` / ``0x12E1E``): occasional one-shots when that building is in the camera well — **not** global loops. The dog is ``gardenb.wav``, only when a **garden** ``0x78–0x7B`` is on-screen (housing does not enable it). Empty new city is silent. Mute with Options → Sound or ``--no-audio``. Do **not** play ``A01.RAW`` on City Only start. One-shots do not loop. Do not copy WAVs into git. Inventory: ``findings/city_ambience.md``.
 
@@ -63,7 +65,7 @@ python -m app --check --no-audio
 
 Pillow is already required by `tools/decode_pl8.py`. tkinter ships with this Windows Python. No Godot install. SFX use pygame if present, else ``ffplay`` (same as advisor clips).
 
-Keys follow **C2MANUAL.DOC p.48** once the city map is up: **P** pause · **C** census · **A** faster · **Space** cancel build · **F** / **F2** forum · **F1** city · **F3** province (City Only stub) · **F4** load · **F5** save (225745 B, owned chunks; see `findings/sav_write.md`) · **1**/**2**/**3** closest/medium/furthest zoom · **Esc** dismiss panel/menu/tool (does not quit) · **+**/**-** zoom · setas pan. Host extras that do not collide: **T** sim slot · **E** evolve80 · **M** month · **Z** cycle zoom · **Home** re-center · **Q** quit. Off-map debug still uses **1** title · **2** CITYFIXT · **3** enter map · **Space**/**T** pulse · **A** `A01.RAW` · **Esc** quit. **&lt;**/**&gt;** (e INT_CITY sprites 4–5) rodam o mapa (facing 0–3). Leftovers (no bind): **Alt-F** flags, overlay letters, Query letter, **R** roads. No mapa: clique na **sidebar direita** (Housing / Roads / Clear / Query). **Housing** e **Clear** — clique-arrasta um **rectângulo**. **Roads** — linha recta. Sem ferramenta / **Query**, arrastar ainda faz **pan**. **Direito** cancela o arrasto e a ferramenta.
+Keys follow **C2MANUAL.DOC p.48** once the city map is up: **P** pause · **C** census · **A** year-end turbo ([75] Accelerated Time box + Stop; Dec wrap pauses and opens [72]) · **Space** cancel build · **F** / **F2** forum · **F1** city · **F3** province (City Only stub) · **F4** load · **F5** save (225745 B, owned chunks; see `findings/sav_write.md`) · **1**/**2**/**3** closest/medium/furthest zoom · **Esc** dismiss panel/menu/tool (does not quit) · **+**/**-** zoom · setas pan. Host extras that do not collide: **T** sim slot · **E** evolve80 · **M** month · **Z** cycle zoom · **Home** re-center · **Q** quit. Off-map debug still uses **1** title · **2** CITYFIXT · **3** enter map · **Space**/**T** pulse · **A** `A01.RAW` · **Esc** quit. **&lt;**/**&gt;** (e INT_CITY sprites 4–5) rodam o mapa (facing 0–3). Leftovers (no bind): **Alt-F** flags, overlay letters, Query letter, **R** roads. No mapa: clique na **sidebar direita** (Housing / Roads / Clear / Query). **Housing** e **Clear** — clique-arrasta um **rectângulo**. **Roads** — linha recta. Sem ferramenta / **Query**, arrastar ainda faz **pan**. **Direito** cancela o arrasto e a ferramenta.
 
 ### Mapa da cidade / City map (tecla **3**)
 
@@ -84,10 +86,8 @@ A janela nativa é **640×480** (viewport sobre o canvas iso; já não encolhe o
 
 - Console: install path, key-file check, the 14 `gfx_load_boot_assets` names, C2.ENG count, boot notes.
 - A **640×480** window (stand-in for VESA `video_init` @ `0x28341`).
-- **Title**: `logo1.pl8` / `logo2.pl8` if present, then decoded `backgrnd.pl8` + `backgrnd.256` via `tools/decode_pl8.py` (not a copy of the format) plus C2.ENG `[38]` menu chrome (`app/title.py`).
-- Title music is retail ``forum1.xmi`` (``music_load_xmi`` ``0x12279``, after ``intro.smk``). Host converts XMIDI → SMF and plays it through WinMM MCI. ``A01.RAW`` is Career Promotion VO ([69]+4 *You have fulfilled the mandate…*) — **not** played on title. City SFX are retail ``.wav`` via WinMM. Missing audio → skip.
-
-No intro video. `INTRO.SMK` is only verified on disk (`smk_play` @ `0x5AB3D` is a stub; `tools/decode_smk.py` remuxes with ffmpeg, it does not play in-process).
+- **Title**: Sierra `logo1.pl8` then Impressions `logo2.pl8` if they resolve, then `smk_play` `intro.smk` (gold CAESAR II card — `videos_new/intro.mp4` like other SMKs, else `videos/intro.mp4`, else retail `INTRO.SMK`). After the clip: decoded `backgrnd.pl8` + `backgrnd.256` plus C2.ENG `[38]` menu chrome (`app/title.py`).
+- Gold-card audio is the intro SMK/mp4 track (smackaud). ``forum1.xmi`` (``music_load_xmi`` ``0x12279``) starts only on the BACKGRND `[38]` menu. Host converts that XMIDI → SMF for WinMM MCI. ``title.xmi`` is not in the EXE. ``cityprov.xmi`` is city/province. ``A01.RAW`` is Career Promotion VO ([69]+4 *You have fulfilled the mandate…*) — **not** played on boot. City SFX are retail ``.wav`` via WinMM. Missing audio → skip.
 
 ---
 
@@ -100,8 +100,8 @@ No intro video. `INTRO.SMK` is only verified on disk (`smk_play` @ `0x5AB3D` is 
 | `gfx_load_boot_assets` | `0x10E89` | verify 14 names; decode only title / CITYFIXT |
 | `video_init` 640×480 | `0x28341` | tkinter window |
 | `miles_init` | `0x11758` | skip / optional RAW |
-| `smk_play` `intro.smk` | `0x5AB3D` | file exists? yes/no |
-| `title_screen` | `0x5D37F` | `app/title.py` — `backgrnd.pl8` + C2.ENG menu |
+| `smk_play` `intro.smk` | `0x5AB3D` | `videos_new/intro.mp4` / `videos/intro.mp4` / retail SMK; SMK audio on the gold card |
+| `title_screen` | `0x5D37F` | `app/title.py` — `backgrnd.pl8` + C2.ENG `[38]`; `forum1.xmi` |
 | `view_frame` / city tick | `0x3CF9A` | **Space / T** → 1 slot `city_sim_phase` then `walkers_tick` |
 | `start_city_assignment` / `city_map_generate` | `0x1049B` / `0x65809` | `--new --city-only` → `app/new_game.py` (Career ainda não) |
 | city map SavChunk 13 | `0xE2FBC` | `city_map.py`: 80×80×20 from `.SAV` **ou** generate; tecla **3** |

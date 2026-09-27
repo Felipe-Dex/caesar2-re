@@ -12,8 +12,9 @@ slot — do not play a clip for it.
 City Only start Hail [79] is the “build your city” briefing. The EXE
 table names ``congrat.smk`` there (same talking-head as pop milestones
 / New Structure). Play that clip’s mp4 audio when Options Sound is on
-— the user wants the talking-head on map enter. New Year [83]
-(Another Year Passes) plays the same ``congrat`` clip with audio.
+— the user wants the talking-head on map enter. [83] Another Year
+Passes is in the SMK table as ``congrat``, but City Only Dec→Jan
+does **not** enqueue it (score card is [72] ``FUN_00061389``).
 Do **not** play ``A01.RAW`` (boot sting). ``promote.smk`` is Career
 kind 5, not this banner.
 
@@ -43,6 +44,10 @@ from app.config import REPO_ROOT
 # Retail SMK letterbox; play call at 0x59260 ebx=0x50 edx=0x60.
 SMK_X, SMK_Y = 80, 96
 SMK_W, SMK_H = 320, 152
+# c2_main 0x10279 smk_play intro.smk — only fullscreen 640×480 clip.
+INTRO_STEM = "intro"
+INTRO_SMK = "intro.smk"
+INTRO_W, INTRO_H = 640, 480
 TABLE_BASE_SLOT = 79  # Hail [79] → index 0
 FRAME_BYTES = SMK_W * SMK_H * 3
 # Fallback only when ffprobe is missing. Retail SMK is 12 fps (MESSAGE 14.08).
@@ -170,6 +175,18 @@ def video_roots(game: Path | None) -> list[Path]:
         if path.is_dir() and path not in roots:
             roots.append(path)
     return roots
+
+
+def resolve_intro_video(game: Path | None) -> Path | None:
+    """Boot intro: videos_new/intro.mp4 like other SMKs, else remux dest, else SMK."""
+    hit = resolve_advisor_video(game, INTRO_STEM)
+    if hit is not None:
+        return hit
+    if game is None:
+        return None
+    from app.config import find_file
+
+    return find_file(game, INTRO_SMK)
 
 
 def resolve_advisor_video(game: Path | None, stem: str | None) -> Path | None:
@@ -304,19 +321,24 @@ def probe_mp4_timing(path: Path) -> tuple[float, float | None]:
     return fps, duration
 
 
-def _video_filter(src_w: int | None, src_h: int | None) -> str:
-    """Fit into the EXE 320×152 play rect without stretch-skew.
+def _video_filter(
+    src_w: int | None,
+    src_h: int | None,
+    dest_w: int = SMK_W,
+    dest_h: int = SMK_H,
+) -> str:
+    """Fit into dest without stretch-skew.
 
-    A 320×152 mp4 is copied as-is (no extra letterbox). Other aspects
+    A dest-sized mp4 is copied as-is (no extra letterbox). Other aspects
     scale with decrease and pad *centered* — ``(ow-iw)/2`` evaluates to
     x=0 on some ffmpeg builds, so x/y are ``-1`` (center).
     """
-    if src_w == SMK_W and src_h == SMK_H:
+    if src_w == dest_w and src_h == dest_h:
         return "setsar=1,format=rgb24"
     return (
-        f"scale={SMK_W}:{SMK_H}:force_original_aspect_ratio=decrease"
+        f"scale={dest_w}:{dest_h}:force_original_aspect_ratio=decrease"
         f":force_divisible_by=2,setsar=1,"
-        f"pad={SMK_W}:{SMK_H}:-1:-1:color=black,format=rgb24"
+        f"pad={dest_w}:{dest_h}:-1:-1:color=black,format=rgb24"
     )
 
 
@@ -333,8 +355,9 @@ def videos_new_overrides(game: Path | None, stems: list[str]) -> list[str]:
 
 
 class AdvisorClip:
-    """Play one mp4 into 320x152 RGB frames, paced to probed source fps.
+    """Play one mp4 into dest RGB frames, paced to probed source fps.
 
+    Advisor talking-heads stay 320×152. Boot intro uses 640×480.
     One playthrough, then freeze on the last frame until ``close()``.
     ffmpeg is back-pressured: the decode thread only reads the next pipe
     frame when the PTS buffer has room. ``snapshot()`` picks the frame
@@ -342,9 +365,19 @@ class AdvisorClip:
     the pipe or flash every decoded frame.
     """
 
-    def __init__(self, path: Path, *, mute: bool = True) -> None:
+    def __init__(
+        self,
+        path: Path,
+        *,
+        mute: bool = True,
+        dest_w: int = SMK_W,
+        dest_h: int = SMK_H,
+    ) -> None:
         self.path = path
         self.mute = mute
+        self.dest_w = dest_w
+        self.dest_h = dest_h
+        self.frame_bytes = dest_w * dest_h * 3
         self.fps, self.duration_s, self.src_w, self.src_h = probe_mp4(path)
         self.delay_ms = max(16, int(round(1000.0 / self.fps)))
         self.frame: Image.Image | None = None
@@ -442,7 +475,7 @@ class AdvisorClip:
         ffmpeg = find_ffmpeg()
         if ffmpeg is None:
             return None
-        vf = _video_filter(self.src_w, self.src_h)
+        vf = _video_filter(self.src_w, self.src_h, self.dest_w, self.dest_h)
         try:
             return subprocess.Popen(
                 [
@@ -460,7 +493,7 @@ class AdvisorClip:
                     "-pix_fmt",
                     "rgb24",
                     "-s",
-                    f"{SMK_W}x{SMK_H}",
+                    f"{self.dest_w}x{self.dest_h}",
                     "pipe:1",
                 ],
                 stdout=subprocess.PIPE,
@@ -511,10 +544,10 @@ class AdvisorClip:
                     self._cond.wait(timeout=0.05)
                 if self._stop.is_set():
                     break
-            raw = video.stdout.read(FRAME_BYTES)
-            if raw is None or len(raw) < FRAME_BYTES:
+            raw = video.stdout.read(self.frame_bytes)
+            if raw is None or len(raw) < self.frame_bytes:
                 break
-            img = Image.frombytes("RGB", (SMK_W, SMK_H), raw)
+            img = Image.frombytes("RGB", (self.dest_w, self.dest_h), raw)
             with self._cond:
                 if t0 is None:
                     t0 = time.monotonic()
@@ -666,6 +699,15 @@ def selftest(game: Path | None = None) -> list[str]:
         lines.append("ok    videos_new " + ",".join(sorted(set(overrides))))
     else:
         lines.append("ok    no videos_new override")
+    intro = resolve_intro_video(game)
+    if intro is None:
+        lines.append("ok    intro.smk / intro.mp4 missing (skip smk_play)")
+    elif intro.parent.name.upper() == "VIDEOS_NEW":
+        lines.append(f"ok    intro from videos_new/{intro.name}")
+    elif intro.suffix.lower() == ".smk":
+        lines.append(f"ok    intro from retail {intro.name}")
+    else:
+        lines.append(f"ok    intro from {intro.parent.name}/{intro.name}")
     clip_path = resolve_advisor_video(game, "congrat")
     if clip_path is None or find_ffmpeg() is None or find_ffprobe() is None:
         lines.append("ok    pacing skip (no congrat mp4 / ffmpeg)")

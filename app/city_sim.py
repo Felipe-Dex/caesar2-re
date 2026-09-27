@@ -213,10 +213,15 @@ class SimState:
     # sim_tick_due 0x3E4B9 / view_frame catch-up. Original starts unpaused.
     paused: bool = False
     speed_scalar: int = SPEED_SCALAR_DEFAULT  # [0x9CE50]
-    catchup: int = 0  # [0xC45A0] 0 → 1 pulse; ≠0 → 4
+    catchup: int = 0  # [0xC45A0] 0 → 1 pulse; ≠0 → 4; >=2 skips the ms gate
     tick_acc: int = 0  # [0x117ACC] ms accumulator
-    population: int = 0  # [0x102AB0] — emit needs >= 2
-    pop_peak: int = 0  # FAQ latch: unlocks stay after pop drops
+    # A / a 0x28c2f: turbo until sav_year_end 0x34D92 zeros [0xC45A0].
+    year_turbo: bool = False
+    year_turbo_catchup: int = 0  # Speed Play/Faster for Stop mid-year
+    year_turbo_paused: bool = False  # if A started from Pause, Stop restores it
+    population: int = 0  # [0x102AB0] chunk 32 — emit needs >= 2
+    pop_peak: int = 0  # [0x102A94] chunk 409 — FAQ / 0x441C8 peak
+    unlock_step: int = 0  # [0x102C3C] chunk 411 — 58c87 [114] step 0..6
     flood_dir: int = 0  # [0x102678] 0…3
     fire_ignited: int = 0  # one 69A37 per 0x9E–0xA1 pass
     disease_infected: int = 0  # +11 0x30 leftover; [80] Disease EAX=0x51
@@ -245,8 +250,30 @@ class SimState:
     factory_count: int = 0  # 0xFA origins; av-bill stand-in for [0x10279c]
     goods: bytearray = field(default_factory=lambda: bytearray(768))  # chunk 339
     factory_labor: int = 0  # chunk 140 [0x102b08] — 41b33 labor seed
+    land_value_adj: int = 0  # chunk 139 [0x102ad4] — 40695 housing bonus
     province_links: int = 0  # chunk 276 [0x102714] — 0 = City Only / no farms
     tribute: int = 0  # chunk 157; City Only stays 0
+    governor_name: str = ""  # CAESAR2.INF, not a SavChunk
+    rank: int = 0  # chunk 291 [0x102578] → [7]+rank
+    salary: int = 0  # chunk 403 [0x102A48]
+    savings: int = 0  # chunk 402 [0x102A04]
+    donate_amount: int = 0
+    gift_amount: int = 0
+    gift_avg: int = 0
+    imperial_favor: int = 0  # [0x102A4C]
+    legion_wages: int = 0  # chunk 194 [0x102940]
+    conscription: int = 0  # chunk 195 [0x10295C]
+    soldiers: int = 0  # chunk 198 [0x102944]
+    soldiers_ready: int = 0  # chunk 199 [0x10297C]
+    soldiers_training: int = 0  # chunk 200 [0x102948]
+    auxiliaries: int = 0  # chunk 197 [0x10296C]
+    cohorts: int = 0  # chunk 196 [0x102984]
+    legion_heavy: int = 0  # chunk 203
+    legion_light: int = 0
+    legion_sling: int = 0
+    legion_morale: int = 0  # 0…4 → [34]+19…
+    legion_readiness: int = 0  # 0…4 → [34]+24…
+    cohort_rank: int = 0  # 0 Demobilized / 1 Normal / 2 Major
     tax_ytd: int = 0  # [0x102924] raw pop-tax accumulator
     tax_months: int = 0  # [0x1028E4]
     ind_tax_ytd: int = 0  # [0x102908]
@@ -300,6 +327,62 @@ class PhaseResult:
     @property
     def houses_changed(self) -> int:
         return self.houses_up + self.houses_down + self.fire_changed
+
+
+# EXE 0x28c2f A/a: clear pause [0x9CE64], CALL 0x31a9c ([0xC45A0]=1).
+# view_frame 0x3d357 increments when nonzero → >=2 skips the 0x3E4B9 ms gate.
+# sav_year_end 0x34D92 writes 0 at 0x34df7, then blocking [72] 0x61389
+# (clock frozen). After the modal, catchup stays 0 unless 0x31a9c runs.
+# Host pauses like P so January stays frozen until Play. Stop mid-year
+# restores the saved Speed. 0x28db0 is dirty-rects, not a WAV.
+YEAR_TURBO_CATCHUP = 2
+
+
+def start_year_turbo(state: SimState) -> None:
+    """A — Accelerate Time until Dec→Jan. Remembers Speed for Stop."""
+    if not getattr(state, "year_turbo", False):
+        state.year_turbo_paused = bool(state.paused)
+        saved = 0 if state.paused else int(state.catchup)
+        if saved >= YEAR_TURBO_CATCHUP:
+            saved = 1
+        state.year_turbo_catchup = 1 if saved else 0
+    state.paused = False
+    state.year_turbo = True
+    state.catchup = YEAR_TURBO_CATCHUP
+
+
+def stop_year_turbo(state: SimState) -> None:
+    """[75] Stop / click-resume: previous Speed. Does not force pause."""
+    if not getattr(state, "year_turbo", False):
+        return
+    was_paused = bool(state.year_turbo_paused)
+    catchup = 1 if state.year_turbo_catchup else 0
+    state.year_turbo = False
+    state.year_turbo_catchup = 0
+    state.year_turbo_paused = False
+    state.paused = was_paused
+    state.catchup = 0 if was_paused else catchup
+
+
+def pause_at_year_wrap(state: SimState) -> None:
+    """Dec→Jan: drop turbo and pause. Do not restore Play/Faster."""
+    state.year_turbo = False
+    state.year_turbo_catchup = 0
+    state.year_turbo_paused = False
+    state.paused = True
+    state.catchup = 0
+
+
+def end_year_turbo(state: SimState, *, restore: bool = True) -> None:
+    """Speed menu / P override. restore=True is Stop (previous Speed)."""
+    if restore:
+        stop_year_turbo(state)
+        return
+    if not getattr(state, "year_turbo", False):
+        return
+    state.year_turbo = False
+    state.year_turbo_catchup = 0
+    state.year_turbo_paused = False
 
 
 def _off(x: int, y: int) -> int:
@@ -375,6 +458,8 @@ def load_sim_from_sav(
         history=_history_from_sav(data),
         labor_index=labor_index,
         population=_chunk_i32(chunks, 32, 0),
+        pop_peak=_chunk_i32(chunks, 409, 0),
+        unlock_step=_chunk_i32(chunks, 411, 0),
         employed_pct=_chunk_i32(chunks, 31, 0),
         plebs_ready=_chunk_i32(chunks, 52, 0),
         plebs_estimate=_chunk_i32(chunks, 55, 0),
@@ -384,13 +469,28 @@ def load_sim_from_sav(
         labor_need=need,
         goods=goods,
         factory_labor=_chunk_i32(chunks, 140, 0),
+        land_value_adj=_chunk_i32(chunks, 139, 0),
         province_links=_chunk_i32(chunks, 276, 0),
         tribute=0 if city_only else _chunk_i32(chunks, 157, 0),
+        rank=_chunk_i32(chunks, 291, 0),
+        salary=_chunk_i32(chunks, 403, 0),
+        savings=_chunk_i32(chunks, 402, 0),
+        imperial_favor=_chunk_i32(chunks, 410, 0),
+        gift_avg=_chunk_i32(chunks, 400, 0),
+        legion_wages=_chunk_i32(chunks, 194, 0),
+        conscription=_chunk_i32(chunks, 195, 0),
+        cohorts=_chunk_i32(chunks, 196, 0),
+        auxiliaries=_chunk_i32(chunks, 197, 0),
+        soldiers=_chunk_i32(chunks, 198, 0),
+        soldiers_ready=_chunk_i32(chunks, 199, 0),
+        soldiers_training=_chunk_i32(chunks, 200, 0),
+        legion_heavy=_chunk_i32(chunks, 203, 0),
         surplus_last=_chunk_i32(chunks, 33, 0),
         pop_tax_last=_chunk_i32(chunks, 34, 0),
         ind_tax_last=_chunk_i32(chunks, 35, 0),
         construct_last=_chunk_i32(chunks, 36, 0),
         operating_last=_chunk_i32(chunks, 37, 0),
+        construct_ytd=_chunk_i32(chunks, 155, 0),
         rating_empire=_chunk_i32(chunks, 286, 0),
         rating_peace=_chunk_i32(chunks, 287, 0),
         rating_prosperity=_chunk_i32(chunks, 288, 0),
@@ -698,6 +798,9 @@ def evolve_row(
         else:
             raw = i8(tiles[off + 15])
         cap, _gate = housing_cap_detail(tiles, x, y, population=population)
+        # 0x42360 reads +15 after 40d08 already clipped. Only raise here
+        # so hut climb (cap<=20) still works; do not re-clip or merge
+        # tests that stamp a high +15 without a library lose the upgrade.
         raised = service_target_lv(raw, cap)
         lv = raised if raised > raw else raw
         if lv != raw:
@@ -775,10 +878,13 @@ def _band20(phase: int, lo: int) -> tuple[int, int]:
     return start, 20
 
 
-# +3 bit7 + +16 countdown. Ignite 0x69A37 writes 10; overlay 0x3E8A2
-# paints +11 bits 4–5 (0x10/0x20/0x30). 445AF ignites when those bits
-# are 0x30. Collapse to host rubble 0x05 (Clear); leftover bit7 so
-# vigile state 9 can seek id<8 fires (4A716 / 4A57F).
+# +3 bit7 + +16 countdown. Ignite 0x69A37 writes 10. 41DD4 does not
+# start fires — only --+16 / 69334 spread / 691C4 collapse. Random
+# start is 44F87 (Fire rate [0x102738]) + 445AF lottery: prevention
+# [0x102730] = assigned×100/need (45200 / 28219); 100% or need 0 →
+# addend 0, target [0x10271c] stays 0xf423f. Overlay 0x3E8A2 paints
+# leftover +11 bits 4–5. Collapse to host rubble 0x05 (Clear);
+# leftover bit7 so vigile state 9 can seek id<8 fires (4A716 / 4A57F).
 ID_RUBBLE = 0x05
 DRAW_FIRE = 0x80
 FIRE_TIMER_IGNITE = 10
@@ -862,8 +968,9 @@ def debug_ignite_house(
 ) -> tuple[int, int, int]:
     """Disasters→Fire: 69A37 on a housing origin. Prefer no prefect.
 
-    Same paint as uncovered risk ignite (timer 10, +3 bit7). Skips an
-    already-burning leftover. Returns (x, y, n_tiles) or (-1, -1, 0).
+    Same 69A37 paint as a live fire (timer 10, +3 bit7). Ignores Fire
+    labour and prefect cover. Skips an already-burning leftover.
+    Returns (x, y, n_tiles) or (-1, -1, 0).
     """
     uncovered: list[tuple[int, int, int]] = []
     covered: list[tuple[int, int, int]] = []
@@ -904,8 +1011,9 @@ def debug_infect_house(
 ) -> tuple[int, int, int]:
     """Disasters→Disease: +11 0x30 on a housing origin. No 69A37 fire.
 
-    0x448e2 / 0x44933: +11&0x30==0x30 latches [0x102900] then 58c87
-    EAX=0x51 [80] Disease!. CITYTOP[8] skull. Returns (x, y, 1) or (-1,-1,0).
+    Ignores hospital cover and baths. 0x448e2 / 0x44933: +11&0x30==0x30
+    latches [0x102900] then 58c87 EAX=0x51 [80] Disease!. CITYTOP[8]
+    skull. Returns (x, y, 1) or (-1,-1,0).
     """
     cells: list[tuple[int, int, int]] = []
     for y in range(MAP_H):
@@ -991,25 +1099,6 @@ def fire_spread_housing(tiles: bytearray, x: int, y: int, facing: int) -> int:
     return tile_ignite_building(tiles, nx, ny)
 
 
-def _raise_fire_risk(tiles: bytearray, off: int) -> int:
-    """+11 bits 4–5: 0 → 0x10 → 0x20 → 0x30 (overlay 0x3E8A2)."""
-    bits = tiles[off + 11] & 0x30
-    if bits >= 0x30:
-        return 0x30
-    nxt = 0x10 if bits == 0 else 0x20 if bits == 0x10 else 0x30
-    tiles[off + 11] = (tiles[off + 11] & 0xCF) | nxt
-    return nxt
-
-
-def _lower_fire_risk(tiles: bytearray, off: int) -> int:
-    bits = tiles[off + 11] & 0x30
-    if bits == 0:
-        return 0
-    nxt = 0x20 if bits == 0x30 else 0x10 if bits == 0x20 else 0
-    tiles[off + 11] = (tiles[off + 11] & 0xCF) | nxt
-    return nxt
-
-
 def fire_tick_rows(
     tiles: bytearray,
     y0: int,
@@ -1018,7 +1107,11 @@ def fire_tick_rows(
 ) -> tuple[int, int, int]:
     """41DD4 fire slice. Rioter type-7 spawn is a sibling on this slot.
 
-    Returns (decremented, collapsed, ignited).
+    Does not climb +11 or 69A37 a cold house. EXE random start is
+    44F87 (Fire labour addend) + 445AF (10271c lottery / 691C4). At
+    assigned≥need the addend is 0. Disasters menu is the 69A37 cheat.
+
+    Returns (decremented, collapsed, ignited). ignited is 0 here.
     """
     if state is not None and y0 == 0:
         state.fire_ignited = 0
@@ -1032,58 +1125,27 @@ def fire_tick_rows(
             # villa stamp — not a 69A37 fire. Do not --+16 or spread.
             timer = tiles[off + 16]
             on_fire = bool(tiles[off + 3] & DRAW_FIRE) and timer != 0
-            if on_fire:
-                nxt = (timer - 1) & 0xFF
-                tiles[off + 16] = nxt
-                dec += 1
-                if tid < 8:
-                    if nxt == 0:
-                        tiles[off + 3] &= 0x7F
-                    else:
-                        # 69334 is one neighbor; host tries all four so a
-                        # road/reservoir facing cannot trap the blaze.
-                        for fac in (0, 2, 4, 6):
-                            fire_spread_housing(tiles, x, y, fac)
-                    continue
-                if ID_HOUSING_LO <= tid <= ID_HOUSING_HI:
-                    tiles[off + 11] &= 0xCF
-                    if nxt == 0:
-                        col += tile_collapse_rubble(tiles, x, y, leave_fire=True)
-                    elif nxt != 9:
-                        for fac in (0, 2, 4, 6):
-                            fire_spread_housing(tiles, x, y, fac)
+            if not on_fire:
                 continue
-            if not (ID_HOUSING_LO <= tid <= ID_HOUSING_HI):
+            nxt = (timer - 1) & 0xFF
+            tiles[off + 16] = nxt
+            dec += 1
+            if tid < 8:
+                if nxt == 0:
+                    tiles[off + 3] &= 0x7F
+                else:
+                    # 69334 is one neighbor; host tries all four so a
+                    # road/reservoir facing cannot trap the blaze.
+                    for fac in (0, 2, 4, 6):
+                        fire_spread_housing(tiles, x, y, fac)
                 continue
-            if tiles[off + 5] & 0xF:
-                continue
-            # Villa leftover 0x9E–0xA1 keeps +3 bit7 as a graphic, not fire.
-            if (
-                0x9E <= tid <= 0xA1
-                and (tiles[off + 3] & DRAW_FIRE)
-                and timer == 0
-            ):
-                continue
-            covered = bool(tiles[off + 10] & 0x30)
-            if covered:
-                _lower_fire_risk(tiles, off)
-                continue
-            # Overlay / illness leftover +11 0x30 is not a new raise.
-            # 69A37 only on this-tick 0x20 → 0x30 (EXE 693BB after climb).
-            prev = tiles[off + 11] & 0x30
-            if prev >= 0x30:
-                continue
-            risk = _raise_fire_risk(tiles, off)
-            if risk == 0x30 and (state is None or state.fire_ignited == 0):
-                n = tile_ignite_building(tiles, x, y)
-                ign += n
-                if (
-                    state is not None
-                    and n
-                    and (tiles[off + 3] & DRAW_FIRE)
-                    and tiles[off + 16] == FIRE_TIMER_IGNITE
-                ):
-                    state.fire_ignited = 1
+            if ID_HOUSING_LO <= tid <= ID_HOUSING_HI:
+                tiles[off + 11] &= 0xCF
+                if nxt == 0:
+                    col += tile_collapse_rubble(tiles, x, y, leave_fire=True)
+                elif nxt != 9:
+                    for fac in (0, 2, 4, 6):
+                        fire_spread_housing(tiles, x, y, fac)
     return dec, col, ign
 
 
@@ -1230,7 +1292,7 @@ def city_sim_phase(
     elif 0x76 <= phase <= 0x7D and can:
         y0, n = _band10(phase, 0x76)
         state.row = y0
-        painted = paint_land_value(tiles, y0, n)
+        painted = paint_land_value(tiles, y0, n, land_adj=state.land_value_adj)
         note = f"lv-written={painted}"
     elif 0x7E <= phase <= 0x8D and can:
         y0, n = _band5(phase, 0x7E)
@@ -1340,6 +1402,9 @@ def city_sim_phase(
         years_played = max(0, year_before + 300)
         wrapped = _phase_wrap(state)
         year_wrapped = wrapped and int(state.year_raw) != year_before
+        if year_wrapped:
+            pause_at_year_wrap(state)
+            # Host writes sav/LASTYEAR.SAV after this (0x34E2D / F5 write_sav).
         if getattr(state, "city_only", 0) and can and walkers is not None:
             extra = wt.city_only_try_invasion(
                 state, tiles, walkers, years_played=years_played
@@ -2475,6 +2540,89 @@ def selftest() -> list[str]:
     ok = ok and sim_tick_due(gate, 200) == 4
     lines.append(f"sim_tick_due pause/play/fast: {'ok' if ok else 'FAIL'}")
 
+    from app.city_sim import end_year_turbo, start_year_turbo, stop_year_turbo
+    from app.messages import peek_message
+
+    play = SimState(paused=False, catchup=0, city_only=1)
+    start_year_turbo(play)
+    play.tick_acc = 0
+    ok = (
+        play.year_turbo
+        and play.catchup >= 2
+        and not play.paused
+        and play.year_turbo_catchup == 0
+        and sim_tick_due(play, 1) == 4
+    )
+    lines.append(f"A turbo from Play skips the ms gate: {'ok' if ok else 'FAIL'}")
+    fast = SimState(paused=False, catchup=1, city_only=1)
+    start_year_turbo(fast)
+    ok = fast.year_turbo and fast.year_turbo_catchup == 1
+    lines.append(f"A turbo remembers Faster: {'ok' if ok else 'FAIL'}")
+    stop_year_turbo(fast)
+    ok = (not fast.year_turbo) and not fast.paused and fast.catchup == 1
+    lines.append(f"Stop mid-year restores Faster: {'ok' if ok else 'FAIL'}")
+    paused = SimState(paused=True, catchup=0, city_only=1)
+    start_year_turbo(paused)
+    ok = (not paused.paused) and paused.year_turbo and paused.year_turbo_paused
+    lines.append(f"A unpauses into turbo: {'ok' if ok else 'FAIL'}")
+    stop_year_turbo(paused)
+    ok = paused.paused and paused.catchup == 0
+    lines.append(f"Stop restores prior Pause: {'ok' if ok else 'FAIL'}")
+    again = SimState(paused=False, catchup=1, city_only=1)
+    start_year_turbo(again)
+    end_year_turbo(again, restore=False)
+    again.catchup = 1
+    ok = (not again.year_turbo) and again.catchup == 1
+    lines.append(f"Speed menu cancels turbo: {'ok' if ok else 'FAIL'}")
+
+    tiles = _blank_tiles()
+    mid = SimState(
+        phase=0xD6, year_raw=-300, month=5, city_only=1, catchup=1, paused=False
+    )
+    start_year_turbo(mid)
+    june = city_sim_phase(tiles, mid)
+    ok = (
+        june.month_wrapped
+        and not june.year_wrapped
+        and mid.year_turbo
+        and mid.catchup >= 2
+        and mid.month == 6
+    )
+    lines.append(f"A turbo survives Jun wrap: {'ok' if ok else 'FAIL'}")
+    tiles = _blank_tiles()
+    dec = SimState(
+        phase=0xD6, year_raw=-300, month=11, city_only=1, catchup=1, paused=False
+    )
+    start_year_turbo(dec)
+    jan = city_sim_phase(tiles, dec)
+    year_msg = peek_message(dec)
+    ok = (
+        jan.year_wrapped
+        and dec.month == 0
+        and dec.year_raw == -299
+        and not dec.year_turbo
+        and dec.paused
+        and dec.catchup == 0
+        and (year_msg is None or getattr(year_msg, "slot", None) != 83)
+    )
+    lines.append(
+        f"Dec wrap pauses, no [83]: {'ok' if ok else 'FAIL'} "
+        f"turbo={dec.year_turbo} paused={dec.paused} catchup={dec.catchup}"
+    )
+    tiles = _blank_tiles()
+    dec_play = SimState(
+        phase=0xD6, year_raw=-300, month=11, city_only=1, catchup=0
+    )
+    start_year_turbo(dec_play)
+    city_sim_phase(tiles, dec_play)
+    ok = (
+        not dec_play.year_turbo
+        and dec_play.paused
+        and dec_play.catchup == 0
+        and dec_play.month == 0
+    )
+    lines.append(f"Dec wrap pauses from Play turbo: {'ok' if ok else 'FAIL'}")
+
     tiles = _blank_tiles()
     state = SimState(phase=1, year_raw=-300, month=0, city_only=1)
     class _Map:
@@ -2647,19 +2795,35 @@ def selftest() -> list[str]:
     hoff = _off(10, 10)
     tiles[hoff] = 0x82
     tiles[hoff + 1] = 0x01
-    st = SimState(phase=0x9E, year_raw=-300, month=0, city_only=1)
+    st = SimState(
+        phase=0x9E,
+        year_raw=-300,
+        month=0,
+        city_only=1,
+        labor_assigned=[20, 12, 4, 4, 0, 0, 0],
+        labor_need=[20, 12, 4, 4, 0, 0, 0],
+    )
     risks = []
     ignited = False
-    for step in range(4):
+    for _step in range(8):
         fire_tick_rows(tiles, 10, 1, st)
         risks.append(tiles[hoff + 11] & 0x30)
         if tiles[hoff + 3] & DRAW_FIRE:
             ignited = True
             break
-    ok = ignited and tiles[hoff + 16] == FIRE_TIMER_IGNITE
+    from app.forum import LABOR_FIRE, labor_percent
+
+    fire_pct = labor_percent(st.labor_assigned[LABOR_FIRE], st.labor_need[LABOR_FIRE])
+    ok = (
+        fire_pct == 100
+        and not ignited
+        and st.fire_ignited == 0
+        and all(r == 0 for r in risks)
+    )
     lines.append(
-        f"uncovered house ignites at +11 0x30: {'ok' if ok else 'FAIL'} "
-        f"risks={[hex(r) for r in risks]} +16={tiles[hoff + 16]}"
+        f"41DD4 no random ignite at 100% Fire labour: "
+        f"{'ok' if ok else 'FAIL'} "
+        f"pct={fire_pct} ign={int(ignited)} risks={[hex(r) for r in risks]}"
     )
 
     tiles = _blank_tiles()
@@ -2669,9 +2833,9 @@ def selftest() -> list[str]:
     tiles[hoff + 10] = 0x30
     tiles[hoff + 11] = 0x30
     fire_tick_rows(tiles, 10, 1)
-    ok = (tiles[hoff + 11] & 0x30) == 0x20 and not (tiles[hoff + 3] & DRAW_FIRE)
+    ok = (tiles[hoff + 11] & 0x30) == 0x30 and not (tiles[hoff + 3] & DRAW_FIRE)
     lines.append(
-        f"prefect +10 0x30 lowers fire risk: {'ok' if ok else 'FAIL'} "
+        f"41DD4 does not lower leftover +11 0x30: {'ok' if ok else 'FAIL'} "
         f"+11={tiles[hoff + 11] & 0x30:#x}"
     )
 
@@ -2727,22 +2891,17 @@ def selftest() -> list[str]:
     tiles[b] = 0x83
     tiles[b + 1] = 0x01
     st = SimState(phase=0x9E, year_raw=-300, month=0, city_only=1)
-    ignited = spread = collapsed = False
-    for _ in range(4):
-        fire_tick_rows(tiles, 10, 1, st)
-        if tiles[a + 3] & DRAW_FIRE and tiles[a + 16] == FIRE_TIMER_IGNITE:
-            ignited = True
-            break
-    if ignited:
-        tiles[a + 16] = 8
-        fire_tick_rows(tiles, 10, 1, st)
-        spread = bool(tiles[b + 3] & DRAW_FIRE) and tiles[b + 16] == FIRE_TIMER_IGNITE
-        tiles[a + 16] = 1
-        fire_tick_rows(tiles, 10, 1, st)
-        collapsed = tiles[a] == ID_RUBBLE and bool(tiles[a + 3] & DRAW_FIRE)
+    tile_ignite_building(tiles, 10, 10)
+    ignited = bool(tiles[a + 3] & DRAW_FIRE) and tiles[a + 16] == FIRE_TIMER_IGNITE
+    tiles[a + 16] = 8
+    fire_tick_rows(tiles, 10, 1, st)
+    spread = bool(tiles[b + 3] & DRAW_FIRE) and tiles[b + 16] == FIRE_TIMER_IGNITE
+    tiles[a + 16] = 1
+    fire_tick_rows(tiles, 10, 1, st)
+    collapsed = tiles[a] == ID_RUBBLE and bool(tiles[a + 3] & DRAW_FIRE)
     ok = ignited and spread and collapsed
     lines.append(
-        f"e2e risk-ignite-spread-collapse: {'ok' if ok else 'FAIL'} "
+        f"e2e 69A37-spread-collapse: {'ok' if ok else 'FAIL'} "
         f"ign={ignited} spread={spread} col={collapsed} id={tiles[a]:#x}"
     )
 
@@ -2803,6 +2962,44 @@ def selftest() -> list[str]:
     lines.append(
         f"Disasters Disease sets +11 0x30 not fire: {'ok' if ok else 'FAIL'} "
         f"xy=({dx},{dy}) +11={tiles[ioff + 11]:#x} ign={st.fire_ignited}"
+    )
+
+    tiles = _blank_tiles()
+    ioff = _off(12, 12)
+    tiles[ioff] = 0x82
+    tiles[ioff + 1] = 0x01
+    tiles[ioff + 13] = 0x08  # Near Baths
+    hop = _off(20, 20)
+    tiles[hop] = 0xFB
+    rim = _off(20, 19)
+    tiles[rim] = 0x52
+    tiles[rim + 1] = FLAG_PAD
+    tiles[rim + 10] = 0x0C
+    st = SimState(
+        phase=0x9E,
+        year_raw=-300,
+        month=0,
+        city_only=1,
+        population=50,
+    )
+    from app.city_paint import hospital_cover_percent
+
+    # pop<100 + one 0xFB origin → Query "Complete Hospital Cover" (45398).
+    hosp = hospital_cover_percent(tiles, population=50)
+    for _step in range(8):
+        fire_tick_rows(tiles, 12, 1, st)
+    sick = (tiles[ioff + 11] & 0x30) == 0x30
+    ok = (
+        hosp == 100
+        and not sick
+        and st.disease_infected == 0
+        and not (tiles[ioff + 3] & DRAW_FIRE)
+        and (tiles[ioff + 13] & 0x08)
+    )
+    lines.append(
+        f"41DD4 no disease at hospital/baths cover: {'ok' if ok else 'FAIL'} "
+        f"hosp={hosp} +11={tiles[ioff + 11] & 0x30:#x} "
+        f"sick={int(sick)} ign={st.fire_ignited}"
     )
 
     tiles = _blank_tiles()
@@ -2949,6 +3146,276 @@ def selftest() -> list[str]:
     lines.append(
         f"refresh after plaza place lifts +15: {'ok' if ok else 'FAIL'} "
         f"+15={i8(tiles[hoff + 15])}"
+    )
+
+    tiles = _blank_tiles()
+    tiles[hoff] = 0x8B
+    tiles[hoff + 1] = 0x01
+    soff = _off(21, 20)
+    tiles[soff] = 0xA2
+    tiles[soff + 1] = 0x01
+    paint_land_value(tiles, 20, 1)
+    shrine_raw = i8(tiles[hoff + 15])
+    tiles[_off(21, 21)] = 0xA2
+    tiles[_off(21, 21) + 1] = 0x01
+    wipe_lane(tiles, 15)
+    paint_land_value(tiles, 20, 2)
+    two_shrine = i8(tiles[hoff + 15])
+    ok = shrine_raw == 5 and two_shrine == 10
+    lines.append(
+        f"shrine 0xA2 +5 stacks: {'ok' if ok else 'FAIL'} "
+        f"one={shrine_raw} two={two_shrine}"
+    )
+    tiles = _blank_tiles()
+    tiles[hoff] = 0x8B
+    tiles[hoff + 1] = 0x01
+    for i, (dx, dy) in enumerate(((0, 0), (1, 0), (0, 1), (1, 1))):
+        o = _off(21 + dx, 20 + dy)
+        tiles[o] = 0xA6
+        tiles[o + 1] = 0x01
+        tiles[o + 5] = 0 if i == 0 else 1
+    paint_land_value(tiles, 20, 2)
+    temple_raw = i8(tiles[hoff + 15])
+    ok = temple_raw == 6
+    lines.append(
+        f"temple 0xA6 origin +6 once: {'ok' if ok else 'FAIL'} +15={temple_raw}"
+    )
+
+    ring = [
+        (dx, dy)
+        for dy in range(-2, 3)
+        for dx in range(-2, 3)
+        if (dx, dy) != (0, 0)
+    ]
+    tiles = _blank_tiles()
+    tiles[hoff] = 0x91
+    tiles[hoff + 1] = 0x01
+    for i, (dx, dy) in enumerate(ring[:8]):
+        o = _off(20 + dx, 20 + dy)
+        tiles[o] = 0xA2
+        tiles[o + 1] = 0x01
+    wipe_lane(tiles, 15)
+    paint_land_value(tiles, 18, 5)
+    eight_shrine = i8(tiles[hoff + 15])
+    # 0x91 radiates +1 r=1 onto itself (6da0e, no skip). 8*5 + 1.
+    ok = eight_shrine == 8 * 5 + 1
+    lines.append(
+        f"8 shrines in r=2 add 40: {'ok' if ok else 'FAIL'} +15={eight_shrine}"
+    )
+    ok = service_target_lv(eight_shrine, 60) == 41
+    lines.append(
+        f"acc>=20 keeps shrine splash (not 20+acc): {'ok' if ok else 'FAIL'} "
+        f"target={service_target_lv(eight_shrine, 60)}"
+    )
+    tiles = _blank_tiles()
+    tiles[hoff] = 0x91
+    tiles[hoff + 1] = 0x01
+    for dx, dy in ring[:10]:
+        o = _off(20 + dx, 20 + dy)
+        tiles[o] = 0x78
+        tiles[o + 1] = 0x01
+    wipe_lane(tiles, 15)
+    paint_land_value(tiles, 18, 5)
+    ten_garden = i8(tiles[hoff + 15])
+    ok = ten_garden == 10 * 2 + 1
+    lines.append(
+        f"10 gardens in r=2 add 20: {'ok' if ok else 'FAIL'} +15={ten_garden}"
+    )
+
+    tiles = _blank_tiles()
+    tiles[hoff] = 0x91
+    tiles[hoff + 1] = 0x01
+    tiles[hoff + 10] = 0x0C | 0xC0
+    tiles[hoff + 12] = 8
+    tiles[hoff + 13] = 0x01 | 0x08 | 0x10 | 0x20
+    n_plaza = n_g_in = 0
+    for dx in range(-2, 3):
+        o = _off(20 + dx, 21)
+        tiles[o] = 0x7C
+        tiles[o + 1] = FLAG_PAD
+        n_plaza += 1
+    for gy in (22, 23, 24):
+        for dx in range(-3, 4):
+            o = _off(20 + dx, gy)
+            tiles[o] = 0x78
+            tiles[o + 1] = 0x01
+            if max(abs(dx), gy - 20) <= 2:
+                n_g_in += 1
+    wipe_lane(tiles, 15)
+    paint_land_value(tiles, 18, 8)
+    yard_raw = i8(tiles[hoff + 15])
+    # Plaza r=1 only hits the 3 street tiles at d<=1. Garden r=2 hits
+    # the first courtyard row (5 tiles). Farther garden rows add 0.
+    want = 3 * 4 + n_g_in * 2 + 1
+    ok = n_g_in == 5 and yard_raw == 23 and want == 23
+    lines.append(
+        f"front-edge plaza+garden yard: {'ok' if ok else 'FAIL'} "
+        f"plazas_row={n_plaza} gardens_r2={n_g_in} raw={yard_raw}"
+    )
+    tiles = _blank_tiles()
+    tiles[hoff] = 0x91
+    tiles[hoff + 1] = 0x01
+    tiles[hoff + 10] = 0x0C | 0xC0
+    tiles[hoff + 12] = 8
+    tiles[hoff + 13] = 0x01 | 0x08 | 0x10 | 0x20
+    for dx in (-1, 0, 1):
+        o = _off(20 + dx, 21)
+        tiles[o] = 0x7C
+        tiles[o + 1] = FLAG_PAD
+    n_s_in = 0
+    for gy in (22, 23, 24):
+        for dx in range(-3, 4):
+            o = _off(20 + dx, gy)
+            tiles[o] = 0xA2
+            tiles[o + 1] = 0x01
+            if max(abs(dx), gy - 20) <= 2:
+                n_s_in += 1
+    wipe_lane(tiles, 15)
+    paint_land_value(tiles, 18, 8)
+    shrine_yard_raw = i8(tiles[hoff + 15])
+    ok = (
+        n_s_in == 5
+        and shrine_yard_raw == 38
+        and service_target_lv(shrine_yard_raw, 46) == 38
+    )
+    lines.append(
+        f"front-edge plaza+shrine yard: {'ok' if ok else 'FAIL'} "
+        f"shrines_r2={n_s_in} raw={shrine_yard_raw} "
+        f"target={service_target_lv(shrine_yard_raw, 46)}"
+    )
+    tiles = _blank_tiles()
+    tiles[hoff] = 0x91
+    tiles[hoff + 1] = 0x01
+    tiles[hoff + 10] = 0x0C | 0xC0
+    tiles[hoff + 12] = 8
+    tiles[hoff + 13] = 0x01 | 0x08 | 0x10 | 0x20
+    for dx in (-1, 0, 1):
+        o = _off(20 + dx, 21)
+        tiles[o] = 0x7C
+        tiles[o + 1] = FLAG_PAD
+    for dx in range(-3, 4):
+        o = _off(20 + dx, 23)
+        tiles[o] = 0x78
+        tiles[o + 1] = 0x01
+    wipe_lane(tiles, 15)
+    paint_land_value(tiles, 18, 8)
+    far_raw = i8(tiles[hoff + 15])
+    ok = far_raw == 13 and service_target_lv(13, 46) == 33
+    lines.append(
+        f"amenity row at d=3 ignored (floor 20+12): {'ok' if ok else 'FAIL'} "
+        f"raw={far_raw} target={service_target_lv(far_raw, 46)}"
+    )
+
+    # 20260924 Query (42,60) vs villa (41,58): 6da0e must splash the
+    # 2×2 +8 onto the 1×1 that shares the south edge. skip_housing
+    # left that origin at acc~5 and 20+acc wrote the odd +15=25.
+    tiles = _blank_tiles()
+    for i, (dx, dy) in enumerate(((0, 0), (1, 0), (0, 1), (1, 1))):
+        o = _off(20 + dx, 20 + dy)
+        tiles[o] = 0x9C
+        tiles[o + 1] = 0x01
+        tiles[o + 5] = 0 if i == 0 else i
+    ioff = _off(20, 22)
+    tiles[ioff] = 0x8E
+    tiles[ioff + 1] = 0x01
+    wipe_lane(tiles, 15)
+    paint_land_value(tiles, 20, 3)
+    villa_raw = i8(tiles[_off(20, 20) + 15])
+    ins_raw = i8(tiles[ioff + 15])
+    ok = ins_raw >= 8 and villa_raw >= 8
+    lines.append(
+        f"villa +8 reaches edge 1x1: {'ok' if ok else 'FAIL'} "
+        f"villa={villa_raw} insula={ins_raw}"
+    )
+
+    # 40d08 library<100 → cap 62. 0xA1 stay includes 62 (no id change).
+    # library 50% with hospital 100% clips below 62 → devolve to 0xA0.
+    from app.city_paint import (
+        cap_housing_plus15,
+        housing_cap_detail,
+        library_cover_percent,
+    )
+
+    def _serviced_palace(tiles: bytearray, x: int, y: int) -> None:
+        for i, (dx, dy) in enumerate(
+            ((0, 0), (1, 0), (2, 0), (0, 1), (1, 1), (2, 1), (0, 2), (1, 2), (2, 2))
+        ):
+            o = _off(x + dx, y + dy)
+            tiles[o] = 0xA1
+            tiles[o + 1] = 0x01
+            tiles[o + 5] = i
+            tiles[o + 10] = 0xFC
+            tiles[o + 12] = 0x3F
+            tiles[o + 13] = 0x01 | 0x08 | 0x10 | 0x20
+            tiles[o + 15] = 64
+            tiles[o + 17] = 100
+
+    def _working_civic(tiles: bytearray, x: int, y: int, tid: int) -> None:
+        o = _off(x, y)
+        tiles[o] = tid
+        tiles[o + 1] = 0x01
+        tiles[o + 5] = 0
+        r = _off(x, y - 1)
+        tiles[r] = 0x52
+        tiles[r + 1] = FLAG_PAD
+        tiles[r + 10] = 0x0C
+
+    tiles = _blank_tiles()
+    _serviced_palace(tiles, 20, 20)
+    _working_civic(tiles, 8, 8, 0xF5)
+    _working_civic(tiles, 12, 8, 0xFB)
+    _working_civic(tiles, 16, 8, 0xFB)
+    po = _off(20, 20)
+    lib92 = library_cover_percent(tiles, population=1304)
+    cap92, gate92 = housing_cap_detail(tiles, 20, 20, population=1304)
+    cap_housing_plus15(tiles, 20, 3, population=1304)
+    lv92 = i8(tiles[po + 15])
+    u, d, m = evolve_row(tiles, 20, decay=False, population=1304)
+    ok = (
+        lib92 == 92
+        and cap92 == 62
+        and "library cover>=100" in gate92
+        and lv92 == 62
+        and tiles[po] == 0xA1
+        and d == 0
+    )
+    lines.append(
+        f"palace library 92 clip 62 stay 0xA1: {'ok' if ok else 'FAIL'} "
+        f"lib={lib92} cap={cap92} +15={lv92} id={tiles[po]:#x} d={d} {gate92}"
+    )
+    from app.city_overlay import _QUERY_EVOLVE_FB, query_evolve_lines
+
+    q78 = query_evolve_lines(
+        housing=True,
+        grade=0xA1 - 0x82,
+        lv=lv92,
+        splash=0x39,
+        plus10=0xFC,
+        plus14=0,
+        entertainment=9,
+        security=2,
+        hospital=100,
+        library=lib92,
+    )
+    if _QUERY_EVOLVE_FB[78] not in " ".join(q78) or _QUERY_EVOLVE_FB[81] in " ".join(q78):
+        lines.append(f"FAIL  palace library 92 Query {q78}")
+    else:
+        lines.append("ok    palace library 92 Query [60]+78")
+
+    tiles = _blank_tiles()
+    _serviced_palace(tiles, 20, 20)
+    _working_civic(tiles, 8, 8, 0xF5)
+    _working_civic(tiles, 12, 8, 0xFB)
+    _working_civic(tiles, 16, 8, 0xFB)
+    _working_civic(tiles, 4, 8, 0xFB)
+    lib50 = library_cover_percent(tiles, population=2400)
+    cap50, gate50 = housing_cap_detail(tiles, 20, 20, population=2400)
+    cap_housing_plus15(tiles, 20, 3, population=2400)
+    u, d, m = evolve_row(tiles, 20, decay=False, population=2400)
+    ok = lib50 == 50 and cap50 < 62 and tiles[po] == 0xA0 and d == 1
+    lines.append(
+        f"palace library 50 devolve 0xA0: {'ok' if ok else 'FAIL'} "
+        f"lib={lib50} cap={cap50} id={tiles[po]:#x} d={d} {gate50}"
     )
 
     from app.messages import selftest as message_selftest

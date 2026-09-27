@@ -44,6 +44,11 @@ from app.city_paint import (
     hospital_cover_percent,
     library_cover_percent,
     paint_land_value,
+    paint_plus12_amenities,
+    paint_plus13_buildings,
+    paint_plus13_water,
+    paint_plus14_security,
+    refresh_land_value,
     security_enclosure_mask,
     security_overlay_index,
     security_score,
@@ -102,22 +107,46 @@ ISO_TINT_OVERLAYS = frozenset(
 # EXE 0x3E6BA never writes a dry colour — plane 0 keeps dimmed geography.
 # Do not invent a full-map red (old host 0xFE). Coverage is +13 rings only.
 _ISO_WASH_ALPHA = 120
-# CITY1.256 0x93/0x90/0x8D (Security) and 0x84/0x8D/0x87 (Water) sit near
-# grass brown/olive. City Only remaps those key colours so the wash and
-# minimap swatches stay readable. Plane bytes stay EXE indices.
+# CITY1.256 overlay keys sit near grass brown/olive/teal. City Only remaps
+# host RGB so wash, legend, and minimap stay readable. Plane bytes stay
+# EXE indices — do not invent new overlay types.
 _CONTRAST_WASH_ALPHA = 180
 _WASH_BLUE = (40, 96, 230)
 _WASH_YELLOW = (236, 208, 24)
 _WASH_RED = (220, 32, 36)
+_WASH_SOURCE = (16, 220, 200)  # 0x96 fixture (forum / school / pipe / venue)
+_WASH_BARRACKS = (220, 48, 180)
 _SECURITY_WASH_RGB: dict[int, tuple[int, int, int]] = {
-    0x93: _WASH_BLUE,  # Internal
-    0x90: _WASH_YELLOW,  # External
-    0x8D: _WASH_RED,  # Both / Maximum
+    0x93: _WASH_BLUE,  # Internal / Tax+Markets Low
+    0x90: _WASH_YELLOW,  # External / Medium
+    0x8D: _WASH_RED,  # Both / High
+    0x96: _WASH_SOURCE,  # Praefecture / forum / market tile
+    0x8B: _WASH_BARRACKS,  # Barracks
 }
 _WATER_WASH_RGB: dict[int, tuple[int, int, int]] = {
-    0x84: _WASH_BLUE,  # Water Supply
-    0x8D: _WASH_YELLOW,  # Pipe Access
+    0x84: _WASH_BLUE,  # Water Supply / Education Rhetor
+    0x8D: _WASH_YELLOW,  # Pipe Access / Grammaticus
     0x87: _WASH_RED,  # Both
+    0x96: _WASH_SOURCE,  # pipe / well / fountain / school
+}
+# Unrest / Illness: 0x79 Low, 0x78 Medium, 0x77 High (CITY1.256 teals).
+_GRADE_WASH_RGB: dict[int, tuple[int, int, int]] = {
+    0x79: _WASH_BLUE,
+    0x78: _WASH_YELLOW,
+    0x77: _WASH_RED,
+}
+# Land Value / Entertainment: (n)*3 + 0x7E, nine chips. CITY1.256
+# teal→khaki is muddy at 80×80; host remaps to a cool→hot ramp.
+_RAMP_WASH_RGB: dict[int, tuple[int, int, int]] = {
+    0x7E: (16, 40, 180),
+    0x81: (32, 96, 236),
+    0x84: (16, 180, 228),
+    0x87: (16, 200, 120),
+    0x8A: (88, 216, 32),
+    0x8D: (236, 216, 20),
+    0x90: (240, 140, 16),
+    0x93: (232, 56, 20),
+    0x96: (196, 16, 48),
 }
 
 # CITY1.256 indices written to 0xD7BFC. Runtime load preferred; this is
@@ -226,19 +255,24 @@ def palette_rgb(index: int) -> tuple[int, int, int]:
 def _contrast_wash_rgb(
     overlay_id: int, index: int
 ) -> tuple[int, int, int] | None:
-    if overlay_id == OVERLAY_SECURITY:
+    if overlay_id in (OVERLAY_SECURITY, OVERLAY_TAX, OVERLAY_MARKETS):
         return _SECURITY_WASH_RGB.get(index)
-    if overlay_id == OVERLAY_WATER:
+    if overlay_id in (OVERLAY_WATER, OVERLAY_EDUCATION):
         return _WATER_WASH_RGB.get(index)
+    if overlay_id in (OVERLAY_UNREST, OVERLAY_ILLNESS):
+        return _GRADE_WASH_RGB.get(index)
+    if overlay_id in (OVERLAY_LAND_VALUE, OVERLAY_ENTERTAINMENT):
+        return _RAMP_WASH_RGB.get(index)
     return None
 
 
 def overlay_plane_rgb(overlay_id: int, index: int) -> tuple[int, int, int]:
-    """CITY1.256 index, with Security/Water key colours remapped.
+    """CITY1.256 index, with overlay key colours remapped on the host.
 
-    Security Internal/External/Both and Water Supply/Pipe Access/Both use
-    the same blue/yellow/red so grass wash stays readable. Tax / Education
-    / Markets keep the raw palette. Plane bytes stay EXE indices.
+    Three-key reports (Water / Security / Education / Tax / Markets /
+    Unrest / Illness) use blue/yellow/red so types stay separable on
+    grass. Land Value / Entertainment use a nine-step cool→hot ramp.
+    Plane bytes stay EXE indices.
     """
     remapped = _contrast_wash_rgb(overlay_id, index)
     if remapped is not None:
@@ -299,7 +333,7 @@ def _paint_land_value(lv_byte: int) -> int:
 
 
 def _is_pipe_building(tid: int) -> bool:
-    return tid == 0xBE or (0xCB <= tid <= 0xD6)
+    return tid == 0xBE or tid in (0xBC, 0xBD) or (0xCB <= tid <= 0xD6)
 
 
 def _paint_water(tid: int, flags: int, splash: int) -> int:
@@ -556,6 +590,8 @@ def _fill_names() -> None:
         0xB4: "Janiculan",
         0xB7: "Palatine",
         0xB9: "Palatine",
+        0xBC: "Aqueduct",
+        0xBD: "Aqueduct",
         0xBE: "Reservoir",
         0xBF: "Tower",
         0xC0: "Gate",
@@ -647,8 +683,9 @@ def _block_or13(city: CityMap, x: int, y: int, size: int) -> int:
     return _block_or_lane(city, x, y, size, 13)
 
 
-# FUN_00062a59 / C2.ENG [60] housing status. +15 vs 0x96235 stay,
-# then first failing 40d08-style gate only if +15 equals that cap.
+# FUN_00062a59 / C2.ENG [60] housing status. +15 vs 0x96235 stay
+# (table at 0x96131[id*2]), then first failing 40d08-style gate only
+# if +15 equals that cap. Caller 0x627bf when [0x117a78] is 0x82–0xA1.
 _QUERY_EVOLVE_FB: dict[int, str] = {
     35: "This structure does not evolve.",
     60: "Local land value is too low to encourage this dwelling to grow any further.",
@@ -820,6 +857,12 @@ def query_evolve_lines(
         skip = housing_query_stall_skip(
             lv, splash, plus10, plus14, entertainment, security, hospital, library
         )
+        # 0xA1 stay 62..125 vs +15 cap 64: 0x62a59 never takes +87.
+        # library<100 writes cap 62 (40d08 0x41089). After that clip,
+        # lv==62 parks [60]+78. Mid-cycle +15 still 64 is unparked and
+        # 0x62eb5 emits [60]+81. [60]+42 is forum 0xA5, not housing.
+        if skip == 60 and grade == len(EVOLVE_MIN) - 1 and lv >= 64:
+            skip = 81
     out = [_eng_skip(eng, 60, skip, _QUERY_EVOLVE_FB[skip])]
     if lv < stay_lo:
         out.append(_eng_skip(eng, 60, 86, _QUERY_EVOLVE_FB[86]))
@@ -882,6 +925,8 @@ def building_name(tid: int, eng=None) -> str:
         0xDC: (12, 3, "Fountain"),
         0xDD: (12, 3, "Fountain"),
         0xDE: (12, 3, "Fountain"),
+        0xBC: (13, 0, "Wall"),
+        0xBD: (13, 0, "Wall"),
         0xC0: (13, 0, "Wall"),
         0xC1: (13, 0, "Wall"),
         0xC2: (13, 0, "Wall"),
@@ -953,6 +998,53 @@ def building_name(tid: int, eng=None) -> str:
     return f"Building {tid:#04x}"
 
 
+# After city_sim_phase returns, [0x1026A8] is the *next* slot. 0x51 wiped
+# +13; 0x52 wiped +15. Query 0x64337 / 0x63845 / 0x62a59 fill [0x117a**]
+# then CALL 0x26f16 — they never blit [60]+0/+4 from a half-wiped map.
+QUERY_LANE_REBUILD_LO = 0x52
+QUERY_LANE_REBUILD_HI = 0x8D
+
+
+def query_display_city(city: CityMap, sim=None) -> CityMap:
+    """Copy + finish splash/LV when Query opens during 0x51–0x8D rebuild.
+
+    Live tiles stay mid-wipe so the month can keep painting bands. EXE
+    0x63845 reads 0x117a79… after 0x64337 already sampled the tile.
+    """
+    phase = int(getattr(sim, "phase", 0) or 0) if sim is not None else 0
+    if sim is None or not (QUERY_LANE_REBUILD_LO <= phase <= QUERY_LANE_REBUILD_HI):
+        return city
+    snap = CityMap()
+    snap.tiles = bytearray(city.tiles)
+    snap.source = "query-snap"
+    _rebuild_query_lanes(snap.tiles, phase, sim)
+    return snap
+
+
+def _query_water_staffed(sim) -> bool:
+    from app.forum import labor_shutoff
+
+    return "water" not in labor_shutoff(sim)
+
+
+def _rebuild_query_lanes(tiles: bytearray, phase: int, sim) -> None:
+    """Replay wiped 0x51–0x8D painters on a copy. Do not refresh labor need."""
+    pop = int(getattr(sim, "population", 0) or 0)
+    adj = int(getattr(sim, "land_value_adj", 0) or 0)
+    if phase <= 0x75:
+        wipe_lane(tiles, 13)
+        paint_plus13_buildings(tiles, 0, MAP_H)
+        paint_plus12_amenities(tiles, 0, MAP_H)
+        paint_plus13_water(
+            tiles, 0, MAP_H, water_staffed=_query_water_staffed(sim)
+        )
+    if 0x54 <= phase <= 0x65:
+        wipe_lane(tiles, 14)
+        paint_plus14_security(tiles, 0, MAP_H)
+    if 0x53 <= phase <= QUERY_LANE_REBUILD_HI:
+        refresh_land_value(tiles, population=pop, land_adj=adj)
+
+
 @dataclass(frozen=True)
 class PlaceInfo:
     x: int
@@ -963,8 +1055,9 @@ class PlaceInfo:
     lines: tuple[str, ...]
 
 
-def query_place(city: CityMap, x: int, y: int, eng=None) -> PlaceInfo:
+def query_place(city: CityMap, x: int, y: int, eng=None, sim=None) -> PlaceInfo:
     """Full structure box: C2.ENG [60] + tile bytes (not walker quotes)."""
+    city = query_display_city(city, sim)
     t = city.tile(x, y)
     tid = t.terrain_id
     name = building_name(tid, eng)
@@ -976,7 +1069,18 @@ def query_place(city: CityMap, x: int, y: int, eng=None) -> PlaceInfo:
         name,
         f"tile ({x},{y})  id {tid:#04x}  +1 {t.flags:#04x}",
     ]
+    splash = t.desirability
+    amenity12 = t.unknown12
+    ent_size = 1
+    ox, oy = x, y
     land = i8(t.industry)
+    if t.is_housing:
+        ox, oy, ent_size = _housing_query_origin(t, x, y)
+        splash = _block_or13(city, ox, oy, ent_size)
+        amenity12 = entertainment_level_block(city.tiles, ox, oy, ent_size)
+        land = i8(city.tile(ox, oy).industry)
+    else:
+        amenity12 = entertainment_level(amenity12)
     if land:
         lines.append(f"{_eng_skip(eng, 60, 1, 'Land Value is')} {land}")
     else:
@@ -991,16 +1095,6 @@ def query_place(city: CityMap, x: int, y: int, eng=None) -> PlaceInfo:
         ill = t.housing_grade & 0x30
         if ill:
             lines.append(f"illness +11&0x30={ill:#x}")
-    splash = t.desirability
-    amenity12 = t.unknown12
-    ent_size = 1
-    ox, oy = x, y
-    if t.is_housing:
-        ox, oy, ent_size = _housing_query_origin(t, x, y)
-        splash = _block_or13(city, ox, oy, ent_size)
-        amenity12 = entertainment_level_block(city.tiles, ox, oy, ent_size)
-    else:
-        amenity12 = entertainment_level(amenity12)
     lines.append(query_water_line(splash, eng))
     if tid == 0xBE or (0xCB <= tid <= 0xD6):
         charge = t.coverage & 3
@@ -1226,7 +1320,7 @@ _LEGEND_LABEL_X = 34
 
 # 0x61f24 / 0x61fb9: CITY1.256 index + [52] skip. Security uses 0x61fb9
 # (eax=0x20 → Internal / External / Both = +32,+31,+30). Host remaps
-# Security and Water key indices in overlay_plane_rgb (legend matches wash).
+# every report-key index in overlay_plane_rgb (legend matches wash).
 _LEGEND_THREE: dict[int, tuple[tuple[int, int, str], ...]] = {
     OVERLAY_WATER: (
         (0x84, 25, "Water Supply"),
@@ -1319,7 +1413,7 @@ def blit_overlay_legend(
         sx = mx + 8
         sy = my + 100
         for i in range(9):
-            rgb = palette_rgb((i * 3) + 0x7E)
+            rgb = overlay_plane_rgb(overlay_id, (i * 3) + 0x7E)
             x0 = sx + i * 16
             draw.rectangle((x0, sy, x0 + 14, sy + 12), fill=rgb + (255,))
         draw.text(
@@ -2047,7 +2141,15 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  query +17 still internal {flood_q.lines}")
     else:
         lines.append("ok    query +17 flood without walls stays Internal")
-    from app.city_paint import ID_WALL_EW, ID_WALL_NS, tile_inside_walls
+    from app.city_paint import (
+        ID_AQUEDUCT_WALL_EW,
+        ID_WALL_EW,
+        ID_WALL_NS,
+        FLAG_WALL,
+        is_fortification_id,
+        is_security_barrier,
+        tile_inside_walls,
+    )
 
     def _box(ox: int, oy: int) -> None:
         for i in range(5):
@@ -2077,6 +2179,26 @@ def selftest() -> list[str]:
         )
     else:
         lines.append("ok    overlay enclosed house → External 0x90")
+    # Aqueduct-through-wall must stay a barrier (EXE +1=0x42 keeps 0x02).
+    # Id-only C1–CA would treat 0xBC as a door and External would leak in.
+    xoff = city.offset(42, 40)
+    city.tiles[xoff] = ID_AQUEDUCT_WALL_EW
+    city.tiles[xoff + 1] = 0x40 | FLAG_WALL
+    if (
+        not is_fortification_id(ID_AQUEDUCT_WALL_EW)
+        or not is_security_barrier(city.tiles, 42, 40)
+        or not tile_inside_walls(city.tiles, 42, 42)
+    ):
+        lines.append("FAIL  0xBC opened the Security enclosure")
+    elif overlay_pixel(city.tiles, xoff, OVERLAY_SECURITY) != 0:
+        lines.append(
+            f"FAIL  overlay paints flood on 0xBC "
+            f"{overlay_pixel(city.tiles, xoff, OVERLAY_SECURITY):#x}"
+        )
+    elif overlay_pixel(city.tiles, woff, OVERLAY_SECURITY) != 0x90:
+        lines.append("FAIL  enclosure leaked through 0xBC")
+    else:
+        lines.append("ok    0xBC keeps wall barrier (no Security hole)")
     goff = city.offset(41, 41)
     city.tiles[goff] = 0x14
     eoff = city.offset(43, 41)
@@ -2389,6 +2511,128 @@ def selftest() -> list[str]:
         lines.append("FAIL  stall skip rhetor")
     else:
         lines.append("ok    0x62a59 education stalls → [60]+72 / +75")
+    pal_skip = query_evolve_lines(
+        housing=True,
+        grade=0xA1 - ID_HOUSING_LO,
+        lv=64,
+        splash=0x39,
+        plus10=0xFC,
+        plus14=0,
+        entertainment=9,
+        security=2,
+        hospital=100,
+        library=96,
+    )
+    pal_join = " ".join(pal_skip)
+    if _QUERY_EVOLVE_FB[81] not in pal_join or _QUERY_EVOLVE_FB[60] in pal_join:
+        lines.append(f"FAIL  query 0xA1 lv=64 library 96 {pal_skip}")
+    else:
+        lines.append("ok    Large Palace 0xA1 +15=64 → [60]+81 not +60")
+    mid_lv = query_evolve_lines(
+        housing=True,
+        grade=0x8B - ID_HOUSING_LO,
+        lv=20,
+        splash=0x39,
+        plus10=0xCC,
+        plus14=0,
+        entertainment=8,
+        security=2,
+        hospital=100,
+        library=100,
+    )
+    if _QUERY_EVOLVE_FB[60] not in " ".join(mid_lv):
+        lines.append(f"FAIL  query mid-tier low LV {mid_lv}")
+    else:
+        lines.append("ok    Improved House +15=20 still [60]+60")
+    pal = CityMap()
+    poff = pal.offset(4, 4)
+    pal.tiles[poff] = 0xA1
+    pal.tiles[poff + 10] = 0x0C | 0xC0 | 0x30
+    pal.tiles[poff + 12] = 0x3F
+    pal.tiles[poff + 13] = 0x01 | 0x08 | 0x10 | 0x20
+    pal.tiles[poff + 15] = 64
+    pal_q = " ".join(query_place(pal, 4, 4).lines)
+    if _QUERY_EVOLVE_FB[81] not in pal_q or _QUERY_EVOLVE_FB[60] in pal_q:
+        lines.append(f"FAIL  query_place 0xA1 {query_place(pal, 4, 4).lines}")
+    elif "Land Value is 64" not in pal_q:
+        lines.append(f"FAIL  query_place 0xA1 land {query_place(pal, 4, 4).lines}")
+    else:
+        lines.append("ok    Query Large Palace LV 64 footer is [60]+81")
+    clipped = query_evolve_lines(
+        housing=True,
+        grade=0xA1 - ID_HOUSING_LO,
+        lv=62,
+        splash=0x39,
+        plus10=0xFC,
+        plus14=0,
+        entertainment=9,
+        security=2,
+        hospital=100,
+        library=92,
+    )
+    clip_join = " ".join(clipped)
+    if _QUERY_EVOLVE_FB[78] not in clip_join or _QUERY_EVOLVE_FB[81] in clip_join:
+        lines.append(f"FAIL  query 0xA1 lv=62 library 92 {clipped}")
+    else:
+        lines.append("ok    Large Palace +15=62 library 92 → [60]+78 not +81")
+    from app.city_sim import SimState as _QSim
+
+    mid = CityMap()
+    ro = mid.offset(10, 10)
+    mid.tiles[ro] = 0xBE
+    mid.tiles[ro + 10] = 3
+    fo = mid.offset(12, 10)
+    mid.tiles[fo] = 0xDD
+    mid.tiles[fo + 5] = 0
+    ho = mid.offset(13, 10)
+    mid.tiles[ho] = 0x86
+    mid.tiles[ho + 1] = 0x01
+    paint_plus13_buildings(mid.tiles, 0, MAP_H)
+    paint_plus13_water(mid.tiles, 0, MAP_H)
+    refresh_land_value(mid.tiles, population=50)
+    ready_q = " ".join(query_place(mid, 13, 10).lines)
+    if "NO Water Supply" in ready_q or "NO Land Value" in ready_q:
+        lines.append(f"FAIL  query ready watered house {ready_q}")
+    else:
+        lines.append("ok    Query watered house has water and land value")
+    wipe_lane(mid.tiles, 13)
+    wipe_lane(mid.tiles, 15)
+    raw_wipe = " ".join(query_place(mid, 13, 10).lines)
+    if "NO Water Supply" not in raw_wipe or "NO Land Value" not in raw_wipe:
+        lines.append(f"FAIL  query wipe without phase {raw_wipe}")
+    else:
+        lines.append("ok    Query on wiped lanes without sim is the raw zeros")
+    snap_q = query_place(
+        mid, 13, 10, sim=_QSim(phase=0x53, population=50, city_only=1)
+    )
+    snap_join = " ".join(snap_q.lines)
+    if "NO Water Supply" in snap_join:
+        lines.append(f"FAIL  query mid-rebuild water {snap_q.lines}")
+    elif "NO Land Value" in snap_join:
+        lines.append(f"FAIL  query mid-rebuild land {snap_q.lines}")
+    elif "Water Supply" not in snap_join:
+        lines.append(f"FAIL  query mid-rebuild missing water {snap_q.lines}")
+    else:
+        lines.append("ok    Query mid-wipe 0x52–0x8D snapshot restores water/LV")
+    if mid.tiles[ho + 13] or mid.tiles[ho + 15]:
+        lines.append("FAIL  query snapshot mutated live +13/+15")
+    else:
+        lines.append("ok    Query snapshot does not write live lanes")
+    dry = CityMap()
+    doff = dry.offset(4, 4)
+    dry.tiles[doff] = 0x82
+    dry.tiles[doff + 1] = 0x01
+    wipe_lane(dry.tiles, 13)
+    wipe_lane(dry.tiles, 15)
+    dry_q = " ".join(
+        query_place(
+            dry, 4, 4, sim=_QSim(phase=0x53, population=50, city_only=1)
+        ).lines
+    )
+    if "NO Water Supply" not in dry_q:
+        lines.append(f"FAIL  query dry house invented water {dry_q}")
+    else:
+        lines.append("ok    Query mid-wipe dry house stays NO Water Supply")
     if overlay_name(2) != "Water" or overlay_name(10) != "Cancel":
         lines.append("FAIL  names")
     else:
@@ -2425,6 +2669,13 @@ def selftest() -> list[str]:
     sec_ext = overlay_plane_rgb(OVERLAY_SECURITY, 0x90)
     sec_both = overlay_plane_rgb(OVERLAY_SECURITY, 0x8D)
     edu_rhetor = overlay_plane_rgb(OVERLAY_EDUCATION, 0x84)
+    edu_gram = overlay_plane_rgb(OVERLAY_EDUCATION, 0x8D)
+    tax_low = overlay_plane_rgb(OVERLAY_TAX, 0x93)
+    tax_high = overlay_plane_rgb(OVERLAY_TAX, 0x8D)
+    unrest_low = overlay_plane_rgb(OVERLAY_UNREST, 0x79)
+    unrest_high = overlay_plane_rgb(OVERLAY_UNREST, 0x77)
+    ill_low = overlay_plane_rgb(OVERLAY_ILLNESS, 0x79)
+    mkt_high = overlay_plane_rgb(OVERLAY_MARKETS, 0x8D)
     if water_supply != sec_int or water_pipe != sec_ext or water_both != sec_both:
         lines.append(
             f"FAIL  Water/Security wash mismatch "
@@ -2438,10 +2689,35 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  Security Internal not blue {sec_int}")
     elif not (sec_both[0] > 180 and sec_both[0] > sec_both[1] + 80):
         lines.append(f"FAIL  Security Both not red {sec_both}")
-    elif edu_rhetor != palette_rgb(0x84):
-        lines.append(f"FAIL  Education 0x84 remapped {edu_rhetor}")
+    elif edu_rhetor != water_supply or edu_gram != water_pipe:
+        lines.append(f"FAIL  Education keys {edu_rhetor}/{edu_gram}")
+    elif tax_low != sec_int or tax_high != sec_both or mkt_high != sec_both:
+        lines.append(f"FAIL  Tax/Markets keys {tax_low}/{tax_high}/{mkt_high}")
+    elif unrest_low != water_supply or unrest_high != water_both:
+        lines.append(f"FAIL  Unrest keys {unrest_low}/{unrest_high}")
+    elif ill_low != unrest_low:
+        lines.append(f"FAIL  Illness Low {ill_low}")
     else:
-        lines.append("ok    Water/Security wash blue/yellow/red; Education raw")
+        lines.append("ok    report keys remap blue/yellow/red (EXE indices kept)")
+    ramp = [overlay_plane_rgb(OVERLAY_LAND_VALUE, (i * 3) + 0x7E) for i in range(9)]
+    ent_ramp = [
+        overlay_plane_rgb(OVERLAY_ENTERTAINMENT, (i * 3) + 0x7E) for i in range(9)
+    ]
+    raw_lo = palette_rgb(0x7E)
+    if ramp != ent_ramp:
+        lines.append(f"FAIL  LV/Ent ramp mismatch {ramp[0]}/{ent_ramp[0]}")
+    elif ramp[0] == raw_lo:
+        lines.append("FAIL  Land Value ramp still CITY1.256 teal")
+    elif len(set(ramp)) != 9:
+        lines.append(f"FAIL  Land Value ramp collapsed {ramp}")
+    else:
+        lines.append("ok    Land Value / Entertainment cool->hot ramp")
+    lv_key = blit_overlay_legend(blank, OVERLAY_LAND_VALUE)
+    lv_chip = lv_key.getpixel((wx + 8 + 7, wy + 100 + 6))
+    if lv_chip != ramp[0]:
+        lines.append(f"FAIL  Land Value legend chip {lv_chip} want {ramp[0]}")
+    else:
+        lines.append("ok    Land Value legend chips match remapped ramp")
     sx = wx + _LEGEND_SWATCH[0] + _LEGEND_SWATCH_WH // 2
     sy0 = wy + _LEGEND_SWATCH[1] + _LEGEND_SWATCH_WH // 2
     painted_int = sec_key.getpixel((sx, sy0))
@@ -2476,10 +2752,16 @@ def selftest() -> list[str]:
     else:
         lines.append("ok    query OK / box hit native")
     wide = (1442, 960)
-    if not place_dialog_close_contains(ox * 2 + 2, oy * 2 + 2, qinfo, frame_size=wide):
+    qsc, qox, qoy = _query_layout(*wide)
+    if not place_dialog_close_contains(
+        qox + ox * qsc + 2, qoy + oy * qsc + 2, qinfo, frame_size=wide
+    ):
         lines.append("FAIL  query OK hit 2x Forum scale")
     elif not place_dialog_contains(
-        (_DLG_X + _DLG_W - 8) * 2, (_DLG_Y + 20) * 2, qinfo, frame_size=wide
+        qox + (_DLG_X + _DLG_W - 8) * qsc,
+        qoy + (_DLG_Y + 20) * qsc,
+        qinfo,
+        frame_size=wide,
     ):
         lines.append("FAIL  query box right edge 2x")
     elif place_dialog_contains(20, 50, qinfo, frame_size=wide):

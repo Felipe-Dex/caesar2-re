@@ -1,9 +1,13 @@
 """title_screen 0x5D37F + chrome 0x5AFC6 — opening menu (not City Only).
 
-EXE boot (findings/ghidra_walk.md): ``logo1.pl8`` / ``logo2.pl8`` (Sierra /
-Impressions) live on the 1.1A tree; ``title_screen`` loads ``backgrnd.256`` +
-``backgrnd.pl8`` (640×480) then jumps to menu chrome. C2.ENG **[38]** names
-the title items. Career / REGIONS is shown, not hosted.
+EXE boot (findings/ghidra_walk.md): ``video_prepare_smk`` ``0x59C87`` shows
+Sierra ``logo1.pl8`` then Impressions ``logo2.pl8`` (no XMI). Then
+``smk_play`` ``0x5AB3D`` ``intro.smk`` — the gold CAESAR II relief; audio
+is SMK smackaud (not ``forum1.xmi``, not ``title.xmi``, not ``cityprov.xmi``).
+After the clip, ``music_load_xmi`` ``0x12279`` ``forum1.xmi`` and
+``title_screen`` loads ``backgrnd.256`` + ``backgrnd.pl8`` (640×480) then
+jumps to menu chrome. C2.ENG **[38]** names the title items. Career /
+REGIONS is shown, not hosted.
 
 **Start a New Game** opens New Game Options (skill picker ``0x5CF80``,
 Campaign locked to City-only Mode). ``--city-only`` never enters this
@@ -653,20 +657,23 @@ def selftest() -> list[str]:
     except (OSError, ValueError, ImportError):
         lines.append("ok    title ENG/PL8 skipped (no install)")
     from app.advisor_video import advisor_plays_audio
-    from app.audio import MANDATE_RAW, TITLE_XMI, title_boot_audio
+    from app.audio import INTRO_AUDIO, MANDATE_RAW, TITLE_XMI, intro_card_audio, title_boot_audio
 
-    if title_boot_audio(city_only=False, play_audio=True) != TITLE_XMI:
-        lines.append("FAIL  title boot is not forum1.xmi")
+    card = intro_card_audio(city_only=False, play_audio=True)
+    menu = title_boot_audio(city_only=False, play_audio=True)
+    if card != INTRO_AUDIO or card == TITLE_XMI:
+        lines.append(f"FAIL  gold card audio {card!r} (want {INTRO_AUDIO})")
+    elif menu != TITLE_XMI:
+        lines.append("FAIL  [38] menu is not forum1.xmi")
     elif title_boot_audio(city_only=True, play_audio=True) != "city_sfx":
         lines.append("FAIL  city-only still wants title music")
-    elif MANDATE_RAW[:3].lower() in title_boot_audio(city_only=False, play_audio=True).lower():
+    elif MANDATE_RAW[:3].lower() in menu.lower() or MANDATE_RAW[:3].lower() in card.lower():
         lines.append("FAIL  A01 mandate still on title boot")
     else:
-        lines.append("ok    title boot does not start A01/mandate")
+        lines.append("ok    gold card intro.smk; [38] menu forum1.xmi; no A01")
     hail = type("M", (), {"slot": 79, "key": "hail"})()
-    year = type("M", (), {"slot": 83, "key": "year"})()
-    if not advisor_plays_audio(hail) or not advisor_plays_audio(year):
-        lines.append("FAIL  Hail/year must keep mp4 audio")
+    if not advisor_plays_audio(hail):
+        lines.append("FAIL  Hail must keep mp4 audio")
     else:
-        lines.append("ok    Hail [79] / New Year [83] still have mp4 audio")
+        lines.append("ok    Hail [79] still has mp4 audio")
     return lines

@@ -95,22 +95,29 @@ def run_boot(
     # 4. miles_init @ 0x11758 — not AIL
     audio_status = "audio skipped (--no-audio)"
     if play_audio and city_only:
-        # City Only opens on the map with Hail. Title music is forum1.xmi
-        # (music_load_xmi 0x12279). A01.RAW is Career [69]+4 mandate VO.
-        audio_status = "city SFX on (no title XMI / no A01 mandate)"
+        # City Only opens on the map with Hail. Gold card is intro.smk
+        # smackaud; [38] menu is forum1.xmi (music_load_xmi 0x12279).
+        # A01.RAW is Career [69]+4 mandate VO.
+        audio_status = "city SFX on (no intro SMK / no forum1 / no A01 mandate)"
     elif play_audio:
         audio_status = (
-            f"title music {audio.TITLE_XMI} "
+            f"intro card {audio.INTRO_AUDIO}; "
+            f"menu {audio.TITLE_XMI} "
             f"(music_load_xmi {audio.VA_MUSIC_LOAD_XMI:#x}; no A01 mandate)"
         )
     notes.append(audio_status)
 
-    # 5. smk_play @ 0x5AB3D intro.smk — codec not in-process (ffmpeg remux only)
-    intro = next((f for f in key if f.name.upper() == "INTRO.SMK"), None)
-    if intro and intro.ok:
-        notes.append(f"intro.smk present ({intro.size} B) - playback stub")
+    # 5. video_prepare_smk 0x59C87 LOGO1/LOGO2, then smk_play 0x5AB3D intro.smk
+    from app.advisor_video import resolve_intro_video
+
+    intro_path = resolve_intro_video(game)
+    if intro_path is not None:
+        notes.append(
+            f"smk_play intro: {intro_path.parent.name}/{intro_path.name} "
+            f"({intro_path.stat().st_size} B) — gold card audio is SMK, not forum1"
+        )
     else:
-        notes.append("intro.smk missing — skip smk_play")
+        notes.append("intro.smk / intro.mp4 missing — skip smk_play")
 
     # 6. title_screen @ 0x5D37F — real PL8 decode
     image: Image.Image | None = None
@@ -176,8 +183,8 @@ def run_boot(
             notes.append(f"city_map load failed: {exc}")
     else:
         notes.append(
-            "title_screen: backgrnd.pl8 + C2.ENG menu "
-            "(New City / Load / Options / Quit; Career stub)"
+            "title_screen: backgrnd.pl8 + C2.ENG [38] menu "
+            "(forum1.xmi after intro; New City / Load / Options / Quit; Career stub)"
         )
 
     return BootContext(

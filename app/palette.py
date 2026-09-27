@@ -17,6 +17,8 @@ from PIL import Image, ImageDraw, ImageFont
 from app.city_chrome import SIDEBAR_X, action_for_tool as _chrome_action
 from app.unlocks import POP_UNLOCK, peak_population
 from app.place import (
+    cost_hud_text,
+    tool_unit_cost,
     TOOL_AQUEDUCT,
     TOOL_ARENA,
     TOOL_AVENTINE,
@@ -295,7 +297,7 @@ class PaletteState:
         if action in _DIRECT:
             self.close()
             tool = _DIRECT[action]
-            return ClickResult(tool, f"ferramenta: {_TOOL_HINT[tool]}")
+            return ClickResult(tool, _pick_message(tool))
         items = self._items_for(action)
         if not items and action not in _FLYOUTS:
             self.close()
@@ -323,7 +325,7 @@ class PaletteState:
                 set_factory_goods(self.factory_goods)
             # EXE: pick dismisses the popup; the 3×5 category stays yellow.
             self.close()
-            return ClickResult(item.tool, f"ferramenta: {item.hint}")
+            return ClickResult(item.tool, _pick_message(item.tool, item.label))
         return ClickResult(None, "flyout", keep_tool=True)
 
     def _rebuild_hits(self) -> None:
@@ -390,6 +392,26 @@ _LABEL = {
 }
 
 
+_TOOL_NAME = {
+    TOOL_TENT: "Tent",
+    TOOL_ROAD: "Roads",
+    TOOL_CLEAR: "Clear",
+    TOOL_QUERY: "Query",
+    TOOL_AQUEDUCT: "Aqueduct",
+    TOOL_PALATINE: "Palatine",
+}
+
+
+def _pick_message(tool: str | None, label: str | None = None) -> str:
+    """EXE 0x61A67 sidebar caption: ``Cost: N Dn`` when the unit price is pinned."""
+    text = cost_hud_text(tool_unit_cost(tool))
+    if text:
+        return text
+    if label:
+        return label
+    return _TOOL_NAME.get(tool or "", tool or "")
+
+
 def action_for_tool(tool: str | None) -> str | None:
     if tool is None:
         return None
@@ -406,10 +428,15 @@ def selftest() -> list[str]:
     lines: list[str] = []
     pal = PaletteState()
     r = pal.click_grid("housing")
-    if r.tool != TOOL_TENT:
-        lines.append(f"FAIL  housing {r.tool}")
+    if r.tool != TOOL_TENT or r.message != "Cost: 6 Dn":
+        lines.append(f"FAIL  housing {r.tool} {r.message!r}")
     else:
-        lines.append("ok    housing directo → tent")
+        lines.append("ok    housing directo → tent Cost: 6 Dn")
+    r = pal.click_grid("roads")
+    if r.tool != TOOL_ROAD or r.message != "Roads":
+        lines.append(f"FAIL  roads {r.tool} {r.message!r}")
+    else:
+        lines.append("ok    Roads has no pinned city cost")
     r = pal.click_grid("water", (478, 300, 30, 24))
     if r.tool is not None or pal.open != "water" or len(pal.hits) != 4:
         lines.append(f"FAIL  water flyout tool={r.tool} n={len(pal.hits)}")
@@ -490,16 +517,22 @@ def selftest() -> list[str]:
         lines.append("ok    Aventine escolhe 0xAF")
     r = pal.click_grid("entertainment", (478, 300, 30, 24))
     r = pal.click_item("arena")
-    if r.tool != TOOL_ARENA or pal.open is not None:
+    if r.tool != TOOL_ARENA or pal.open is not None or r.message != "Cost: 700 Dn":
         lines.append(f"FAIL  arena {r.message} open={pal.open}")
     else:
-        lines.append("ok    Arena escolhe 0xE7")
+        lines.append("ok    Arena escolhe 0xE7 Cost: 700 Dn")
     r = pal.click_grid("entertainment", (478, 300, 30, 24))
     r = pal.click_item("circus")
     if r.tool != TOOL_CIRCUS or pal.open is not None:
         lines.append(f"FAIL  circus {r.tool} open={pal.open}")
     else:
         lines.append("ok    Circus escolhe 0xEB+0xEC")
+    r = pal.click_grid("health", (478, 330, 30, 24))
+    r = pal.click_item("hospital")
+    if r.tool != TOOL_HOSPITAL or r.message != "Cost: 500 Dn":
+        lines.append(f"FAIL  hospital {r.message}")
+    else:
+        lines.append("ok    Hospital Cost: 500 Dn")
     r = pal.click_grid("health", (478, 330, 30, 24))
     r = pal.click_item("baths")
     if r.tool != TOOL_BATHS or pal.open is not None:

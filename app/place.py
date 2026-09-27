@@ -7,7 +7,13 @@ and remaps) is refused. A cardinal neighbour that is already a bridge
 (`0x4E–0x51`, river+pad) is refused — 665DF walks only ±0x14 / ±0x640
 and will not flood river→river. Diagonals are allowed. Road will not
 write when ``+0 >= 0x7C`` (``FUN_000669c6`` ``0x66B8D``) — skip that
-cell, rest of the line still stamps. Clear: ``+0 >= 0x82`` (``0x68D2F``)
+cell, rest of the line still stamps — except a Wall ``0xC1``–``0xCA``
+/ existing Gate ``0xC0`` (``0x665DF`` wall ``+1`` ``0x02`` → pad+tower
+``0x24``, then ``0x67201`` Gate ``0xC0``) and an aqueduct ``0xCB``–``0xD6``
+(``0x669C6`` ``+1&0x40`` → ``0x67A6A`` over-road ``0xD5``/``0xD6``
+before the ``0x7C`` skip). Wall flood ``0x66F10`` on pad (``+1&0x20``)
+ORs ``+1|=0x04`` then the same Gate — order does not matter.
+Clear: ``+0 >= 0x82`` (``0x68D2F``)
 → rubble 0x05 (``FUN_000696e8``); garden ``0x78–0x7B`` and plaza/statue
 ``0x7C–0x7E`` share the ``< 0x82`` flatten (``FUN_000697fe`` → grass
 0x1A–0x1D; host 0x1C). Rubble → 0x1C (D.SAV / user). Multi-tile
@@ -27,14 +33,15 @@ T/cross ``0xD5``/``0xD6`` (``+1=0x60``). Road ``0x52–0x5C`` is allowed
 (Gate analog): LUT ``0x94E37`` ×2 writes ``0xD5`` (NS pipe) / ``0xD6``
 (EW pipe), ``+1=0x60``, ``+3=0x90``. Dry ``+9`` from 20230610 / FELIPE.
 Charge (``rebuild_pipe_charge``) only from a river-fed reservoir
-(cardinal ``+1&0x18``). ``FUN_0002a498(3,1)`` writes charge 3 through
-the whole ``+1&0xC0`` / ``0xBE`` / ``0xCB–0xD6`` component — including
-through reservoirs — so inland tanks stay wet (Achea spines are all
-charge 3; a 4th ``0xBE`` on the same aqueduct stays charged). Decay
-hops ``(3,0)`` / ``(2,0)`` still run but skip tiles already at 3.
-A 4-connected ``0xBE`` blob is one node (multi-click 2×2 does not
-burn hops). Isolated / disconnected aqueduct stays dry. Load rebuilds
-charge (F4) so ``+10`` / wet ``+4`` survive a round-trip.
+(cardinal ``+1&0x18``). ``FUN_0002a498(3,1)`` writes charge 3 along
+aqueducts only (does not enter ``0x80``). ``2a498(3,0)`` / ``(2,0)``
+then write 2 then 1 and stop inside each next ``0xBE`` (``2a635``).
+First river-fed tank is 3 (``3fdd0`` r=6); each later tank on the
+same trail steps down (2 → r=5, 1 → r=4, then dry). Aqueduct length
+does not add hops. Achea spines stay 3 because each ``0xBE`` is
+river-fed. A 4-connected ``0xBE`` blob is one node. Isolated /
+disconnected aqueduct stays dry. Load rebuilds charge (F4) so
+``+10`` / wet ``+4`` survive a round-trip.
 Clear wipes grass ``0xCB–0xD6`` to rubble ``0x05``; road-combo
 (``+3&0x80``) restores the road. Reservoir ``+9`` from LUT ``0x94E7F``
 (inlet on the tank wall when a pipe is cardinal).
@@ -47,13 +54,15 @@ tower ``0x04`` (Gate ``0x24`` counts; river ``0x10`` does not). Pieces
 ends; isolated → ``0xC8``. ``+4`` from ``0x94CEB[id*4]`` (``0x00``/``0x04``
 straights, ``0x08``–``0x0B`` corners, ``0x01``/``0x02``/``0x05``/``0x06``
 ends). T/cross are not in the 14-row table — keep the through axis
-(``0xC1`` if N+S else ``0xC2``). BUILD1B LUT columns already swap NS↔EW
-on odd facing — do not also remap ids in ``orient_terrain_id``. Gate
-``+4`` LUT ``0x94D17`` (NS ``0x92`` / EW ``0x93``).
+(``0xC1`` if N+S else ``0xC2``). BUILD1B LUT columns are zoom remaps
+(identity on wall ``+4`` 0–11) — they do **not** swap NS↔EW on facing.
+Paint remaps wall/aqueduct ``+0``/``+4`` in ``iso_paint_tile`` by walking
+the same NESW mask as roads (does not write the map). Gate ``+4`` LUT
+``0x94D17`` (NS ``0x92`` / EW ``0x93``) walks with the wall.
 Does **not** write road ``0x52–0x5C`` and must **not** run road retile —
 that was turning neighbour grass+``FLAG_PAD`` into a fake road. River
 refused except the documented road→bridge case. Drag-rect for 1×1 civics
-is treasury-atomic.
+may drive signed chunk 28 negative (EXE 0x30B2C).
 
 Click-drag (host): commit on mouse-up only. Road / Wall / Aqueduct =
 axis-aligned straight line (dominant |dx|≥|dy| → horizontal at start y,
@@ -63,7 +72,8 @@ Stamp tools (Barracks 3×3, Reservoir 1×1, any N×N): one footprint follows
 the cursor; ghost overlay; release places once. Place uses dirty iso (no
 full-map flush — that thumbnailed the canvas and looked like a zoom pop).
 Clear of a tall building still sets ``flush_iso``. Tent / civic-rect drag
-is **atomic** if treasury < cost×N. N×N>1×1 (forum / temple / theater /
+does **not** refuse when treasury < cost×N — 0x30B2C still subtracts.
+N×N>1×1 (forum / temple / theater /
 barracks / …) is stamp-follow and refuses the whole footprint if any
 cell is occupied (EXE ``69cfc`` / ``69f26``: ``+1&0xE7`` / river /
 walker — same-id 0xE4 is occupied, not a join). Circus 6×3 EW (0xEB+0xEC) / 3×6 NS
@@ -72,8 +82,20 @@ swaps the long axis. Paint remaps +4 along that W×H at facing 1–3
 (leftover pair at odd facing) so extra_rows still meet after rotate.
 Plaza is 1×1 rect on grass (EXE ``FUN_00068ad9`` ``+0 < 0x1E``)
 or on a road (host keep). Wall is a road-style
-line (gate when the line hits a road) and retires ``0xC1``–``0xCA``
-from neighbours (wall / gate / tower).
+line (gate when the line hits a road, or a road hits the wall)
+and retires ``0xC1``–``0xCA`` from neighbours (wall / gate / tower).
+Road on a wall / gate cell stamps the same Gate ``0xC0``
+(``+1=0x24``, ``+3=0x88``, ``+4`` from LUT ``0x94D17``). Road on an
+aqueduct (and aqueduct on a road) stamps over-road ``0xD5``/``0xD6``.
+Aqueduct on a wall (``0x67A6A`` ``+1&0x40|0x02``) and wall on an
+aqueduct (``0x67201`` ``0xCF``/``0xD0``) morph to ``0xBC`` (EW wall)
+/ ``0xBD`` (NS wall): ``+1=0x42``, ``+3=0x08``, ``+4=3``/``7``.
+Order does not matter. Charge still walks ``+1&0xC0``. The combo
+keeps wall bit ``0x02`` so Security flood (``+1&0x1E``) cannot walk
+through. ``+9`` is the CITYFIXT dry from the pipe-neighbour mask
+(same LUT ``0x94D8F`` as grass). Iso blits wall straights 0/4 plus
+that arcade so a crossing uses the through pipe, not a stub on
+every wall cell.
 
 Not the full EXE stamp. Tent 6 is observed (sav_c), not C2MODEL. City
 road / aqueduct / Palatine have no pinned city-cost slot — do not invent;
@@ -205,6 +227,7 @@ ID_WALL_END_N = 0xC8
 ID_WALL_END_E = 0xC9
 ID_WALL_END_W = 0xCA
 DRAW_WALL = 0x08
+DRAW_GATE = 0x88  # 0x67201 +3 for Gate 0xC0
 ID_PREFECTURE = 0xE3
 ID_BARRACKS = 0xE4
 ID_THEATER = 0xE5
@@ -285,6 +308,12 @@ DRAW_AQUEDUCT = 0x10
 DRAW_AQUEDUCT_ROAD = 0x90
 ID_AQUEDUCT_ROAD_NS = 0xD5
 ID_AQUEDUCT_ROAD_EW = 0xD6
+# 67a6a C2→0xBC / C1→0xBD; 67201 CF→0xBC / D0→0xBD. +4 3 / 7.
+ID_AQUEDUCT_WALL_EW = 0xBC
+ID_AQUEDUCT_WALL_NS = 0xBD
+VAR_AQUEDUCT_WALL_EW = 3
+VAR_AQUEDUCT_WALL_NS = 7
+FLAG_WALL = 0x02
 
 TOOL_TENT = "tent"
 TOOL_ROAD = "road"
@@ -594,11 +623,26 @@ def is_city_road(city: CityMap, x: int, y: int) -> bool:
     return tid < ID_TERRAIN_MAX and bool(flags & FLAG_PAD)
 
 
+def is_road_to_gate(city: CityMap, x: int, y: int) -> bool:
+    """Wall run / existing Gate — ``0x665DF`` +1&0x02 then ``0x67201`` pad+0x04."""
+    if not in_map(x, y):
+        return False
+    tid = city.tiles[city.offset(x, y)]
+    return tid == ID_GATE or is_wall_run_id(tid)
+
+
+def _is_road_join(city: CityMap, x: int, y: int) -> bool:
+    """Pad gather 0x6ADB0: city road / bridge, or Gate ``0xC0`` (+1 includes 0x20)."""
+    if is_city_road(city, x, y):
+        return True
+    return in_map(x, y) and city.tiles[city.offset(x, y)] == ID_GATE
+
+
 def _road_mask(city: CityMap, x: int, y: int) -> int:
     mask = 0
     bit = 1
     for dx, dy in _CARDINALS:
-        if is_city_road(city, x + dx, y + dy):
+        if _is_road_join(city, x + dx, y + dy):
             mask |= bit
         bit <<= 1
     return mask
@@ -673,11 +717,19 @@ def _clear_bridge(city: CityMap, x: int, y: int) -> int:
 
 
 def _debit(sim: SimState | None, cost: int) -> str | None:
+    """Treasury −cost and YTD constructions +cost (EXE 0x30B2C / 0x2F3FB).
+
+    0x30B2C is ``sub [0x102AAC], ebp`` with no funds compare — the signed
+    SavChunk 28 dword may go negative. [97] No Denarii! is 0x54dc5
+    (calendar, EAX=0x62) when treasury < 0 and broke_left == 0, not a
+    place refuse.
+    """
     if cost <= 0 or sim is None:
         return None
-    if sim.treasury < cost:
-        return f"tesouro {sim.treasury} < custo {cost}"
     sim.treasury -= cost
+    # 0x30B2C sub [0x102AAC]; 0x2F3FB add [0x102A2C], pending. Books only —
+    # WRAP does not debit construction again (0x56D39 ESTIMATE / 0x56C1C).
+    sim.construct_ytd = int(getattr(sim, "construct_ytd", 0)) + cost
     return None
 
 
@@ -783,7 +835,11 @@ def building_footprint_size(tid: int) -> int:
 
 
 def is_road_occupied(city: CityMap, x: int, y: int) -> bool:
-    """True when 669C6 @ 0x66B8D will not write a road id (+0 ≥ 0x7C)."""
+    """True when 669C6 @ 0x66B8D will not write a road id (+0 ≥ 0x7C).
+
+    Wall/gate (``+1&0x02`` / ``+1&0x04``) and aqueduct (``+1&0x40``)
+    rewrite first — this skip must not run for those merges.
+    """
     if not in_map(x, y):
         return True
     return city.tiles[city.offset(x, y)] >= ID_ROAD_OCCUPIED
@@ -1096,6 +1152,8 @@ def is_pipe(city: CityMap, x: int, y: int) -> bool:
     tid = city.tiles[off]
     if tid == ID_RESERVOIR:
         return True
+    if tid in (ID_AQUEDUCT_WALL_EW, ID_AQUEDUCT_WALL_NS):
+        return True
     return ID_AQUEDUCT_LO <= tid <= ID_AQUEDUCT_HI
 
 
@@ -1112,6 +1170,38 @@ def is_aqueduct_road_combo(city: CityMap, x: int, y: int) -> bool:
     if not is_aqueduct(city, x, y):
         return False
     return bool(city.tiles[city.offset(x, y) + 3] & 0x80)
+
+
+def is_wall_to_gate(city: CityMap, x: int, y: int) -> bool:
+    """66F10: pad (``+1&0x20``) not river → OR ``+1`` 0x04 → 67201 Gate 0xC0.
+
+    Same stamp as road-on-wall. Tests the pad bit *and* ``0x52–0x5C`` so
+    the wall brush cannot miss a city road (``is_city_road`` leftover-pad
+    grass still matches, like the EXE).
+    """
+    if not in_map(x, y) or is_bridge(city, x, y) or is_river(city, x, y):
+        return False
+    if is_plain_city_road(city, x, y):
+        return True
+    flags = city.tiles[city.offset(x, y) + 1]
+    if flags & FLAG_RIVER or flags & FLAG_TOWER:
+        return False
+    return bool(flags & FLAG_PAD)
+
+
+def is_road_to_aqueduct(city: CityMap, x: int, y: int) -> bool:
+    """669C6 ``+1&0x40`` → 67a6a over-road ``0xD5``/``0xD6`` (before 0x7C)."""
+    return is_aqueduct(city, x, y) and not is_aqueduct_road_combo(city, x, y)
+
+
+def is_aqueduct_wall_combo(city: CityMap, x: int, y: int) -> bool:
+    """Wall+pipe ``0xBC``/``0xBD`` — ``0x67A6A`` / ``0x67201`` morph."""
+    if not in_map(x, y):
+        return False
+    return city.tiles[city.offset(x, y)] in (
+        ID_AQUEDUCT_WALL_EW,
+        ID_AQUEDUCT_WALL_NS,
+    )
 
 
 def _is_water_source_adj(city: CityMap, x: int, y: int) -> bool:
@@ -1140,6 +1230,9 @@ def _pipe_component(city: CityMap, seeds: list[tuple[int, int]]) -> list[tuple[i
 def _reset_pipe_tile(city: CityMap, x: int, y: int) -> None:
     off = city.offset(x, y)
     city.tiles[off + 10] &= ~3
+    # 0xBC/0xBD +4 is EXE 3/7 (end-caps). Charge must not bump it.
+    if city.tiles[off] in (ID_AQUEDUCT_WALL_EW, ID_AQUEDUCT_WALL_NS):
+        return
     city.tiles[off + 4] = city.tiles[off + 9]
 
 
@@ -1149,6 +1242,8 @@ def _apply_pipe_charge(city: CityMap, x: int, y: int, charge: int) -> bool:
     if old >= charge:
         return False
     city.tiles[off + 10] = (city.tiles[off + 10] & ~3) | (charge & 3)
+    if city.tiles[off] in (ID_AQUEDUCT_WALL_EW, ID_AQUEDUCT_WALL_NS):
+        return True
     dry = city.tiles[off + 9]
     if city.tiles[off] == ID_RESERVOIR or city.tiles[off + 1] & FLAG_RESERVOIR:
         bump = charge
@@ -1203,17 +1298,16 @@ def _pipe_charge_hop(
     need: int,
     write: int,
     *,
-    through_reservoirs: bool = False,
+    enter_reservoirs: bool = False,
 ) -> None:
     """One ``FUN_0002a498`` pass.
 
     From every pipe whose ``+10&3 == need``, flood cardinal pipe
-    neighbours writing ``write``. ``2a498(3,1)`` sets
-    ``through_reservoirs`` so the first pass fills the component
-    (Achea: every connected ``0xBE`` is charge 3). Later hops follow
-    ``FUN_0002a635``: a reservoir blob takes the charge and stops that
-    ray. Skip when the tile already holds ``>= write``. Aqueduct length
-    does not add hops.
+    neighbours writing ``write``. ``2a498(3,1)`` does **not** enter
+    ``+1&0x80`` (aqueducts stay 3; the next tank is left for the decay
+    hops). ``2a498(3,0)`` / ``(2,0)`` write 2 then 1 and stop inside
+    the reservoir blob (``FUN_0002a635``). Skip when the tile already
+    holds ``>= write``. Aqueduct length does not add hops.
     """
     starts = [
         (x, y)
@@ -1227,11 +1321,13 @@ def _pipe_charge_hop(
         for nx, ny in _neighbor_ring(x, y):
             if (nx, ny) in seen or not is_pipe(city, nx, ny):
                 continue
+            if _is_reservoir_cell(city, nx, ny) and not enter_reservoirs:
+                continue
             if not _apply_pipe_charge(city, nx, ny, write):
                 seen.add((nx, ny))
                 continue
             seen.add((nx, ny))
-            if _is_reservoir_cell(city, nx, ny) and not through_reservoirs:
+            if _is_reservoir_cell(city, nx, ny):
                 _flood_reservoir_blob(city, nx, ny, write, seen)
                 continue
             stack.append((nx, ny))
@@ -1241,23 +1337,27 @@ def rebuild_pipe_charge(city: CityMap, seeds: list[tuple[int, int]]) -> list[tup
     """Place/Clear stand-in for FUN_00029e36.
 
     Dry every pipe in the component (``+4 = +9``), inject charge 3 only
-    on a river-fed reservoir (``FUN_0002a407`` + ``FUN_0002a18c``), then
-    the three EXE hops: ``2a498(3,1)`` write 3 *through* reservoirs,
-    ``2a498(3,0)`` write 2, ``2a498(2,0)`` write 1. Isolated or
-    disconnected aqueduct stays dry — do not seed from an aqueduct that
-    merely touches river.
+    on a river-fed reservoir blob (``FUN_0002a407`` + ``FUN_0002a18c``),
+    then the three EXE hops: ``2a498(3,1)`` write 3 on aqueducts only,
+    ``2a498(3,0)`` write 2 into the next tank and stop, ``2a498(2,0)``
+    write 1. Isolated or disconnected aqueduct stays dry — do not seed
+    from an aqueduct that merely touches river.
     """
     cells = _pipe_component(city, seeds)
     if not cells:
         return []
     for x, y in cells:
         _reset_pipe_tile(city, x, y)
+    seeded: set[tuple[int, int]] = set()
     for x, y in cells:
-        if _is_river_fed_reservoir(city, x, y):
-            _apply_pipe_charge(city, x, y, 3)
-    _pipe_charge_hop(city, cells, 3, 3, through_reservoirs=True)
-    _pipe_charge_hop(city, cells, 3, 2)
-    _pipe_charge_hop(city, cells, 2, 1)
+        if (x, y) in seeded or not _is_river_fed_reservoir(city, x, y):
+            continue
+        _apply_pipe_charge(city, x, y, 3)
+        seeded.add((x, y))
+        _flood_reservoir_blob(city, x, y, 3, seeded)
+    _pipe_charge_hop(city, cells, 3, 3, enter_reservoirs=False)
+    _pipe_charge_hop(city, cells, 3, 2, enter_reservoirs=True)
+    _pipe_charge_hop(city, cells, 2, 1, enter_reservoirs=True)
     return cells
 
 
@@ -1282,7 +1382,11 @@ def aqueduct_connects(
         nx, ny = x + dx, y + dy
         if pending is not None and (nx, ny) in pending:
             return True
-        if is_reservoir(city, nx, ny) or is_aqueduct(city, nx, ny):
+        if (
+            is_reservoir(city, nx, ny)
+            or is_aqueduct(city, nx, ny)
+            or is_aqueduct_wall_combo(city, nx, ny)
+        ):
             return True
     return False
 
@@ -1351,14 +1455,19 @@ def is_plaza_id(tid: int) -> bool:
     return ID_PLAZA <= tid <= ID_PLAZA_STATUE
 
 
+def is_worship_id(tid: int) -> bool:
+    return ID_SHRINE <= tid <= 0xAD
+
+
 def is_lv_amenity_id(tid: int) -> bool:
-    return is_garden_id(tid) or is_plaza_id(tid)
+    return is_garden_id(tid) or is_plaza_id(tid) or is_worship_id(tid)
 
 
 def _refresh_plaza_garden_lv(city: CityMap, sim: SimState | None) -> None:
     """Recompute +15 so Query sees plaza/garden splash without waiting a month."""
     pop = getattr(sim, "population", 0) if sim is not None else 0
-    refresh_land_value(city.tiles, population=pop)
+    adj = getattr(sim, "land_value_adj", 0) if sim is not None else 0
+    refresh_land_value(city.tiles, population=pop, land_adj=adj)
 
 
 def is_wall_run_id(tid: int) -> bool:
@@ -1366,7 +1475,11 @@ def is_wall_run_id(tid: int) -> bool:
 
 
 def is_wall_id(tid: int) -> bool:
-    return tid == ID_GATE or is_wall_run_id(tid)
+    return (
+        tid == ID_GATE
+        or is_wall_run_id(tid)
+        or tid in (ID_AQUEDUCT_WALL_EW, ID_AQUEDUCT_WALL_NS)
+    )
 
 
 # FUN_00067201 / LUT 0x94BAF ×14. Isolated is not in the table (province 0xC8).
@@ -1406,6 +1519,141 @@ _GATE_FROM_MASK: dict[int, int] = {
     0x5: 0x92,
     0xA: 0x93,
 }
+
+
+# Paint-only inverse of the 14-row LUTs. Isolated 0xC8/0xCB share a
+# sprite with the N/S cap; store the cap mask so a NS run's ends still
+# rematerialize after a 90° view rotate.
+_WALL_CANON_MASK: dict[int, int] = {
+    ID_WALL_NS: 0x05,
+    ID_WALL_EW: 0x0A,
+    ID_WALL_NE: 0x03,
+    ID_WALL_SE: 0x06,
+    ID_WALL_SW: 0x0C,
+    ID_WALL_NW: 0x09,
+    ID_WALL_END_S: 0x04,
+    ID_WALL_END_N: 0x01,
+    ID_WALL_END_E: 0x02,
+    ID_WALL_END_W: 0x08,
+}
+_AQ_CANON_MASK: dict[int, int] = {
+    0xCB: 0x04,
+    0xCC: 0x01,
+    0xCD: 0x02,
+    0xCE: 0x08,
+    0xCF: 0x05,
+    0xD0: 0x0A,
+    0xD1: 0x03,
+    0xD2: 0x06,
+    0xD3: 0x0C,
+    0xD4: 0x09,
+}
+_GATE_CANON_MASK: dict[int, int] = {
+    0x8E: 0x01,
+    0x8F: 0x02,
+    0x90: 0x04,
+    0x91: 0x08,
+    0x92: 0x05,
+    0x93: 0x0A,
+}
+
+
+def rotate_nesw_mask(mask: int, facing: int) -> int:
+    """N=1 E=2 S=4 W=8. One facing step is 90° CW — same as roads."""
+    rot = mask & 0x0F
+    for _ in range(int(facing) & 3):
+        rot = ((rot << 1) | (rot >> 3)) & 0x0F
+    return rot
+
+
+def _remap_aqueduct_variant(old_tid: int, variant: int, new_tid: int) -> int:
+    """Keep the charge bump on +4 (dry + 1/2). Combo 0xBC/0xBD is not here."""
+    old_dry = _AQUEDUCT_DRY.get(old_tid, variant)
+    new_dry = _AQUEDUCT_DRY.get(new_tid, variant)
+    return (new_dry + ((variant - old_dry) & 0xFF)) & 0xFF
+
+
+# +9 dry → a 14-row LUT id so facing can walk the NESW mask.
+_AQ_DRY_REP = {
+    0x79: 0xCF,
+    0x76: 0xD0,
+    0x7C: 0xD1,
+    0x7F: 0xD2,
+    0x82: 0xD3,
+    0x85: 0xD4,
+    0x73: 0xD5,
+    0x70: 0xD6,
+}
+
+
+def rotate_aqueduct_dry(dry: int, facing: int) -> int:
+    """Paint-only CITYFIXT +9 walk. 0x79 (NS/stub family) → 0x76 on odd facing."""
+    f = int(facing) & 3
+    if f == 0:
+        return dry & 0xFF
+    base = dry & 0xFF
+    bump = 0
+    tid = _AQ_DRY_REP.get(base)
+    if tid is None:
+        for cand, rep in _AQ_DRY_REP.items():
+            if base >= cand and (base - cand) <= 2:
+                tid = rep
+                bump = base - cand
+                base = cand
+                break
+    if tid is None:
+        return dry & 0xFF
+    if tid in (0xD5, 0xD6):
+        if f & 1:
+            new_tid = 0xD6 if tid == 0xD5 else 0xD5
+            return (_remap_aqueduct_variant(tid, base, new_tid) + bump) & 0xFF
+        return (base + bump) & 0xFF
+    mask = _AQ_CANON_MASK.get(tid)
+    if mask is None:
+        return dry & 0xFF
+    new_tid = aqueduct_id_for(rotate_nesw_mask(mask, f))
+    return (_remap_aqueduct_variant(tid, base, new_tid) + bump) & 0xFF
+
+
+def orient_autotile_art(tid: int, variant: int, facing: int) -> tuple[int, int]:
+    """Paint-only +0/+4 so wall / aqueduct / gate follow the view.
+
+    Does not write the map. Charge (+10), Security (+1 0x02), and Gate
+    id 0xC0 stay on the world tile. 0xD5/0xD6 (T/cross and over-road)
+    keep that family — they must not collapse to 0xCF/0xD0.
+    """
+    f = int(facing) & 3
+    if f == 0:
+        return tid, variant
+    if tid in (ID_AQUEDUCT_WALL_EW, ID_AQUEDUCT_WALL_NS):
+        if f & 1:
+            if tid == ID_AQUEDUCT_WALL_NS:
+                return ID_AQUEDUCT_WALL_EW, VAR_AQUEDUCT_WALL_EW
+            return ID_AQUEDUCT_WALL_NS, VAR_AQUEDUCT_WALL_NS
+        return tid, variant
+    if tid == ID_GATE:
+        mask = _GATE_CANON_MASK.get(variant)
+        if mask is None:
+            return tid, variant
+        return tid, gate_variant_for(rotate_nesw_mask(mask, f))
+    if ID_WALL_LO <= tid <= ID_WALL_HI:
+        mask = _WALL_CANON_MASK.get(tid)
+        if mask is None:
+            return tid, variant
+        new_id = wall_id_for(rotate_nesw_mask(mask, f))
+        return new_id, wall_variant_for(new_id)
+    if tid in (ID_AQUEDUCT_ROAD_NS, ID_AQUEDUCT_ROAD_EW):
+        if f & 1:
+            new_id = ID_AQUEDUCT_ROAD_EW if tid == ID_AQUEDUCT_ROAD_NS else ID_AQUEDUCT_ROAD_NS
+            return new_id, _remap_aqueduct_variant(tid, variant, new_id)
+        return tid, variant
+    if ID_AQUEDUCT_LO <= tid <= ID_AQUEDUCT_HI:
+        mask = _AQ_CANON_MASK.get(tid)
+        if mask is None:
+            return tid, variant
+        new_id = aqueduct_id_for(rotate_nesw_mask(mask, f))
+        return new_id, _remap_aqueduct_variant(tid, variant, new_id)
+    return tid, variant
 
 
 def wall_id_for(mask: int) -> int:
@@ -1662,9 +1910,88 @@ def _is_road_combo_cell(city: CityMap, x: int, y: int) -> bool:
     return is_plain_city_road(city, x, y) or is_aqueduct_road_combo(city, x, y)
 
 
-def _write_aqueduct_cell(city: CityMap, x: int, y: int) -> int:
+def _wall_run_is_ns(
+    city: CityMap,
+    x: int,
+    y: int,
+    pending: set[tuple[int, int]] | None = None,
+    *,
+    horizontal: bool | None = None,
+) -> bool:
+    """Wall axis for 0xBC/0xBD. 67a6a uses C1/C2; 67201 uses CF→EW / D0→NS."""
+    if horizontal is True:
+        return False
+    if horizontal is False:
+        return True
+    tid = city.tiles[city.offset(x, y)]
+    if tid in (
+        ID_WALL_NS,
+        ID_WALL_END_N,
+        ID_WALL_END_S,
+        ID_AQUEDUCT_WALL_NS,
+    ):
+        return True
+    if tid in (
+        ID_WALL_EW,
+        ID_WALL_END_E,
+        ID_WALL_END_W,
+        ID_AQUEDUCT_WALL_EW,
+    ):
+        return False
+    if tid in (0xCF, 0xCC, 0xCB, ID_AQUEDUCT_ROAD_NS):
+        return False
+    if tid in (0xD0, 0xCD, 0xCE, ID_AQUEDUCT_ROAD_EW):
+        return True
+    mask = _fort_join_mask(city, x, y, pending)
+    ns, ew = mask & 0x05, mask & 0x0A
+    if ns == 0x05:
+        return True
+    if ew == 0x0A:
+        return False
+    if ns:
+        return True
+    if ew:
+        return False
+    pmask = _pipe_mask(city, x, y, pending)
+    if (pmask & 0x05) and not (pmask & 0x0A):
+        return False
+    return True
+
+
+def _write_aqueduct_wall_cell(
+    city: CityMap,
+    x: int,
+    y: int,
+    pending: set[tuple[int, int]] | None = None,
+    *,
+    horizontal: bool | None = None,
+) -> int:
+    """``0xBC``/``0xBD`` ``+1=0x42`` ``+3=0x08`` ``+4=3``/``7``.
+
+    ``+9`` is the CITYFIXT dry from the pipe-neighbour mask (``0x94D8F``),
+    not the wall end-cap. Charge leaves +4 at 3/7; blit reads +9.
+    """
+    ns = _wall_run_is_ns(city, x, y, pending, horizontal=horizontal)
+    tid = ID_AQUEDUCT_WALL_NS if ns else ID_AQUEDUCT_WALL_EW
+    var = VAR_AQUEDUCT_WALL_NS if ns else VAR_AQUEDUCT_WALL_EW
+    dry = _aqueduct_variant(aqueduct_id_for(_pipe_mask(city, x, y, pending)))
+    _write_building(
+        city, x, y, tid, FLAG_PIPE | FLAG_WALL, DRAW_WALL, var, dry=dry
+    )
+    return tid
+
+
+def _write_aqueduct_cell(
+    city: CityMap, x: int, y: int, *, force_road: bool = False
+) -> int:
+    tid0 = city.tiles[city.offset(x, y)]
+    if is_wall_run_id(tid0) or tid0 in (
+        ID_AQUEDUCT_WALL_EW,
+        ID_AQUEDUCT_WALL_NS,
+    ):
+        return _write_aqueduct_wall_cell(city, x, y)
     mask = _pipe_mask(city, x, y)
-    if _is_road_combo_cell(city, x, y):
+    if force_road or _is_road_combo_cell(city, x, y):
         tid = aqueduct_road_id_for(mask)
         flags = FLAG_PIPE | FLAG_PAD
         draw = DRAW_AQUEDUCT_ROAD
@@ -1683,12 +2010,23 @@ def aqueduct_preview_cells(
     city: CityMap,
     ok: list[tuple[int, int]],
     stamp: list[tuple[int, int]],
-) -> list[tuple[int, int, int, int]]:
-    """``(x, y, id, +4)`` for the rubber-band line, same autotile as commit."""
+) -> list[tuple[int, ...]]:
+    """``(x, y, id, +4[, +9])`` for the rubber-band line, same autotile as commit."""
     pending = set(stamp)
-    out: list[tuple[int, int, int, int]] = []
+    out: list[tuple[int, ...]] = []
     for x, y in ok:
         mask = _pipe_mask(city, x, y, pending)
+        existing = city.tiles[city.offset(x, y)]
+        if is_wall_run_id(existing) or existing in (
+            ID_AQUEDUCT_WALL_EW,
+            ID_AQUEDUCT_WALL_NS,
+        ):
+            ns = _wall_run_is_ns(city, x, y, pending)
+            tid = ID_AQUEDUCT_WALL_NS if ns else ID_AQUEDUCT_WALL_EW
+            var = VAR_AQUEDUCT_WALL_NS if ns else VAR_AQUEDUCT_WALL_EW
+            dry = _aqueduct_variant(aqueduct_id_for(mask))
+            out.append((x, y, tid, var, dry))
+            continue
         if _is_road_combo_cell(city, x, y):
             tid = aqueduct_road_id_for(mask)
         else:
@@ -1701,7 +2039,11 @@ def _retile_aqueducts(city: CityMap, cells: list[tuple[int, int]]) -> list[tuple
     dirty: list[tuple[int, int]] = []
     seen: set[tuple[int, int]] = set()
     for x, y in cells:
-        if (x, y) in seen or not is_aqueduct(city, x, y):
+        if (x, y) in seen:
+            continue
+        if not (
+            is_aqueduct(city, x, y) or is_aqueduct_wall_combo(city, x, y)
+        ):
             continue
         seen.add((x, y))
         _write_aqueduct_cell(city, x, y)
@@ -1753,6 +2095,37 @@ def _civic_unit_cost(tool: str) -> int:
     if tool == TOOL_WALL:
         return COST_WALL
     return 0
+
+
+# FUN_00061A67: C2.ENG [51]+0 then 0x26f95 + suffix at 0x90d4b.
+COST_HUD_ENG_SLOT = 51
+COST_HUD_SUFFIX = " Dn"
+
+
+def tool_unit_cost(tool: str | None) -> int:
+    """Per-stamp debit. Same integers 0x30B2C subtracts / 0x61A67 paints.
+
+    Table is EXE ``0x9674B`` (C2MODEL ``[96:124]``) plus observed Tent 6
+    and Reservoir 51. Road / aqueduct / Palatine stay 0 — no pinned city slot.
+    """
+    if not tool or tool in (TOOL_CLEAR, TOOL_QUERY, TOOL_ROAD, TOOL_AQUEDUCT):
+        return 0
+    if tool == TOOL_TENT:
+        return COST_TENT
+    return _civic_unit_cost(tool)
+
+
+def cost_hud_text(amount: int, eng=None) -> str:
+    """``Cost: 700 Dn`` — sidebar caption when a construction tool is live."""
+    n = int(amount)
+    if n <= 0:
+        return ""
+    prefix = "Cost: "
+    if eng is not None:
+        got = eng.skip(COST_HUD_ENG_SLOT, 0)
+        if got:
+            prefix = got
+    return f"{prefix}{n}{COST_HUD_SUFFIX}"
 
 
 def _civic_already_id(tool: str) -> int:
@@ -1935,7 +2308,11 @@ def _write_barracks(city: CityMap, ox: int, oy: int) -> list[tuple[int, int]]:
 def _wall_kind(city: CityMap, x: int, y: int) -> str:
     if not in_map(x, y) or is_river(city, x, y):
         return "skip"
-    if is_city_road(city, x, y) and not is_bridge(city, x, y):
+    if is_wall_to_gate(city, x, y):
+        return "stamp"
+    if is_aqueduct_wall_combo(city, x, y):
+        return "keep"
+    if is_aqueduct(city, x, y) and not is_aqueduct_road_combo(city, x, y):
         return "stamp"
     tid = city.tiles[city.offset(x, y)]
     if is_wall_id(tid):
@@ -1943,6 +2320,21 @@ def _wall_kind(city: CityMap, x: int, y: int) -> str:
     if tid >= ID_TERRAIN_MAX:
         return "skip"
     return "stamp"
+
+
+def _write_gate_cell(
+    city: CityMap,
+    x: int,
+    y: int,
+    pending: set[tuple[int, int]] | None = None,
+    *,
+    horizontal: bool | None = None,
+) -> int:
+    """Gate ``0xC0`` ``+1=0x24`` ``+3=0x88`` — ``0x67201`` @ ``0x67422``."""
+    mask = _fort_join_mask(city, x, y, pending)
+    var = gate_variant_for(mask, horizontal=horizontal)
+    _write_building(city, x, y, ID_GATE, 0x24, DRAW_GATE, var)
+    return ID_GATE
 
 
 def _write_wall_cell(
@@ -1953,11 +2345,15 @@ def _write_wall_cell(
     *,
     horizontal: bool | None = None,
 ) -> int:
+    if is_wall_to_gate(city, x, y):
+        return _write_gate_cell(city, x, y, pending, horizontal=horizontal)
+    if is_aqueduct_wall_combo(city, x, y) or (
+        is_aqueduct(city, x, y) and not is_aqueduct_road_combo(city, x, y)
+    ):
+        return _write_aqueduct_wall_cell(
+            city, x, y, pending, horizontal=horizontal
+        )
     mask = _fort_join_mask(city, x, y, pending)
-    if is_city_road(city, x, y) and not is_bridge(city, x, y):
-        var = gate_variant_for(mask, horizontal=horizontal)
-        _write_building(city, x, y, ID_GATE, 0x24, 0x88, var)
-        return ID_GATE
     tid = wall_id_for(mask)
     _write_building(city, x, y, tid, 0x02, DRAW_WALL, wall_variant_for(tid))
     return tid
@@ -1967,16 +2363,27 @@ def wall_preview_cells(
     city: CityMap,
     ok: list[tuple[int, int]],
     stamp: list[tuple[int, int]],
-) -> list[tuple[int, int, int, int]]:
-    """``(x, y, id, +4)`` for the rubber-band line, same autotile as commit."""
+) -> list[tuple[int, ...]]:
+    """``(x, y, id, +4[, +9])`` for the rubber-band line, same autotile as commit."""
     pending = set(stamp)
-    out: list[tuple[int, int, int, int]] = []
+    out: list[tuple[int, ...]] = []
     for x, y in ok:
         mask = _fort_join_mask(city, x, y, pending)
         existing = city.tiles[city.offset(x, y)]
-        on_road = is_city_road(city, x, y) and not is_bridge(city, x, y)
+        on_road = is_wall_to_gate(city, x, y)
         if existing == ID_GATE or ((x, y) in pending and on_road):
             out.append((x, y, ID_GATE, gate_variant_for(mask)))
+            continue
+        if existing in (ID_AQUEDUCT_WALL_EW, ID_AQUEDUCT_WALL_NS) or (
+            (x, y) in pending
+            and is_aqueduct(city, x, y)
+            and not is_aqueduct_road_combo(city, x, y)
+        ):
+            ns = _wall_run_is_ns(city, x, y, pending)
+            tid = ID_AQUEDUCT_WALL_NS if ns else ID_AQUEDUCT_WALL_EW
+            var = VAR_AQUEDUCT_WALL_NS if ns else VAR_AQUEDUCT_WALL_EW
+            dry = _aqueduct_variant(aqueduct_id_for(_pipe_mask(city, x, y, pending)))
+            out.append((x, y, tid, var, dry))
             continue
         tid = wall_id_for(mask)
         out.append((x, y, tid, wall_variant_for(tid)))
@@ -2020,15 +2427,20 @@ def _aqueduct_kind(
 ) -> str:
     if not in_map(x, y) or is_river(city, x, y):
         return "skip"
-    if is_aqueduct(city, x, y):
+    if is_aqueduct(city, x, y) or is_aqueduct_wall_combo(city, x, y):
         return "keep"
     if is_plain_city_road(city, x, y):
         if not aqueduct_connects(city, x, y, pending):
             return "skip"
         return "stamp"
+    tid = city.tiles[city.offset(x, y)]
+    if is_wall_run_id(tid):
+        if not aqueduct_connects(city, x, y, pending):
+            return "skip"
+        return "stamp"
     if is_city_road(city, x, y):
         return "skip"
-    if city.tiles[city.offset(x, y)] >= ID_TERRAIN_MAX:
+    if tid >= ID_TERRAIN_MAX:
         return "skip"
     if not aqueduct_connects(city, x, y, pending):
         return "skip"
@@ -2047,13 +2459,17 @@ def _classify_aqueduct_span(
     for x, y in cells:
         if not in_map(x, y) or is_river(city, x, y):
             continue
-        if is_aqueduct(city, x, y):
+        if is_aqueduct(city, x, y) or is_aqueduct_wall_combo(city, x, y):
             keep.add((x, y))
             continue
         if is_plain_city_road(city, x, y):
             candidates.add((x, y))
             continue
-        if is_city_road(city, x, y) or city.tiles[city.offset(x, y)] >= ID_TERRAIN_MAX:
+        tid = city.tiles[city.offset(x, y)]
+        if is_wall_run_id(tid):
+            candidates.add((x, y))
+            continue
+        if is_city_road(city, x, y) or tid >= ID_TERRAIN_MAX:
             continue
         candidates.add((x, y))
 
@@ -2133,6 +2549,34 @@ def try_place(
             dirty = [(x, y)]
             dirty.extend(_retile_roads(city, _neighbor_ring(x, y)))
             return PlaceResult(True, f"ponte {bid:#x} em ({x},{y})", dirty=dirty)
+        if is_road_to_gate(city, x, y):
+            _write_gate_cell(city, x, y)
+            dirty = [(x, y)]
+            ring = _neighbor_ring(x, y)
+            dirty.extend(_retile_walls(city, [(x, y), *ring]))
+            dirty.extend(_retile_roads(city, ring))
+            dirty.extend(_retile_towers(city, [(x, y), *ring]))
+            return PlaceResult(
+                True,
+                f"Gate {ID_GATE:#x} em ({x},{y})",
+                dirty=list(dict.fromkeys(dirty)),
+            )
+        if is_aqueduct_road_combo(city, x, y):
+            return PlaceResult(False, f"já aqueduto+estrada em ({x},{y})")
+        if is_road_to_aqueduct(city, x, y):
+            _write_aqueduct_cell(city, x, y, force_road=True)
+            dirty = [(x, y)]
+            ring = _neighbor_ring(x, y)
+            dirty.extend(_retile_aqueducts(city, [(x, y), *ring]))
+            dirty.extend(_retile_reservoirs(city, [(x, y), *ring]))
+            dirty.extend(rebuild_pipe_charge(city, [(x, y)]))
+            dirty.extend(_retile_roads(city, ring))
+            tid = city.tiles[city.offset(x, y)]
+            return PlaceResult(
+                True,
+                f"aqueduto+estrada {tid:#x} em ({x},{y})",
+                dirty=list(dict.fromkeys(dirty)),
+            )
         if is_road_occupied(city, x, y):
             return PlaceResult(False, f"ocupado em ({x},{y}) — +0 >= 0x7C")
         _write_terrain(city, x, y, ID_ROAD_NS, FLAG_PAD)
@@ -2225,7 +2669,7 @@ def try_place(
             return PlaceResult(False, f"recusa wall em ({x},{y})")
         if kind == "keep":
             return PlaceResult(False, f"já wall em ({x},{y})")
-        on_road = is_city_road(city, x, y) and not is_bridge(city, x, y)
+        on_road = is_wall_to_gate(city, x, y)
         cost = COST_GATE if on_road else COST_WALL
         err = _debit(sim, cost)
         if err:
@@ -2236,6 +2680,8 @@ def try_place(
         dirty.extend(_retile_walls(city, [(x, y), *ring]))
         dirty.extend(_retile_roads(city, ring))
         dirty.extend(_retile_towers(city, [(x, y), *ring]))
+        if tid in (ID_AQUEDUCT_WALL_EW, ID_AQUEDUCT_WALL_NS):
+            dirty.extend(rebuild_pipe_charge(city, [(x, y)]))
         name = "Gate" if tid == ID_GATE else "Wall"
         return PlaceResult(
             True,
@@ -2337,7 +2783,9 @@ def try_place(
             dirty.extend(_retile_towers(city, ring))
             dirty.extend(_retile_walls(city, ring))
         if tool == TOOL_AQUEDUCT:
-            dirty.extend(_retile_aqueducts(city, [(x, y), *_neighbor_ring(x, y)]))
+            ring_aq = [(x, y), *_neighbor_ring(x, y)]
+            dirty.extend(_retile_aqueducts(city, ring_aq))
+            dirty.extend(_retile_walls(city, ring_aq))
         if tool in (TOOL_AQUEDUCT, TOOL_RESERVOIR):
             dirty.extend(_retile_reservoirs(city, [(x, y), *_neighbor_ring(x, y)]))
             dirty.extend(rebuild_pipe_charge(city, [(x, y)]))
@@ -2354,7 +2802,7 @@ def try_place(
             dirty.extend(_retile_roads(city, _neighbor_ring(x, y)))
         if tool in _TALL_TOOLS:
             dirty = expand_iso_dirty(dirty, [(x, y)])
-        if tool in (TOOL_PLAZA, TOOL_GARDEN):
+        if tool in (TOOL_PLAZA, TOOL_GARDEN, TOOL_SHRINE, TOOL_TEMPLE, TOOL_BASILICA):
             _refresh_plaza_garden_lv(city, sim)
         return PlaceResult(
             True,
@@ -2395,6 +2843,8 @@ def query_tile(city: CityMap, x: int, y: int) -> str:
         bits.append(f"aqueduct {t.terrain_id:#x}")
         if t.draw & 0x80:
             bits.append("sobre estrada")
+    if t.terrain_id in (ID_AQUEDUCT_WALL_EW, ID_AQUEDUCT_WALL_NS):
+        bits.append(f"aqueduct+wall {t.terrain_id:#x}")
     if t.terrain_id == ID_WELL:
         bits.append("Well")
     if t.terrain_id == ID_FOUNTAIN:
@@ -2576,6 +3026,10 @@ def _road_line_kind(
     """'stamp' / 'keep' (already road or bridge) / 'skip' (curve, adj, occupied)."""
     if not in_map(x, y):
         return "skip"
+    if is_aqueduct_road_combo(city, x, y):
+        return "keep"
+    if is_road_to_aqueduct(city, x, y):
+        return "stamp"
     if is_city_road(city, x, y):
         return "keep"
     if is_river(city, x, y):
@@ -2587,6 +3041,8 @@ def _road_line_kind(
             for dx, dy in _CARDINALS:
                 if (x + dx, y + dy) in pending_bridges:
                     return "skip"
+        return "stamp"
+    if is_road_to_gate(city, x, y):
         return "stamp"
     if is_road_occupied(city, x, y):
         return "skip"
@@ -2639,7 +3095,11 @@ def preview_span(
     treasury: int = 0,
     facing: int = 0,
 ) -> DragPreview:
-    """Classify a rubber-band without writing tiles or debiting."""
+    """Classify a rubber-band without writing tiles or debiting.
+
+    ``treasury`` stays in the signature for callers; EXE 0x30B2C does not refuse.
+    """
+    _ = treasury
     cells = span_cells(tool, x0, y0, x1, y1, facing)
     xa, xb = (min(x0, x1), max(x0, x1))
     ya, yb = (min(y0, y1), max(y0, y1))
@@ -2685,13 +3145,7 @@ def preview_span(
                 skip.append((x, y))
         cost = COST_TENT * len(stamp)
         refuse = None
-        if stamp and treasury < cost:
-            refuse = (
-                f"tesouro {treasury} < {cost} ({len(stamp)} tendas) - "
-                f"arrasto recusado (tudo ou nada)"
-            )
-            message = f"Housing {width}x{height}  {refuse}"
-        elif not stamp:
+        if not stamp:
             message = f"Housing {width}x{height}  nenhuma tenda nova"
         else:
             message = f"Housing {width}x{height} = {len(stamp)}  custo {cost}"
@@ -2738,7 +3192,7 @@ def preview_span(
         cost = 0
         n_gate = 0
         for x, y in stamp:
-            if is_city_road(city, x, y) and not is_bridge(city, x, y):
+            if is_wall_to_gate(city, x, y):
                 cost += COST_GATE
                 n_gate += 1
             else:
@@ -2746,12 +3200,6 @@ def preview_span(
         refuse = None
         if not stamp:
             message = f"Wall {width}x{height}  nenhum novo"
-        elif treasury < cost:
-            refuse = (
-                f"tesouro {treasury} < {cost} ({len(stamp)}) - "
-                f"arrasto recusado (tudo ou nada)"
-            )
-            message = f"Wall {len(stamp)}  {refuse}"
         else:
             extra = f"  {n_gate} gate" if n_gate else ""
             message = f"Wall {len(stamp)}{extra}  custo {cost}"
@@ -2776,9 +3224,6 @@ def preview_span(
             message = refuse
         elif not stamp:
             message = f"já {label} em ({x1},{y1})"
-        elif unit and treasury < cost:
-            refuse = f"tesouro {treasury} < {cost}"
-            message = f"{label} {w}x{h}  {refuse}"
         else:
             paid = f"  custo {cost}" if cost else ""
             message = f"{label} {w}x{h} NO ({x1},{y1}){paid}"
@@ -2807,13 +3252,7 @@ def preview_span(
         cost = unit * len(stamp)
         label = _tool_label(tool)
         refuse = None
-        if stamp and unit and treasury < cost:
-            refuse = (
-                f"tesouro {treasury} < {cost} ({len(stamp)}) - "
-                f"arrasto recusado (tudo ou nada)"
-            )
-            message = f"{label} {width}x{height}  {refuse}"
-        elif not stamp:
+        if not stamp:
             message = f"{label} {width}x{height}  nenhum novo"
         else:
             extra = f"  custo {cost}" if cost else ""
@@ -2836,7 +3275,7 @@ def try_place_span(
     sim: SimState | None = None,
     facing: int = 0,
 ) -> PlaceResult:
-    """Commit a rubber-band on mouse-up. Tent / civic drag is treasury-atomic."""
+    """Commit a rubber-band on mouse-up. Overspend still stamps (0x30B2C)."""
     if tool == TOOL_QUERY:
         return try_place(city, x1, y1, tool, sim, facing=facing)
     if tool in STAMP_TOOLS:
@@ -2887,6 +3326,7 @@ def try_place_span(
             dirty.extend(_retile_walls(city, list(preview.stamp) + ring))
         if tool == TOOL_AQUEDUCT:
             dirty.extend(_retile_aqueducts(city, list(preview.stamp) + ring))
+            dirty.extend(_retile_walls(city, list(preview.stamp) + ring))
         if tool in (TOOL_AQUEDUCT, TOOL_RESERVOIR):
             dirty.extend(_retile_reservoirs(city, list(preview.stamp) + ring))
             dirty.extend(rebuild_pipe_charge(city, list(preview.stamp)))
@@ -2905,7 +3345,7 @@ def try_place_span(
             dirty.extend(_retile_roads(city, ring))
         if tool in _TALL_TOOLS:
             dirty = expand_iso_dirty(dirty, list(preview.stamp))
-        if tool in (TOOL_PLAZA, TOOL_GARDEN):
+        if tool in (TOOL_PLAZA, TOOL_GARDEN, TOOL_SHRINE, TOOL_TEMPLE, TOOL_BASILICA):
             _refresh_plaza_garden_lv(city, sim)
         n = len(preview.stamp)
         paid = f"  -{preview.cost}" if preview.cost else ""
@@ -2934,6 +3374,13 @@ def try_place_span(
         dirty.extend(_retile_walls(city, list(preview.stamp) + ring))
         dirty.extend(_retile_roads(city, ring))
         dirty.extend(_retile_towers(city, list(preview.stamp) + ring))
+        pipe_hits = [
+            c
+            for c in preview.stamp
+            if is_aqueduct_wall_combo(city, c[0], c[1])
+        ]
+        if pipe_hits:
+            dirty.extend(rebuild_pipe_charge(city, pipe_hits))
         extra = f"  {n_gate} gate" if n_gate else ""
         paid = f"  -{preview.cost}" if preview.cost else ""
         return PlaceResult(
@@ -2971,6 +3418,20 @@ def try_place_span(
             done.add((x, y))
     if tool == TOOL_ROAD:
         dirty.extend(_retile_roads(city, list(preview.ok)))
+        wall_ring: list[tuple[int, int]] = list(preview.ok)
+        for x, y in preview.ok:
+            wall_ring.extend(_neighbor_ring(x, y))
+        dirty.extend(_retile_walls(city, wall_ring))
+        dirty.extend(_retile_towers(city, wall_ring))
+        aq_ring: list[tuple[int, int]] = []
+        for x, y in preview.ok:
+            if is_aqueduct(city, x, y) or is_pipe(city, x, y):
+                aq_ring.append((x, y))
+                aq_ring.extend(_neighbor_ring(x, y))
+        if aq_ring:
+            dirty.extend(_retile_aqueducts(city, aq_ring))
+            dirty.extend(_retile_reservoirs(city, aq_ring))
+            dirty.extend(rebuild_pipe_charge(city, list(preview.ok)))
         return PlaceResult(
             True, f"Estrada {n_ok}{extra}", dirty=list(dict.fromkeys(dirty))
         )
@@ -3000,10 +3461,13 @@ def selftest() -> list[str]:
 
     sim.treasury = 5
     r = try_place(city, 11, 10, TOOL_TENT, sim)
-    if r.ok or sim.treasury != 5:
-        lines.append(f"FAIL  tent should refuse treasury {sim.treasury}")
+    if not r.ok or sim.treasury != 5 - COST_TENT or city.tiles[city.offset(11, 10)] != ID_TENT:
+        lines.append(f"FAIL  tent overspend {r.message} treas={sim.treasury}")
     else:
-        lines.append("ok    tent refuse if treasury < 6")
+        lines.append("ok    tent places when tesouro < 6 (signed chunk 28)")
+    city.tiles[city.offset(11, 10)] = 0x14
+    city.tiles[city.offset(11, 10) + 1] = 0
+    city.tiles[city.offset(11, 10) + 15] = 0
 
     sim.treasury = 20
     city.tiles[city.offset(10, 11)] = 0x14
@@ -3205,12 +3669,19 @@ def selftest() -> list[str]:
         city.tiles[city.offset(x, y)] = 0x14
     sim = SimState(treasury=10)
     r = try_place_span(city, 10, 10, 12, 11, TOOL_TENT, sim)
-    if r.ok or sim.treasury != 10:
-        lines.append(f"FAIL  tent span atomic {r.message} treas={sim.treasury}")
-    elif any(city.tiles[city.offset(x, y)] == ID_TENT for x, y in rect_cells(10, 10, 12, 11)):
-        lines.append("FAIL  tent span atomic wrote tiles")
+    n_tents = sum(
+        1
+        for x, y in rect_cells(10, 10, 12, 11)
+        if city.tiles[city.offset(x, y)] == ID_TENT
+    )
+    if not r.ok or sim.treasury != 10 - 36 or n_tents != 6:
+        lines.append(f"FAIL  tent span overspend {r.message} treas={sim.treasury} n={n_tents}")
     else:
-        lines.append("ok    Housing arrasto atomico (10 < 36) - nada escrito")
+        lines.append("ok    Housing arrasto places when tesouro < custo (10-36)")
+    for x, y in ((10, 10), (11, 10), (12, 10), (10, 11), (11, 11), (12, 11)):
+        city.tiles[city.offset(x, y)] = 0x14
+        city.tiles[city.offset(x, y) + 1] = 0
+        city.tiles[city.offset(x, y) + 15] = 0
 
     sim.treasury = 20
     r = try_place_span(city, 10, 10, 11, 10, TOOL_TENT, sim)
@@ -3293,10 +3764,13 @@ def selftest() -> list[str]:
     city.tiles[city.offset(15, 15)] = 0x14
     sim = SimState(treasury=50)
     r = try_place(city, 15, 15, TOOL_RESERVOIR, sim)
-    if r.ok or sim.treasury != 50:
-        lines.append(f"FAIL  reservoir treasury {r.message} treas={sim.treasury}")
+    if not r.ok or sim.treasury != 50 - COST_RESERVOIR:
+        lines.append(f"FAIL  reservoir overspend {r.message} treas={sim.treasury}")
     else:
-        lines.append("ok    Reservoir recusa tesouro < 51")
+        lines.append("ok    Reservoir places when tesouro < 51")
+    for dx, dy in ((0, 0), (1, 0), (0, 1), (1, 1)):
+        city.tiles[city.offset(15 + dx, 15 + dy)] = 0x14
+        city.tiles[city.offset(15 + dx, 15 + dy) + 1] = 0
     sim.treasury = 51
     r = try_place(city, 15, 15, TOOL_RESERVOIR, sim)
     t = city.tile(15, 15)
@@ -3591,11 +4065,27 @@ def selftest() -> list[str]:
 
     city.tiles[city.offset(36, 36)] = 0xD0
     city.tiles[city.offset(36, 36) + 1] = FLAG_PIPE
+    city.tiles[city.offset(36, 36) + 3] = DRAW_AQUEDUCT
+    city.tiles[city.offset(36, 36) + 10] = 0
     r = try_place(city, 36, 36, TOOL_ROAD, sim)
-    if r.ok or city.tiles[city.offset(36, 36)] != 0xD0:
-        lines.append(f"FAIL  road on aqueduct {r.message}")
+    iso_combo = city.tile(36, 36)
+    if (
+        not r.ok
+        or iso_combo.terrain_id not in (ID_AQUEDUCT_ROAD_NS, ID_AQUEDUCT_ROAD_EW)
+        or iso_combo.flags != (FLAG_PIPE | FLAG_PAD)
+        or iso_combo.draw != DRAW_AQUEDUCT_ROAD
+        or (iso_combo.coverage & 3) != 0
+    ):
+        lines.append(
+            f"FAIL  road-on-aqueduct {r.message} "
+            f"id={iso_combo.terrain_id:#x} +1={iso_combo.flags:#x} "
+            f"+3={iso_combo.draw:#x} +10={iso_combo.coverage:#x}"
+        )
     else:
-        lines.append("ok    estrada recusa aqueduto 0xD0")
+        lines.append(
+            f"ok    road-on-aqueduct 0xD0 -> {iso_combo.terrain_id:#x} "
+            f"+3=0x90 (seco isolado)"
+        )
     city.tiles[city.offset(36, 37)] = ID_RESERVOIR
     city.tiles[city.offset(36, 37) + 1] = FLAG_RESERVOIR
     r = try_place(city, 36, 37, TOOL_ROAD, sim)
@@ -3854,18 +4344,19 @@ def selftest() -> list[str]:
     if (
         not r.ok
         or not r2.ok
-        or (inland.coverage & 3) != 3
-        or inland.variant != 0x75
+        or (inland.coverage & 3) != 2
+        or inland.variant != (inland.overlay_anim + 2) & 0xFF
     ):
         lines.append(
             f"FAIL  inland fill aq={r.message} be={r2.message} "
             f"+10={inland.coverage:#x} +4={inland.variant:#x}"
+            f"+9={inland.overlay_anim:#x}"
         )
     else:
-        lines.append("ok    Reservoir interior enche via aqueduto")
+        lines.append("ok    Reservoir interior enche via aqueduto (carga 2)")
 
-    # FUN_00029e36: 2a498(3,1) fills the connected component (Achea all-3).
-    # Fourth 0xBE stays wet. Aqueduct length is not a hop.
+    # FUN_00029e36: first river-fed tank 3; each later 0xBE steps down.
+    # 2a498(3,1) keeps aqueducts at 3; length is not a hop.
     hop = CityMap()
     hop.source = "pipe-hops"
     # y=10: river, BE0, AQ×3, BE1, AQ, BE2, AQ, BE3, AQ, BE4
@@ -3886,15 +4377,36 @@ def selftest() -> list[str]:
             hop.tiles[off + 9] = 0x76
     rebuild_pipe_charge(hop, [(3, 10)])
     hop_got = [hop.tile(x, 10).coverage & 3 for x in chain_x]
-    if hop_got != [3, 3, 3, 3, 3]:
-        lines.append(f"FAIL  reservoir hops +10={hop_got} want [3,3,3,3,3]")
+    if hop_got != [3, 2, 1, 0, 0]:
+        lines.append(f"FAIL  reservoir hops +10={hop_got} want [3,2,1,0,0]")
     else:
-        lines.append("ok    Reservoir hops: componente inteiro carga 3 (4o molhado)")
+        lines.append("ok    Reservoir hops: 3→2→1→seco (2a635 stop no tanque)")
     long_aq = [hop.tile(x, 10).coverage & 3 for x in (4, 5, 6)]
     if long_aq != [3, 3, 3]:
         lines.append(f"FAIL  aqueduct length counted as hop +10={long_aq}")
     else:
         lines.append("ok    Aqueduct longo não gasta hop (carga 3 até o 2º)")
+    # Two tanks on one river-fed line: second is lower (3fdd0 r=6 then r=5).
+    pair = CityMap()
+    pair.source = "pipe-two-be"
+    pair.tiles[pair.offset(2, 20)] = 0x1E
+    pair.tiles[pair.offset(2, 20) + 1] = FLAG_RIVER
+    for x, tid, fl, dry in (
+        (3, ID_RESERVOIR, FLAG_RESERVOIR, VAR_RESERVOIR),
+        (4, 0xD0, FLAG_PIPE, 0x76),
+        (5, ID_RESERVOIR, FLAG_RESERVOIR, VAR_RESERVOIR),
+    ):
+        off = pair.offset(x, 20)
+        pair.tiles[off] = tid
+        pair.tiles[off + 1] = fl
+        pair.tiles[off + 4] = dry
+        pair.tiles[off + 9] = dry
+    rebuild_pipe_charge(pair, [(3, 20)])
+    pair_ch = [pair.tile(x, 20).coverage & 3 for x in (3, 5)]
+    if pair_ch != [3, 2]:
+        lines.append(f"FAIL  two 0xBE on one line +10={pair_ch} want [3,2]")
+    else:
+        lines.append("ok    two 0xBE on one aqueduct: first 3, second 2")
 
     # In-game path: try_place river 0xBE — AQ — 0xBE — AQ — 0xBE.
     three = CityMap()
@@ -3917,7 +4429,7 @@ def selftest() -> list[str]:
     three_ids = [three.tiles[three.offset(x, 8)] for x in (9, 10, 11, 12, 13)]
     if (
         not all(r.ok for r in placed)
-        or any(c == 0 for c in three_ch)
+        or three_ch != [3, 2, 1]
         or three_fl != [FLAG_RESERVOIR, FLAG_PIPE, FLAG_RESERVOIR, FLAG_PIPE, FLAG_RESERVOIR]
         or three_ids[0] != ID_RESERVOIR
         or not (ID_AQUEDUCT_LO <= three_ids[1] <= ID_AQUEDUCT_HI)
@@ -3931,7 +4443,7 @@ def selftest() -> list[str]:
             f"{[r.message for r in placed]}"
         )
     else:
-        lines.append("ok    try_place rio 0xBE—AQ—0xBE—AQ—0xBE todos carga>0")
+        lines.append("ok    try_place rio 0xBE—AQ—0xBE—AQ—0xBE carga 3→2→1")
 
     four = CityMap()
     four.source = "pipe-try-place-4"
@@ -3952,10 +4464,10 @@ def selftest() -> list[str]:
     ):
         try_place(four, x, 9, tool, sim4)
     four_ch = [four.tile(x, 9).coverage & 3 for x in (9, 11, 13, 15)]
-    if any(c == 0 for c in four_ch):
-        lines.append(f"FAIL  try_place 4 tanques +10={four_ch}")
+    if four_ch != [3, 2, 1, 0]:
+        lines.append(f"FAIL  try_place 4 tanques +10={four_ch} want [3,2,1,0]")
     else:
-        lines.append("ok    try_place 4o reservatório molhado (água até o quarto)")
+        lines.append("ok    try_place 4o reservatório seco (carga 3→2→1→0)")
 
     # Multi-click 2×2 tanks: blob is one hop node; three blobs stay wet.
     blob = CityMap()
@@ -4142,7 +4654,7 @@ def selftest() -> list[str]:
             f"+10={cross.coverage:#x}"
         )
     else:
-        lines.append("ok    Aqueduct na estrada → 0xD6 +1=0x60 +3=0x90 (carga 3)")
+        lines.append("ok    aqueduct-on-road -> 0xD6 +1=0x60 +3=0x90 (carga 3)")
     r_clr = try_place(city, 33, 20, TOOL_CLEAR, None)
     restored = city.tiles[city.offset(33, 20)]
     rest_fl = city.tiles[city.offset(33, 20) + 1]
@@ -4171,10 +4683,12 @@ def selftest() -> list[str]:
     city.tiles[city.offset(51, 50)] = 0x14
     sim.treasury = 4
     r = try_place_span(city, 50, 50, 51, 50, TOOL_GARDEN, sim)
-    if r.ok or sim.treasury != 4:
-        lines.append(f"FAIL  garden span atomic {r.message} treas={sim.treasury}")
+    if not r.ok or sim.treasury != 4 - 6:
+        lines.append(f"FAIL  garden span overspend {r.message} treas={sim.treasury}")
     else:
-        lines.append("ok    Gardens arrasto atómico (4 < 6)")
+        lines.append("ok    Gardens arrasto places when tesouro < 6")
+    city.tiles[city.offset(50, 50)] = 0x14
+    city.tiles[city.offset(51, 50)] = 0x14
     sim.treasury = 6
     r = try_place_span(city, 50, 50, 51, 50, TOOL_GARDEN, sim)
     ga, va = garden_from_step(0)
@@ -4387,6 +4901,309 @@ def selftest() -> list[str]:
     else:
         lines.append("ok    Wall linha EW 0xC9/0xC2/0xCA + Gate 0xC0 +4=0x93")
 
+    # Click path (try_place): wall tool on an existing road — 66F10 pad.
+    _grass_block(8, 20, 3, 1)
+    r_rd = try_place(city, 9, 20, TOOL_ROAD, None)
+    grass_road = city.tiles[city.offset(9, 20)]
+    sim.treasury = 20
+    r_wor = try_place(city, 9, 20, TOOL_WALL, sim)
+    wor = city.tile(9, 20)
+    if (
+        not r_rd.ok
+        or not (ID_ROAD_LO <= grass_road <= ID_ROAD_HI)
+        or not r_wor.ok
+        or wor.terrain_id != ID_GATE
+        or wor.flags != 0x24
+        or wor.draw != DRAW_GATE
+        or sim.treasury != 15
+    ):
+        lines.append(
+            f"FAIL  wall-on-road {r_wor.message} "
+            f"road={grass_road:#x} id={wor.terrain_id:#x} +1={wor.flags:#x} "
+            f"+3={wor.draw:#x} treas={sim.treasury}"
+        )
+    else:
+        lines.append("ok    wall-on-road -> Gate 0xC0 +1=0x24 +3=0x88")
+
+    # Road on a river-fed aqueduct: same 0xD5/0xD6 as aqueduct-on-road.
+    # Isolated dry / grass aqueduct family must not regress.
+    _grass_block(60, 20, 5, 3)
+    city.tiles[city.offset(60, 20)] = 0x1E
+    city.tiles[city.offset(60, 20) + 1] = FLAG_RIVER
+    sim.treasury = 51
+    r_be2 = try_place(city, 61, 20, TOOL_RESERVOIR, sim)
+    r_aq2 = try_place(city, 62, 20, TOOL_AQUEDUCT, None)
+    grass_aq = city.tile(62, 20)
+    r_roa = try_place(city, 62, 20, TOOL_ROAD, None)
+    roa = city.tile(62, 20)
+    if (
+        not r_be2.ok
+        or not r_aq2.ok
+        or not (ID_AQUEDUCT_LO <= grass_aq.terrain_id <= 0xD4)
+        or grass_aq.draw != DRAW_AQUEDUCT
+        or not r_roa.ok
+        or roa.terrain_id not in (ID_AQUEDUCT_ROAD_NS, ID_AQUEDUCT_ROAD_EW)
+        or roa.flags != (FLAG_PIPE | FLAG_PAD)
+        or roa.draw != DRAW_AQUEDUCT_ROAD
+        or (roa.coverage & 3) != 3
+    ):
+        lines.append(
+            f"FAIL  road-on-aqueduct fed {r_roa.message} "
+            f"grass={grass_aq.terrain_id:#x}+3={grass_aq.draw:#x} "
+            f"id={roa.terrain_id:#x} +1={roa.flags:#x} +3={roa.draw:#x} "
+            f"+10={roa.coverage:#x}"
+        )
+    else:
+        lines.append(
+            f"ok    road-on-aqueduct (fed) {roa.terrain_id:#x} +3=0x90; "
+            f"grass aqueduct still {grass_aq.terrain_id:#x}"
+        )
+
+    # Aqueduct × wall both orders: 67a6a C2→0xBC / C1→0xBD; 67201 CF→0xBC / D0→0xBD.
+    _grass_block(8, 24, 5, 3)
+    city.tiles[city.offset(8, 25)] = 0x1E
+    city.tiles[city.offset(8, 25) + 1] = FLAG_RIVER
+    sim.treasury = 200
+    try_place(city, 9, 25, TOOL_RESERVOIR, sim)
+    r_aqw = try_place(city, 10, 25, TOOL_AQUEDUCT, None)
+    grass_aq_w = city.tile(10, 25)
+    try_place_span(city, 10, 24, 10, 26, TOOL_WALL, sim)
+    # wall line through the pipe: mid cell was aqueduct
+    w_on_aq = city.tile(10, 25)
+    wall_n = city.tiles[city.offset(10, 24)]
+    wall_s = city.tiles[city.offset(10, 26)]
+    if (
+        not r_aqw.ok
+        or not (ID_AQUEDUCT_LO <= grass_aq_w.terrain_id <= 0xD4)
+        or w_on_aq.terrain_id not in (ID_AQUEDUCT_WALL_EW, ID_AQUEDUCT_WALL_NS)
+        or w_on_aq.flags != (FLAG_PIPE | FLAG_WALL)
+        or w_on_aq.draw != DRAW_WALL
+        or w_on_aq.variant not in (VAR_AQUEDUCT_WALL_EW, VAR_AQUEDUCT_WALL_NS)
+        or not (0x70 <= w_on_aq.overlay_anim <= 0x87)
+        or not is_wall_run_id(wall_n)
+        or not is_wall_run_id(wall_s)
+        or (w_on_aq.coverage & 3) != 3
+    ):
+        lines.append(
+            f"FAIL  wall-on-aqueduct {w_on_aq.terrain_id:#x} "
+            f"+1={w_on_aq.flags:#x}+3={w_on_aq.draw:#x}"
+            f"+4={w_on_aq.variant:#x}+10={w_on_aq.coverage:#x} "
+            f"N={wall_n:#x} S={wall_s:#x} grass={grass_aq_w.terrain_id:#x}"
+        )
+    else:
+        lines.append(
+            f"ok    wall-on-aqueduct -> {w_on_aq.terrain_id:#x} "
+            f"+1=0x42 +3=0x08 +4={w_on_aq.variant:#x} (carga 3)"
+        )
+
+    _grass_block(14, 24, 5, 3)
+    city.tiles[city.offset(14, 25)] = 0x1E
+    city.tiles[city.offset(14, 25) + 1] = FLAG_RIVER
+    sim.treasury = 200
+    try_place(city, 15, 25, TOOL_RESERVOIR, sim)
+    try_place_span(city, 16, 24, 16, 26, TOOL_WALL, sim)
+    grass_wall = city.tiles[city.offset(16, 24)]
+    r_aq_on_w = try_place(city, 16, 25, TOOL_AQUEDUCT, None)
+    aq_on_w = city.tile(16, 25)
+    if (
+        not r_aq_on_w.ok
+        or not is_wall_run_id(grass_wall)
+        or aq_on_w.terrain_id not in (ID_AQUEDUCT_WALL_EW, ID_AQUEDUCT_WALL_NS)
+        or aq_on_w.flags != (FLAG_PIPE | FLAG_WALL)
+        or aq_on_w.draw != DRAW_WALL
+        or aq_on_w.variant not in (VAR_AQUEDUCT_WALL_EW, VAR_AQUEDUCT_WALL_NS)
+        or not (0x70 <= aq_on_w.overlay_anim <= 0x87)
+        or (aq_on_w.coverage & 3) != 3
+    ):
+        lines.append(
+            f"FAIL  aqueduct-on-wall {r_aq_on_w.message} "
+            f"id={aq_on_w.terrain_id:#x} +1={aq_on_w.flags:#x} "
+            f"+3={aq_on_w.draw:#x}+4={aq_on_w.variant:#x} "
+            f"wall={grass_wall:#x} +10={aq_on_w.coverage:#x}"
+        )
+    else:
+        lines.append(
+            f"ok    aqueduct-on-wall -> {aq_on_w.terrain_id:#x} "
+            f"+1=0x42 +3=0x08 (carga 3); grass wall still {grass_wall:#x}"
+        )
+
+    # Explicit C2 / C1 / CF / D0 morphs (67a6a / 67201 first-pass).
+    _grass_block(20, 28, 3, 3)
+    city.tiles[city.offset(21, 29)] = ID_WALL_EW
+    city.tiles[city.offset(21, 29) + 1] = FLAG_WALL
+    city.tiles[city.offset(21, 29) + 3] = DRAW_WALL
+    city.tiles[city.offset(20, 29)] = 0xD0
+    city.tiles[city.offset(20, 29) + 1] = FLAG_PIPE
+    r_c2 = try_place(city, 21, 29, TOOL_AQUEDUCT, None)
+    c2t = city.tile(21, 29)
+    if (
+        not r_c2.ok
+        or c2t.terrain_id != ID_AQUEDUCT_WALL_EW
+        or c2t.variant != VAR_AQUEDUCT_WALL_EW
+        or c2t.overlay_anim != 0x76
+    ):
+        lines.append(
+            f"FAIL  67a6a C2->{c2t.terrain_id:#x}+4={c2t.variant:#x}"
+            f"+9={c2t.overlay_anim:#x}"
+        )
+    else:
+        lines.append("ok    aqueduct-on-C2 -> 0xBC +4=3 +9=0x76 (EW pipe)")
+    _grass_block(24, 28, 3, 3)
+    city.tiles[city.offset(25, 29)] = ID_WALL_NS
+    city.tiles[city.offset(25, 29) + 1] = FLAG_WALL
+    city.tiles[city.offset(25, 29) + 3] = DRAW_WALL
+    city.tiles[city.offset(25, 28)] = 0xCF
+    city.tiles[city.offset(25, 28) + 1] = FLAG_PIPE
+    r_c1 = try_place(city, 25, 29, TOOL_AQUEDUCT, None)
+    c1t = city.tile(25, 29)
+    if (
+        not r_c1.ok
+        or c1t.terrain_id != ID_AQUEDUCT_WALL_NS
+        or c1t.variant != VAR_AQUEDUCT_WALL_NS
+        or c1t.overlay_anim != 0x79
+    ):
+        lines.append(
+            f"FAIL  67a6a C1->{c1t.terrain_id:#x}+4={c1t.variant:#x}"
+            f"+9={c1t.overlay_anim:#x}"
+        )
+    else:
+        lines.append("ok    aqueduct-on-C1 -> 0xBD +4=7 +9=0x79 (NS pipe)")
+    _grass_block(28, 28, 3, 3)
+    city.tiles[city.offset(29, 29)] = 0xCF
+    city.tiles[city.offset(29, 29) + 1] = FLAG_PIPE
+    city.tiles[city.offset(29, 29) + 3] = DRAW_AQUEDUCT
+    sim.treasury = 20
+    r_cf = try_place(city, 29, 29, TOOL_WALL, sim)
+    cft = city.tile(29, 29)
+    if (
+        not r_cf.ok
+        or cft.terrain_id != ID_AQUEDUCT_WALL_EW
+        or cft.variant != VAR_AQUEDUCT_WALL_EW
+    ):
+        lines.append(
+            f"FAIL  67201 CF->{cft.terrain_id:#x}+4={cft.variant:#x} {r_cf.message}"
+        )
+    else:
+        lines.append("ok    wall-on-CF -> 0xBC +4=3")
+    _grass_block(32, 28, 3, 3)
+    city.tiles[city.offset(33, 29)] = 0xD0
+    city.tiles[city.offset(33, 29) + 1] = FLAG_PIPE
+    city.tiles[city.offset(33, 29) + 3] = DRAW_AQUEDUCT
+    sim.treasury = 20
+    r_d0 = try_place(city, 33, 29, TOOL_WALL, sim)
+    d0t = city.tile(33, 29)
+    if (
+        not r_d0.ok
+        or d0t.terrain_id != ID_AQUEDUCT_WALL_NS
+        or d0t.variant != VAR_AQUEDUCT_WALL_NS
+    ):
+        lines.append(
+            f"FAIL  67201 D0->{d0t.terrain_id:#x}+4={d0t.variant:#x} {r_d0.message}"
+        )
+    else:
+        lines.append("ok    wall-on-D0 -> 0xBD +4=7")
+
+    # 5-tile EW wall, aqueduct through the middle: neighbors stay C2
+    # (not ends). Combo is a Security barrier; Gate 0xC0 is untouched.
+    from app.city_paint import is_security_barrier, tile_inside_walls
+
+    _grass_block(40, 30, 9, 5)
+    city.tiles[city.offset(42, 30)] = 0x1E
+    city.tiles[city.offset(42, 30) + 1] = FLAG_RIVER
+    sim.treasury = 200
+    try_place(city, 42, 31, TOOL_RESERVOIR, sim)
+    try_place(city, 42, 32, TOOL_AQUEDUCT, None)
+    try_place_span(city, 40, 33, 44, 33, TOOL_WALL, sim)
+    r_mid = try_place(city, 42, 33, TOOL_AQUEDUCT, None)
+    mid = city.tile(42, 33)
+    left = city.tiles[city.offset(41, 33)]
+    right = city.tiles[city.offset(43, 33)]
+    left_var = city.tiles[city.offset(41, 33) + 4]
+    right_var = city.tiles[city.offset(43, 33) + 4]
+    if (
+        not r_mid.ok
+        or mid.terrain_id != ID_AQUEDUCT_WALL_EW
+        or mid.flags != (FLAG_PIPE | FLAG_WALL)
+        or mid.variant != VAR_AQUEDUCT_WALL_EW
+        or mid.overlay_anim != 0x79
+        or (mid.coverage & 3) != 3
+        or left != ID_WALL_EW
+        or right != ID_WALL_EW
+        or left_var != 0x04
+        or right_var != 0x04
+        or not is_security_barrier(city.tiles, 42, 33)
+    ):
+        lines.append(
+            f"FAIL  3-tile wall+pipe mid={mid.terrain_id:#x}+1={mid.flags:#x}"
+            f"+4={mid.variant:#x}+9={mid.overlay_anim:#x}+10={mid.coverage:#x} "
+            f"L={left:#x}+4={left_var:#x} R={right:#x}+4={right_var:#x} "
+            f"{r_mid.message}"
+        )
+    else:
+        lines.append(
+            "ok    5-tile EW + aqueduct mid 0xBC +9=0x79 (NS cross); "
+            "neighbors C2 +4=4; barrier; carga 3"
+        )
+
+    # Aqueduct along an EW wall (same cells): mid pipe is E+W → +9=0x76.
+    _grass_block(40, 36, 7, 3)
+    city.tiles[city.offset(40, 37)] = 0x1E
+    city.tiles[city.offset(40, 37) + 1] = FLAG_RIVER
+    sim.treasury = 200
+    try_place(city, 41, 37, TOOL_RESERVOIR, sim)
+    try_place_span(city, 40, 38, 46, 38, TOOL_WALL, sim)
+    r_along = try_place_span(city, 41, 38, 45, 38, TOOL_AQUEDUCT, None)
+    along_mid = city.tile(43, 38)
+    along_ids = [city.tiles[city.offset(x, 38)] for x in range(41, 46)]
+    if (
+        not r_along.ok
+        or along_mid.terrain_id != ID_AQUEDUCT_WALL_EW
+        or along_mid.variant != VAR_AQUEDUCT_WALL_EW
+        or along_mid.overlay_anim != 0x76
+        or (along_mid.coverage & 3) != 3
+        or along_ids != [ID_AQUEDUCT_WALL_EW] * 5
+    ):
+        lines.append(
+            f"FAIL  aq along EW wall mid={along_mid.terrain_id:#x}"
+            f"+4={along_mid.variant:#x}+9={along_mid.overlay_anim:#x} "
+            f"ids={[hex(i) for i in along_ids]} {r_along.message}"
+        )
+    else:
+        lines.append("ok    aq along EW wall 0xBC +9=0x76 (not stub 0x79)")
+    # Closed ring with one 0xBC: External still holds (no door).
+    for i in range(5):
+        city.tiles[city.offset(50 + i, 40)] = ID_WALL_EW
+        city.tiles[city.offset(50 + i, 40) + 1] = FLAG_WALL
+        city.tiles[city.offset(50 + i, 44)] = ID_WALL_EW
+        city.tiles[city.offset(50 + i, 44) + 1] = FLAG_WALL
+        city.tiles[city.offset(50, 40 + i)] = ID_WALL_NS
+        city.tiles[city.offset(50, 40 + i) + 1] = FLAG_WALL
+        city.tiles[city.offset(54, 40 + i)] = ID_WALL_NS
+        city.tiles[city.offset(54, 40 + i) + 1] = FLAG_WALL
+    city.tiles[city.offset(52, 40)] = ID_AQUEDUCT_WALL_EW
+    city.tiles[city.offset(52, 40) + 1] = FLAG_PIPE | FLAG_WALL
+    if not tile_inside_walls(city.tiles, 52, 42):
+        lines.append("FAIL  0xBC door in 5x5 wall box")
+    else:
+        lines.append("ok    5x5 box with 0xBC still encloses")
+    # Road x wall is still Gate — combo path must not steal 0xC0.
+    _grass_block(60, 50, 3, 1)
+    try_place(city, 61, 50, TOOL_ROAD, None)
+    sim.treasury = 20
+    r_gate = try_place(city, 61, 50, TOOL_WALL, sim)
+    gate_t = city.tile(61, 50)
+    if (
+        not r_gate.ok
+        or gate_t.terrain_id != ID_GATE
+        or gate_t.flags != 0x24
+        or gate_t.draw != DRAW_GATE
+    ):
+        lines.append(
+            f"FAIL  Gate regress {gate_t.terrain_id:#x}+1={gate_t.flags:#x}"
+        )
+    else:
+        lines.append("ok    road x wall still Gate 0xC0")
+
     if (
         wall_id_for(0) != ID_WALL_END_N
         or wall_id_for(0x0A) != ID_WALL_EW
@@ -4406,6 +5223,116 @@ def selftest() -> list[str]:
         lines.append("FAIL  wall LUT 0x94BAF / +4 0x94CEB")
     else:
         lines.append("ok    Wall LUT 0x94BAF (cap/NS/EW/canto) +4 0x94CEB")
+
+    # Compass rotate is paint-only: NESW mask walk. World bytes stay.
+    if (
+        orient_autotile_art(ID_WALL_NS, 0x00, 1) != (ID_WALL_EW, 0x04)
+        or orient_autotile_art(ID_WALL_EW, 0x04, 1) != (ID_WALL_NS, 0x00)
+        or orient_autotile_art(ID_WALL_NS, 0x00, 2) != (ID_WALL_NS, 0x00)
+        or orient_autotile_art(ID_WALL_END_S, 0x01, 1) != (ID_WALL_END_W, 0x06)
+        or orient_autotile_art(0xCF, 0x79, 1) != (0xD0, 0x76)
+        or orient_autotile_art(0xCF, 0x7B, 1) != (0xD0, 0x78)
+        or orient_autotile_art(0xD5, 0x73, 1) != (0xD6, 0x70)
+        or orient_autotile_art(ID_AQUEDUCT_WALL_NS, 7, 1)
+        != (ID_AQUEDUCT_WALL_EW, 3)
+        or rotate_aqueduct_dry(0x79, 1) != 0x76
+        or rotate_aqueduct_dry(0x76, 1) != 0x79
+        or rotate_aqueduct_dry(0x7B, 1) != 0x78
+        or rotate_aqueduct_dry(0x73, 1) != 0x70
+        or orient_autotile_art(ID_GATE, 0x92, 1) != (ID_GATE, 0x93)
+        or orient_autotile_art(ID_GATE, 0x93, 2) != (ID_GATE, 0x93)
+    ):
+        lines.append("FAIL  orient_autotile_art wall/aq/gate mask walk")
+    else:
+        lines.append("ok    orient_autotile_art NS/EW + charge + Gate + 0xBC/0xBD")
+
+    from app.city_map import iso_paint_tile
+
+    _grass_block(70, 10, 1, 5)
+    sim.treasury = 200
+    r_ns = try_place_span(city, 70, 10, 70, 14, TOOL_WALL, sim)
+    world_mid = city.tiles[city.offset(70, 12)]
+    world_n = city.tiles[city.offset(70, 10)]
+    world_s = city.tiles[city.offset(70, 14)]
+    world_flags = city.tiles[city.offset(70, 12) + 1]
+    p0 = iso_paint_tile(city, 70, 12, 0)
+    p1 = iso_paint_tile(city, 70, 12, 1)
+    p2 = iso_paint_tile(city, 70, 12, 2)
+    p3 = iso_paint_tile(city, 70, 12, 3)
+    n1 = iso_paint_tile(city, 70, 10, 1)
+    s1 = iso_paint_tile(city, 70, 14, 1)
+    if (
+        not r_ns.ok
+        or world_mid != ID_WALL_NS
+        or world_n != ID_WALL_END_S
+        or world_s != ID_WALL_END_N
+        or p0.terrain_id != ID_WALL_NS
+        or p1.terrain_id != ID_WALL_EW
+        or p1.variant != 0x04
+        or p2.terrain_id != ID_WALL_NS
+        or p3.terrain_id != ID_WALL_EW
+        or n1.terrain_id != ID_WALL_END_W
+        or s1.terrain_id != ID_WALL_END_E
+        or city.tiles[city.offset(70, 12)] != ID_WALL_NS
+        or city.tiles[city.offset(70, 12) + 1] != world_flags
+    ):
+        lines.append(
+            f"FAIL  wall rotate paint {r_ns.message} world={world_mid:#x} "
+            f"p1={p1.terrain_id:#x}+4={p1.variant:#x} "
+            f"ends={n1.terrain_id:#x}/{s1.terrain_id:#x}"
+        )
+    else:
+        lines.append("ok    NS wall run stay connected at facing 1/2/3 (paint)")
+
+    _grass_block(72, 10, 1, 6)
+    city.tiles[city.offset(72, 10)] = ID_RESERVOIR
+    city.tiles[city.offset(72, 10) + 1] = FLAG_RESERVOIR
+    city.tiles[city.offset(72, 10) + 10] = 3
+    r_aq = try_place_span(city, 72, 11, 72, 15, TOOL_AQUEDUCT, None)
+    aq_ids = [city.tiles[city.offset(72, y)] for y in range(11, 16)]
+    aq_mid = city.tile(72, 13)
+    aq1 = iso_paint_tile(city, 72, 13, 1)
+    aq2 = iso_paint_tile(city, 72, 13, 2)
+    aq3 = iso_paint_tile(city, 72, 13, 3)
+    aq_n1 = iso_paint_tile(city, 72, 11, 1)
+    aq_s1 = iso_paint_tile(city, 72, 15, 1)
+    charged = bool(aq_mid.coverage & 3)
+    if (
+        not r_aq.ok
+        or aq_ids[2] != 0xCF
+        or aq1.terrain_id != 0xD0
+        or aq2.terrain_id != 0xCF
+        or aq3.terrain_id != 0xD0
+        or aq_n1.terrain_id not in (0xCD, 0xCE, 0xD0)
+        or aq_s1.terrain_id not in (0xCD, 0xCE, 0xD0)
+        or city.tiles[city.offset(72, 13)] != 0xCF
+        or (aq_mid.coverage & 3) != (city.tile(72, 13).coverage & 3)
+        or (charged and aq1.variant == 0x79)
+    ):
+        lines.append(
+            f"FAIL  aq rotate paint {r_aq.message} ids={ [hex(i) for i in aq_ids] } "
+            f"p1={aq1.terrain_id:#x}+4={aq1.variant:#x} "
+            f"ends={aq_n1.terrain_id:#x}/{aq_s1.terrain_id:#x}"
+        )
+    else:
+        lines.append("ok    NS aqueduct run stay connected at facing 1/2/3 (paint)")
+
+    combo = iso_paint_tile(city, 25, 29, 1)
+    combo0 = city.tile(25, 29)
+    if (
+        combo0.terrain_id != ID_AQUEDUCT_WALL_NS
+        or combo.terrain_id != ID_AQUEDUCT_WALL_EW
+        or combo.variant != VAR_AQUEDUCT_WALL_EW
+        or combo0.flags != (FLAG_PIPE | FLAG_WALL)
+        or combo0.overlay_anim != 0x79
+        or combo.overlay_anim != 0x76
+    ):
+        lines.append(
+            f"FAIL  0xBD rotate paint {combo.terrain_id:#x}+4={combo.variant} "
+            f"world={combo0.terrain_id:#x}+1={combo0.flags:#x}"
+        )
+    else:
+        lines.append("ok    0xBD->0xBC paint on odd facing; +1=0x42 stays")
 
     _grass_block(20, 20, 3, 3)
     sim.treasury = 200
@@ -4454,6 +5381,79 @@ def selftest() -> list[str]:
         )
     else:
         lines.append("ok    Wall 5×5 autotile box still encloses (corners 0xC3–0xC6)")
+
+    treas_before = sim.treasury
+    r_gate = try_place(city, 52, 50, TOOL_ROAD, sim)
+    box_gate = city.tiles[city.offset(52, 50)]
+    box_fl = city.tiles[city.offset(52, 50) + 1]
+    box_var = city.tiles[city.offset(52, 50) + 4]
+    if (
+        not r_gate.ok
+        or box_gate != ID_GATE
+        or box_fl != 0x24
+        or box_var != 0x93
+        or sim.treasury != treas_before
+        or not _inside_walls(city.tiles, 52, 52)
+        or _inside_walls(city.tiles, 48, 52)
+    ):
+        lines.append(
+            f"FAIL  road-on-wall box {r_gate.message} id={box_gate:#x} "
+            f"+1={box_fl:#x}+4={box_var:#x} treas={sim.treasury}"
+        )
+    else:
+        lines.append("ok    road-on-wall 0xC0 +1=0x24 +4=0x93; recinto ainda fecha")
+
+    _grass_block(2, 14, 5, 3)
+    sim.treasury = 200
+    try_place_span(city, 2, 14, 6, 14, TOOL_WALL, sim)
+    grass_id_before = city.tiles[city.offset(4, 16)]
+    r_mid = try_place(city, 4, 14, TOOL_ROAD, sim)
+    r_grass = try_place(city, 4, 16, TOOL_ROAD, sim)
+    mid_id = city.tiles[city.offset(4, 14)]
+    mid_fl = city.tiles[city.offset(4, 14) + 1]
+    grass_id = city.tiles[city.offset(4, 16)]
+    wall_l = city.tiles[city.offset(3, 14)]
+    wall_r = city.tiles[city.offset(5, 14)]
+    prev = preview_span(city, TOOL_ROAD, 4, 14, 4, 16, 0)
+    if (
+        not r_mid.ok
+        or mid_id != ID_GATE
+        or mid_fl != 0x24
+        or not r_grass.ok
+        or not (ID_ROAD_LO <= grass_id <= ID_ROAD_HI)
+        or not is_wall_run_id(wall_l)
+        or not is_wall_run_id(wall_r)
+        or grass_id_before >= ID_TERRAIN_MAX
+    ):
+        lines.append(
+            f"FAIL  road-on-wall/grass {r_mid.message} {r_grass.message} "
+            f"mid={mid_id:#x} grass={grass_id:#x} "
+            f"L={wall_l:#x} R={wall_r:#x}"
+        )
+    else:
+        lines.append("ok    road-on-wall -> Gate 0xC0; road-on-grass still road")
+    if (4, 14) in prev.skip:
+        lines.append(f"FAIL  road preview still skips gate {prev.skip}")
+    else:
+        lines.append("ok    preview estrada no gate não salta")
+
+    _grass_block(16, 14, 1, 5)
+    sim.treasury = 200
+    try_place_span(city, 16, 16, 16, 16, TOOL_WALL, sim)
+    r_span = try_place_span(city, 16, 14, 16, 18, TOOL_ROAD, sim)
+    span_ids = [city.tiles[city.offset(16, y)] for y in range(14, 19)]
+    if (
+        not r_span.ok
+        or span_ids[2] != ID_GATE
+        or not (ID_ROAD_LO <= span_ids[0] <= ID_ROAD_HI)
+        or not (ID_ROAD_LO <= span_ids[4] <= ID_ROAD_HI)
+    ):
+        lines.append(
+            f"FAIL  road span across wall {r_span.message} "
+            f"{[hex(t) for t in span_ids]}"
+        )
+    else:
+        lines.append("ok    arrasto NS: estrada / Gate 0xC0 / estrada")
 
     _grass_block(10, 8, 3, 1)
     sim.treasury = 175
@@ -4830,6 +5830,7 @@ def selftest() -> list[str]:
     city.tiles[city.offset(43, 2)] = ID_TENT
     city.tiles[city.offset(43, 2) + 1] = 0x01
     sim.treasury = 700
+    ytd0 = int(getattr(sim, "construct_ytd", 0))
     r = try_place(city, 40, 2, TOOL_ARENA, sim)
     arena4 = [city.tiles[city.offset(40 + dx, 2 + dy) + 4] for dy in range(3) for dx in range(3)]
     hut12 = city.tiles[city.offset(43, 2) + 12]
@@ -4841,19 +5842,27 @@ def selftest() -> list[str]:
         or arena4 != [0x2C, 0x2E, 0x31, 0x2D, 0x30, 0x33, 0x2F, 0x32, 0x34]
         or not (hut12 & 0x0C)
         or "Entertainment Level" not in qent
+        or sim.construct_ytd != ytd0 + COST_ARENA
     ):
         lines.append(
             f"FAIL  arena stamp {r.message} cost={r.cost} +4={arena4} "
-            f"+12={hut12:#x} query={qent}"
+            f"+12={hut12:#x} query={qent} ytd={sim.construct_ytd}"
         )
     else:
         lines.append("ok    Arena 0xE7 3x3 custo 700 +4 LUT 0x2C +12 bits 2-3")
+    _grass_block(50, 2, 3, 3)
     sim.treasury = 50
+    ytd1 = sim.construct_ytd
     r_broke = try_place(city, 50, 2, TOOL_ARENA, sim)
-    if r_broke.ok:
-        lines.append(f"FAIL  arena broke {r_broke.message}")
+    if (
+        not r_broke.ok
+        or city.tiles[city.offset(50, 2)] != ID_ARENA
+        or sim.treasury != 50 - COST_ARENA
+        or sim.construct_ytd != ytd1 + COST_ARENA
+    ):
+        lines.append(f"FAIL  arena overspend {r_broke.message} ytd={sim.construct_ytd}")
     else:
-        lines.append("ok    Arena recusa tesouro < 700")
+        lines.append("ok    Arena places when tesouro < 700 (chunk 28 signed)")
 
     _grass_block(22, 6, 3, 3)
     sim.treasury = 500
@@ -4963,6 +5972,21 @@ def selftest() -> list[str]:
         lines.append("FAIL  map compose _fit do canvas iso (zoom-pop)")
     else:
         lines.append("ok    map compose não thumbnail o iso (sem zoom-pop)")
+
+    if (
+        tool_unit_cost(TOOL_ARENA) != COST_ARENA
+        or tool_unit_cost(TOOL_HOSPITAL) != COST_HOSPITAL
+        or tool_unit_cost(TOOL_TENT) != COST_TENT
+        or tool_unit_cost(TOOL_ROAD) != 0
+        or cost_hud_text(COST_ARENA) != "Cost: 700 Dn"
+        or cost_hud_text(0) != ""
+    ):
+        lines.append(
+            f"FAIL  cost HUD {tool_unit_cost(TOOL_ARENA)} "
+            f"{cost_hud_text(COST_ARENA)!r}"
+        )
+    else:
+        lines.append("ok    Cost: 700 Dn from EXE 0x9674B / 0x61A67")
 
     from app.palette import selftest as palette_selftest
 
