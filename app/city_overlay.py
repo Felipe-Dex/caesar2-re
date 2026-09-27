@@ -896,6 +896,37 @@ def query_water_line(splash: int, eng=None) -> str:
     return _eng_skip(eng, 60, 4, "NO Water Supply")
 
 
+# 0x63845 right column (ebx=0xF8). 0x64337 fills via 6dba2 (+13) / 6dc09 (+14).
+# Gardens / plaza / aqueduct have no [60] proximity skip — land value only.
+_QUERY_PROXIMITY: tuple[tuple[int, int, int, str, str], ...] = (
+    (0x80, 0x30, 23, "Close to Business", "Not Close to Business"),
+    (0x00, 0x01, 25, "Close to Barracks", "Not Close to Barracks"),
+    (0x00, 0x08, 27, "Close to Wall", "Not Close to Wall"),
+    (0x00, 0x02, 29, "Close to Praefecture", "Not Close to Praefecture"),
+    (0x40, 0x00, 31, "Close to Market", "Not Close to Market"),
+    (0x00, 0x04, 33, "Close to Gate", "Not Close to Gate"),
+)
+
+
+def query_proximity_lines(splash: int, plus14: int, eng=None) -> list[str]:
+    """C2.ENG [60]+23…+34. EXE 0x63845 right column after the amenity left.
+
+    Chebyshev rings are smaller than the 10/16/26 land-value stay gates:
+      Business  +13&0x80 r=1 or +14&0x10 r=2 or +14&0x20 r=4 (any → +23)
+      Barracks  +14&0x01 r=3
+      Wall      +14&0x08 r=2 (tower/wall 0xBF–0xCA; not aqueduct 0xBC/0xCB+)
+      Prefect   +14&0x02 r=2
+      Market    +13&0x40 r=2
+      Gate      +14&0x04 r=2
+    """
+    out: list[str] = []
+    for bit13, bit14, yes, yes_fb, no_fb in _QUERY_PROXIMITY:
+        hit = bool(splash & bit13) or bool(plus14 & bit14)
+        skip = yes if hit else yes + 1
+        out.append(_eng_skip(eng, 60, skip, yes_fb if hit else no_fb))
+    return out
+
+
 def building_name(tid: int, eng=None) -> str:
     """C2.ENG official names when present; host table otherwise."""
     _fill_names()
@@ -1010,14 +1041,23 @@ def query_display_city(city: CityMap, sim=None) -> CityMap:
 
     Live tiles stay mid-wipe so the month can keep painting bands. EXE
     0x63845 reads 0x117a79… after 0x64337 already sampled the tile.
+
+    After the month, place still does not splash wall/gate +14 (0x401E7
+    is the monthly painter). Rebuild that lane on a copy so [60]+27/+33
+    match the current map.
     """
     phase = int(getattr(sim, "phase", 0) or 0) if sim is not None else 0
-    if sim is None or not (QUERY_LANE_REBUILD_LO <= phase <= QUERY_LANE_REBUILD_HI):
+    if sim is None:
         return city
     snap = CityMap()
     snap.tiles = bytearray(city.tiles)
     snap.source = "query-snap"
-    _rebuild_query_lanes(snap.tiles, phase, sim)
+    if QUERY_LANE_REBUILD_LO <= phase <= QUERY_LANE_REBUILD_HI:
+        _rebuild_query_lanes(snap.tiles, phase, sim)
+    else:
+        wipe_lane(snap.tiles, 14)
+        paint_plus13_buildings(snap.tiles, 0, MAP_H)
+        paint_plus14_security(snap.tiles, 0, MAP_H)
     return snap
 
 
@@ -1170,6 +1210,19 @@ def query_place(city: CityMap, x: int, y: int, eng=None, sim=None) -> PlaceInfo:
         lines.append(f"{_eng_skip(eng, 60, 22, 'Library Cover is')} {lib}")
     else:
         lines.append(_eng_skip(eng, 60, 0x55, "No Library Cover"))
+    plus10 = t.coverage
+    plus14 = t.unknown14
+    evolve_lv = land
+    evolve_tid = tid
+    if t.is_housing:
+        plus10 = _block_or_lane(city, ox, oy, ent_size, 10)
+        plus14 = _block_or_lane(city, ox, oy, ent_size, 14)
+        ot = city.tile(ox, oy)
+        evolve_lv = i8(ot.industry)
+        evolve_tid = ot.terrain_id
+    # 0x63845 amenity dialog (not factory 0x62F28).
+    if tid != 0xFA:
+        lines.extend(query_proximity_lines(splash, plus14, eng))
     if tid in (ID_HOSPITAL, ID_LIBRARY):
         ox, oy = civic_stamp_origin(city.tiles, x, y)
         has_road, has_forum = civic_edge_access(city.tiles, ox, oy)
@@ -1213,16 +1266,6 @@ def query_place(city: CityMap, x: int, y: int, eng=None, sim=None) -> PlaceInfo:
                 )
     # FUN_00062a59: one C2.ENG [60] status sentence. 0x8B +15==20 with
     # no entertainment is a normal stay (18..20 vs 0x96235), not a sim bug.
-    plus10 = t.coverage
-    plus14 = t.unknown14
-    evolve_lv = land
-    evolve_tid = tid
-    if t.is_housing:
-        plus10 = _block_or_lane(city, ox, oy, ent_size, 10)
-        plus14 = _block_or_lane(city, ox, oy, ent_size, 14)
-        ot = city.tile(ox, oy)
-        evolve_lv = i8(ot.industry)
-        evolve_tid = ot.terrain_id
     sec_n = security_score(plus10, tile_inside_walls(city.tiles, ox, oy))
     lines.extend(
         query_evolve_lines(
@@ -1522,6 +1565,11 @@ _QUERY_PARA_PREFIXES: tuple[str, ...] = (
 )
 
 
+def _query_is_proximity(line: str) -> bool:
+    s = line.strip()
+    return s.startswith("Close to ") or s.startswith("Not Close to ")
+
+
 def _query_is_tag(line: str) -> bool:
     s = line.strip()
     if not s:
@@ -1546,9 +1594,9 @@ def _place_dialog_rows(
     """Header, then amenity tags in two columns, blank, then evolve wrap.
 
     EXE 0x63845 is two columns: left [60]+2…+22 / +84…+89 at x=0x38,
-    right Close to… / Not Close to… (+23…+34) at x=0xF8. The host box is
-    420×280 and does not yet emit those proximity lines, so the amenity
-    tags we already print pair left-to-right in that same 192 px delta.
+    right Close to… / Not Close to… (+23…+34) at x=0xF8. Proximity tags
+    zip against the first amenity rows; leftover left tags (entertainment
+    / baths / hospital / library / fire) keep pairing at the 192 px delta.
     """
     rows: list[tuple[str, str | None]] = []
     if info is None:
@@ -1573,6 +1621,12 @@ def _place_dialog_rows(
     for line in header:
         for wrapped in _wrap_query_line(line):
             rows.append((wrapped, None))
+    prox = [t for t in tags if _query_is_proximity(t)]
+    left_tags = [t for t in tags if not _query_is_proximity(t)]
+    n = min(len(left_tags), len(prox))
+    for i in range(n):
+        rows.append((left_tags[i], prox[i]))
+    tags = left_tags[n:] + prox[n:]
     i = 0
     while i < len(tags):
         left = tags[i]
@@ -2141,6 +2195,76 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  query +17 still internal {flood_q.lines}")
     else:
         lines.append("ok    query +17 flood without walls stays Internal")
+    from app.city_paint import ID_WALL_EW as _ID_WALL_EW
+
+    prox = CityMap()
+    po = prox.offset(10, 10)
+    prox.tiles[po] = 0x91
+    prox.tiles[po + 1] = 0x01
+    prox.tiles[po + 15] = 31
+
+    def _prox_lines(info: PlaceInfo) -> list[str]:
+        return [
+            ln
+            for ln in info.lines
+            if ln.startswith("Close to ") or ln.startswith("Not Close to ")
+        ]
+
+    need_not = [
+        "Not Close to Business",
+        "Not Close to Barracks",
+        "Not Close to Wall",
+        "Not Close to Praefecture",
+        "Not Close to Market",
+        "Not Close to Gate",
+    ]
+    iso_ln = _prox_lines(query_place(prox, 10, 10))
+    if iso_ln != need_not:
+        lines.append(f"FAIL  query isolated house proximity {iso_ln}")
+    else:
+        lines.append("ok    query isolated house → [60]+24/26/28/30/32/34")
+    prox.tiles[prox.offset(10, 12)] = _ID_WALL_EW
+    paint_plus14_security(prox.tiles, 0, MAP_H)
+    wall_ln = _prox_lines(query_place(prox, 10, 10))
+    if "Close to Wall" not in wall_ln:
+        lines.append(f"FAIL  query house by wall {wall_ln}")
+    else:
+        lines.append("ok    query house by wall r=2 → [60]+27 Close to Wall")
+    live_w = CityMap()
+    live_w.tiles[live_w.offset(8, 8)] = 0x91
+    live_w.tiles[live_w.offset(8, 8) + 1] = 0x01
+    live_w.tiles[live_w.offset(8, 10)] = _ID_WALL_EW
+    from app.city_sim import SimState as _Sim
+    live_q = query_place(live_w, 8, 8, sim=_Sim(city_only=1, phase=0))
+    if "Close to Wall" not in _prox_lines(live_q):
+        lines.append(f"FAIL  query sim rebuild wall +14 {_prox_lines(live_q)}")
+    elif live_w.tiles[live_w.offset(8, 8) + 14] & 0x08:
+        lines.append("FAIL  query sim rebuild wrote live +14")
+    else:
+        lines.append("ok    Query with sim rebuilds wall +14 on a snapshot")
+    wipe_lane(prox.tiles, 14)
+    prox.tiles[prox.offset(10, 12)] = 0xD0
+    paint_plus14_security(prox.tiles, 0, MAP_H)
+    aq = query_place(prox, 10, 10)
+    aq_ln = _prox_lines(aq)
+    if aq_ln != need_not:
+        lines.append(f"FAIL  query house by aqueduct {aq_ln}")
+    else:
+        lines.append("ok    query house by aqueduct → no [60] aqueduct tag")
+    wipe_lane(prox.tiles, 13)
+    wipe_lane(prox.tiles, 14)
+    prox.tiles[prox.offset(14, 10)] = 0xFA
+    paint_plus13_buildings(prox.tiles, 0, MAP_H)
+    biz_ln = _prox_lines(query_place(prox, 10, 10))
+    if "Close to Business" not in biz_ln:
+        lines.append(f"FAIL  query house by factory {biz_ln}")
+    else:
+        lines.append("ok    query house by factory r=4 → [60]+23 Close to Business")
+    prox_rows = _place_dialog_rows(query_place(prox, 10, 10))
+    if ("NO Water Supply", "Close to Business") not in prox_rows:
+        lines.append(f"FAIL  query proximity right column {prox_rows}")
+    else:
+        lines.append("ok    Query zips amenity left with [60]+23…+34 right")
     from app.city_paint import (
         ID_AQUEDUCT_WALL_EW,
         ID_WALL_EW,
