@@ -342,6 +342,13 @@ def is_annual_summary_report(report: MenuReport | None, *, eng=None) -> bool:
     return report.title == _eng(eng, 72, 0, "Annual Summary")
 
 
+def is_game_over_report(report: MenuReport | None, *, eng=None) -> bool:
+    """C2.ENG [45] GAME OVER — 0x59aa7. Dismiss returns to title."""
+    if report is None:
+        return False
+    return report.title == _eng(eng, 45, 0, "GAME OVER")
+
+
 def about_report(eng) -> MenuReport:
     title = _eng(eng, 10, 0, "Caesar II - Version 1.1")
     date = _eng(eng, 10, 1, "October 5, 1995")
@@ -650,6 +657,8 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  win report {won.lines!r}")
     elif lose.title != "GAME OVER":
         lines.append(f"FAIL  lose title {lose.title!r}")
+    elif not is_game_over_report(lose):
+        lines.append("FAIL  is_game_over_report")
     else:
         lines.append("ok    City Only win/lose reports use [76]+20 / [45]")
     opt = decorate_item(

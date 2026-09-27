@@ -82,6 +82,7 @@ FACTORY_LABOR_CHUNK = 140
 LAND_ADJ_CHUNK = 139  # [0x102ad4] 40695 housing bonus
 PROVINCE_LINKS_CHUNK = 276
 CONSTRUCT_YTD_CHUNK = 155  # [0x102A2C] YTD constructions (0x30B2C / 0x2F3FB)
+BROKE_LEFT_CHUNK = 251  # [0x102A6C] 0x54dc5 Emperor-cover months
 
 # Named File→Save vs sav_year_end lastyear.sav (REVERSE.md / FELIPE vs LASTYEAR).
 _NAMED_FLAGS = (0, 4, 0, 0)
@@ -170,6 +171,7 @@ HOST_OWNED_CHUNKS: frozenset[int] = frozenset(
         37,
         46,
         CONSTRUCT_YTD_CHUNK,
+        BROKE_LEFT_CHUNK,
         LABOR_READY_CHUNK,
         WELFARE_CHUNK,
         LABOR_EST_CHUNK,
@@ -454,6 +456,7 @@ def owned_payloads(
         36: _i32(getattr(sim, "construct_last", 0)),
         37: _i32(getattr(sim, "operating_last", 0)),
         CONSTRUCT_YTD_CHUNK: _i32(getattr(sim, "construct_ytd", 0)),
+        BROKE_LEFT_CHUNK: _i32(getattr(sim, "broke_left", 0)),
         46: _i32(getattr(sim, "rating_avg", 0)),
         LABOR_READY_CHUNK: _i32(getattr(sim, "plebs_ready", 0)),
         WELFARE_CHUNK: _i32(getattr(sim, "welfare", 0)),
@@ -716,6 +719,7 @@ def selftest() -> list[str]:
             lines.append("ok    chunk 155 [0x102A2C] construct YTD 700")
         fresh.sim.pop_peak = 2500
         fresh.sim.unlock_step = 5
+        fresh.sim.broke_left = 0x12
         write_sav(dest, fresh.city, fresh.walkers, fresh.sim, sizes=sizes)
         sim2 = load_sim_from_sav(dest, sizes)
         if sim2.pop_peak != 2500 or sim2.unlock_step != 5:
@@ -724,6 +728,12 @@ def selftest() -> list[str]:
             )
         else:
             lines.append("ok    chunks 409/411 pop peak + [114] unlock step")
+        dest_chunks = walk_sav_chunks(dest.read_bytes(), sizes)
+        broke_raw = struct.unpack_from("<i", dest_chunks[BROKE_LEFT_CHUNK], 0)[0]
+        if sim2.broke_left != 0x12 or broke_raw != 0x12:
+            lines.append(f"FAIL  chunk 251 broke_left={sim2.broke_left} raw={broke_raw}")
+        else:
+            lines.append("ok    chunk 251 [0x102A6C] Emperor-cover countdown")
         if city.tiles[off] != 0x82:
             lines.append("FAIL  tent origin not in reloaded map")
         owned_nonzero = 0

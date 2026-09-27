@@ -299,6 +299,7 @@ class SimState:
     rating_surplus: int = 0  # [0x1025D8]
     housing_income: int = 0  # [0x1025AC]
     broke_left: int = 0  # [0x102A6C] 0x54dc5 countdown
+    game_over: bool = False  # 0x54e2e [0x102AA4]=1 — City Only session ended
 
     @property
     def date(self) -> GameDate:
@@ -497,6 +498,7 @@ def load_sim_from_sav(
         construct_last=_chunk_i32(chunks, 36, 0),
         operating_last=_chunk_i32(chunks, 37, 0),
         construct_ytd=_chunk_i32(chunks, 155, 0),
+        broke_left=_chunk_i32(chunks, 251, 0),
         rating_empire=_chunk_i32(chunks, 286, 0),
         rating_peace=_chunk_i32(chunks, 287, 0),
         rating_prosperity=_chunk_i32(chunks, 288, 0),

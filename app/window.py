@@ -95,6 +95,7 @@ from app.menus import (
     decorate_item,
     help_topic_excerpt,
     is_annual_summary_report,
+    is_game_over_report,
     is_turbo_report,
     next_game_speed,
     on_off,
@@ -135,6 +136,7 @@ from app.title import (
     ACTION_START,
     LOGO_MS,
     SCREEN_SKILL,
+    SCREEN_TITLE,
     TitleSession,
     career_stub_text,
     click_skill,
@@ -1399,6 +1401,19 @@ def show(ctx: BootContext, *, game: Path) -> None:
                     video=vid,
                     has_video=_advisor_has_video(),
                 )
+            elif (
+                advisor_clip is not None
+                and getattr(ctx.sim, "game_over", False)
+                and place_dlg is None
+            ):
+                vid = advisor_clip.snapshot()
+                if vid is not None:
+                    from app.advisor_video import SMK_H, SMK_W, SMK_X, SMK_Y
+
+                    clip = vid
+                    if clip.size != (SMK_W, SMK_H):
+                        clip = clip.resize((SMK_W, SMK_H), Image.Resampling.NEAREST)
+                    frame.paste(clip, (SMK_X, SMK_Y))
             if menu_open is not None or menu_report is not None:
                 frame = compose_city_hud(
                     frame,
@@ -1409,8 +1424,10 @@ def show(ctx: BootContext, *, game: Path) -> None:
                     report=menu_report,
                     extra_alert=extra_alert,
                 )
-            if ctx.sim.paused and not is_annual_summary_report(
-                menu_report, eng=ctx.eng
+            if (
+                ctx.sim.paused
+                and not is_annual_summary_report(menu_report, eng=ctx.eng)
+                and not getattr(ctx.sim, "game_over", False)
             ):
                 pause_spr = chrome.frames[6] if len(chrome.frames) > 6 else None
                 frame = blit_pause_square(
@@ -1738,7 +1755,17 @@ def show(ctx: BootContext, *, game: Path) -> None:
         """Repaint only. snapshot() picks the PTS frame for now — no pipe drain."""
         nonlocal advisor_video_after
         advisor_video_after = None
-        if advisor_dlg is None or advisor_clip is None:
+        if advisor_clip is None:
+            return
+        if getattr(ctx.sim, "game_over", False) and advisor_dlg is None:
+            if advisor_clip.finished:
+                _finish_lose_video()
+                return
+            blit(last_extra)
+            delay = max(16, int(getattr(advisor_clip, "delay_ms", 83)))
+            advisor_video_after = root.after(delay, _on_advisor_video)
+            return
+        if advisor_dlg is None:
             return
         blit(last_extra)
         delay = max(16, int(getattr(advisor_clip, "delay_ms", 83)))
@@ -2002,7 +2029,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
 
     def sim_step() -> None:
         """T — one city_sim_phase slot then walkers_tick. City Space is cancel."""
-        if forum_state is not None:
+        if forum_state is not None or getattr(ctx.sim, "game_over", False):
             return
         from app.sim import on_sim_step
         from app.walkers import drawable_walkers
@@ -2028,7 +2055,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
 
     def month_step() -> None:
         """M — remaining slots this cycle (paint/emit included), then month++."""
-        if forum_state is not None:
+        if forum_state is not None or getattr(ctx.sim, "game_over", False):
             return
         from app.calendar import format_hud_date
         from app.sim import on_month_step
@@ -2157,12 +2184,70 @@ def show(ctx: BootContext, *, game: Path) -> None:
         """sav_year_end 0x34D92 is still inside 0x2e9fc — clock does not run."""
         return is_annual_summary_report(menu_report, eng=ctx.eng)
 
+    def _session_hold() -> bool:
+        """Year-wrap modal or City Only GAME OVER — clock and T/M stay off."""
+        if getattr(ctx.sim, "game_over", False):
+            return True
+        return _annual_hold()
+
+    def _return_to_title() -> None:
+        """0x59aa7 dismiss — leave the city, BACKGRND [38] like boot."""
+        nonlocal menu_report, forum_state, place_dlg, advisor_dlg
+        nonlocal menu_open, overlay_flyout, tool
+        nonlocal load_picks, save_picks, save_typed, save_typing
+        _stop_advisor_video()
+        advisor_dlg = None
+        menu_report = None
+        load_picks = None
+        save_picks = None
+        save_typed = ""
+        save_typing = False
+        forum_state = None
+        place_dlg = None
+        menu_open = None
+        overlay_flyout = False
+        tool = None
+        title_session.screen = SCREEN_TITLE
+        title_session.options_open = False
+        title_session.toast = ""
+        use_pl8("backgrnd.pl8", first_only=True)
+        _enter_title_menu()
+
+    def _finish_lose_video() -> None:
+        """losegame.smk done / skipped → [45] GAME OVER panel."""
+        _stop_advisor_video()
+        if not is_game_over_report(menu_report, eng=ctx.eng):
+            _open_report(lose_game_report(eng=ctx.eng))
+        blit(last_extra)
+
+    def _start_lose_video() -> None:
+        """Retail LOSEGAME.SMK via videos_new/losegame.mp4 (same as advisors)."""
+        nonlocal advisor_clip, advisor_video_after
+        _stop_advisor_video()
+        from app.advisor_video import AdvisorClip, find_ffmpeg, resolve_lose_video
+
+        path = resolve_lose_video(game)
+        if path is None or find_ffmpeg() is None:
+            _open_report(lose_game_report(eng=ctx.eng))
+            blit(last_extra)
+            return
+        clip = AdvisorClip(path, mute=not options.sound)
+        if not clip.begin():
+            clip.close()
+            _open_report(lose_game_report(eng=ctx.eng))
+            blit(last_extra)
+            return
+        advisor_clip = clip
+        advisor_video_after = root.after(clip.delay_ms, _on_advisor_video)
+        blit(last_extra)
+
     def _close_report() -> None:
         nonlocal menu_report, load_picks, save_picks, save_typed, save_typing
         from app.city_sim import stop_year_turbo
 
         was_turbo = is_turbo_report(menu_report, eng=ctx.eng)
         was_annual = is_annual_summary_report(menu_report, eng=ctx.eng)
+        was_lose = is_game_over_report(menu_report, eng=ctx.eng)
         menu_report = None
         load_picks = None
         save_picks = None
@@ -2173,6 +2258,9 @@ def show(ctx: BootContext, *, game: Path) -> None:
             stop_year_turbo(ctx.sim)
         if was_annual:
             ctx.sim.paused = False
+        if was_lose:
+            _return_to_title()
+            return
         _pump_advisor()
 
     def _open_report(
@@ -2236,7 +2324,12 @@ def show(ctx: BootContext, *, game: Path) -> None:
         if key == "win":
             _open_report(win_game_report(ctx.sim, eng=ctx.eng))
         elif key == "lose":
-            _open_report(lose_game_report(eng=ctx.eng))
+            ctx.sim.game_over = True
+            ctx.sim.paused = True
+            ctx.sim.catchup = 0
+            ctx.sim.year_turbo = False
+            _set_advisor(None)
+            _start_lose_video()
 
     def _open_census() -> None:
         """C / Options+5 — Census Panel [74]. Second C closes it."""
@@ -2669,7 +2762,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
             if not map_mode:
                 title_music.tick()
             return
-        if _annual_hold():
+        if _session_hold():
             return
         from app.sim import on_clock_step, sim_tick_due
         from app.walkers import (
@@ -2834,14 +2927,23 @@ def show(ctx: BootContext, *, game: Path) -> None:
         """Esc — exit current screen/panel/menu. City Only does not quit here."""
         nonlocal menu_report, menu_open, overlay_flyout, place_dlg
         nonlocal save_typing, save_typed
+        if (
+            getattr(ctx.sim, "game_over", False)
+            and advisor_clip is not None
+            and menu_report is None
+        ):
+            _finish_lose_video()
+            return True
         if menu_report is not None and save_picks is not None and save_typing:
             save_typing = False
             save_typed = ""
             _refresh_save_picker()
             return True
         if menu_report is not None:
+            was_lose = is_game_over_report(menu_report, eng=ctx.eng)
             _close_report()
-            blit(last_extra)
+            if not was_lose:
+                blit(last_extra)
             return True
         if menu_open is not None:
             menu_open = None
@@ -2953,7 +3055,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
         if alt and key in {"f", "f1", "f3", "d"}:
             return
         if key in {"p"} or ch == "p":
-            if _annual_hold():
+            if _session_hold():
                 return
             apply_speed(toggle_pause_action(ctx.sim))
             return
@@ -2961,7 +3063,7 @@ def show(ctx: BootContext, *, game: Path) -> None:
             _open_census()
             return
         if key in {"a"} or ch == "a":
-            if _annual_hold():
+            if _session_hold():
                 return
             apply_speed("speed_year")
             return
@@ -3005,13 +3107,13 @@ def show(ctx: BootContext, *, game: Path) -> None:
             set_zoom(2)
             return
         if key in {"t"}:
-            if not _annual_hold():
+            if not _session_hold():
                 sim_step()
         elif key in {"m"} or ch == "m":
-            if not _annual_hold():
+            if not _session_hold():
                 month_step()
         elif key in {"e"}:
-            if not _annual_hold():
+            if not _session_hold():
                 evolve_pass()
         elif key in {"left"}:
             pan(-step, 0)
@@ -3360,9 +3462,16 @@ def show(ctx: BootContext, *, game: Path) -> None:
                 elif is_annual_summary_report(menu_report, eng=ctx.eng):
                     _close_report()
                     blit(last_extra)
+                elif is_game_over_report(menu_report, eng=ctx.eng):
+                    _close_report()
                 return True
+            was_lose = is_game_over_report(menu_report, eng=ctx.eng)
             _close_report()
-            blit(last_extra)
+            if not was_lose:
+                blit(last_extra)
+            return True
+        if getattr(ctx.sim, "game_over", False) and advisor_clip is not None:
+            _finish_lose_video()
             return True
         return False
 
@@ -3638,9 +3747,18 @@ def show(ctx: BootContext, *, game: Path) -> None:
                 _sfx("click")
                 _start_from_skill()
             return
+        if (
+            getattr(ctx.sim, "game_over", False)
+            and advisor_clip is not None
+            and menu_report is None
+        ):
+            _finish_lose_video()
+            return
         if menu_report is not None:
+            was_lose = is_game_over_report(menu_report, eng=ctx.eng)
             _close_report()
-            blit(last_extra)
+            if not was_lose:
+                blit(last_extra)
             return
         aborted = band_start is not None
         band_start = None

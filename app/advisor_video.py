@@ -47,6 +47,8 @@ SMK_W, SMK_H = 320, 152
 # c2_main 0x10279 smk_play intro.smk — only fullscreen 640×480 clip.
 INTRO_STEM = "intro"
 INTRO_SMK = "intro.smk"
+# Campaign / City Only defeat cutscene — not the [97] warning talking-head.
+LOSE_STEM = "losegame"
 INTRO_W, INTRO_H = 640, 480
 TABLE_BASE_SLOT = 79  # Hail [79] → index 0
 FRAME_BYTES = SMK_W * SMK_H * 3
@@ -187,6 +189,18 @@ def resolve_intro_video(game: Path | None) -> Path | None:
     from app.config import find_file
 
     return find_file(game, INTRO_SMK)
+
+
+def resolve_lose_video(game: Path | None) -> Path | None:
+    """GAME OVER cutscene: videos_new/losegame.mp4, else videos/, else retail SMK."""
+    hit = resolve_advisor_video(game, LOSE_STEM)
+    if hit is not None:
+        return hit
+    if game is None:
+        return None
+    from app.config import find_file
+
+    return find_file(game, f"{LOSE_STEM}.smk")
 
 
 def resolve_advisor_video(game: Path | None, stem: str | None) -> Path | None:
@@ -664,6 +678,19 @@ def selftest(game: Path | None = None) -> list[str]:
         lines.append(f"FAIL  broke stem {video_stem_for_slot(97)!r}")
     else:
         lines.append("ok    [97] No Denarii! -> warning")
+    if LOSE_STEM != "losegame":
+        lines.append(f"FAIL  lose stem {LOSE_STEM!r}")
+    else:
+        lines.append("ok    GAME OVER cutscene stem losegame")
+    lose = resolve_lose_video(game)
+    if lose is None:
+        lines.append("ok    losegame.smk / losegame.mp4 missing (banner-only)")
+    elif lose.parent.name.upper() == "VIDEOS_NEW":
+        lines.append(f"ok    losegame from videos_new/{lose.name}")
+    elif lose.suffix.lower() == ".smk":
+        lines.append(f"ok    losegame from retail {lose.name}")
+    else:
+        lines.append(f"ok    losegame from {lose.parent.name}/{lose.name}")
     if video_stem_for_slot(114) != "congrat":
         lines.append(f"FAIL  unlock stem {video_stem_for_slot(114)!r}")
     else:
