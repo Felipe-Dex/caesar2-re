@@ -134,14 +134,30 @@ The picker does **not** write `+9`. Overlay is a later blit, not a second buildi
 
 Non-origin reads **`[tile−20]+9`** (`0xE2FB1` = current `+9` − 20) — the **west** cell’s stock, not its own. Career / D.SAV put bit7 on origin **and** `+5` lo==1 (east of origin, `+4=0x40`). Stock hi lives only on the origin; the east cell borrows it. Stock 0 skips the jug blit (`je 0x382F3`). Etiqueta and jugs are separate frames — do not hide the grape/wheat overlay.
 
-Host: place ORs bit7 on origin and the east cell; `_paint_iso_tile` blits both CITYTOP layers. Jug dest (−54, 22) sits **below** the east diamond — south BUILD1C extra_rows cover an in-tile blit. `render_iso` / `render_iso_view` / dirty wipe replay factory CITYTOP after terrain (`city_map_draw_overlays` 0x365CC). Without bit7 the factory is a bare BUILD1C pad. City Only seed writes origin `+9` hi (stock 2 at labor 4 / stage 1); jugs need stock ≥ 1, not a missing frame.
+Host: place ORs bit7 on origin and the east cell; `_paint_iso_tile` blits both CITYTOP layers. Jug dest (−54, 22) sits **below** the east diamond — south BUILD1C extra_rows cover an in-tile blit. `render_iso` / `render_iso_view` / dirty wipe replay factory CITYTOP after terrain (`city_map_draw_overlays` 0x365CC). Without bit7 the factory is a bare BUILD1C pad. Place does not write `+9`; the first `0x9A–0x9D` emit does. Jugs need stock ≥ 1.
 
 ### What starts production
 
-No cart / load-to-market walker. `0x41719` (slots `0x9A–0x9D`) ORs `+3` bit0 and runs `41b33` on every origin **before** the pop≥2 worker-6 gate. Stock is **`+9` hi** from goods `+24` (supplied %) and `+28` (raw) and labor seed `[0x102B08]`. Type-6 workers pack scores into `+9` bits 0–3 only.
+No cart / load-to-market walker. Placement `0x30407` does **not** call `41b33` — origin `+9` stays 0 for the rest of that month. `0x41719` (slots `0x9A–0x9D`) ORs `+3` bit0 and runs `41b33` on every origin **before** the pop≥2 worker-6 gate. First monthly emit after place writes stock, so Query month 1 is 0 and month 2 shows output. Stock is **`+9` hi** from goods `+24` (supplied %) and `+28` (raw) and labor seed `[0x102B08]`. Type-6 workers pack scores into `+9` bits 0–3 only.
+
+### Query (`0x627C9` → `0x62F28`)
+
+Not `[60]+35`. Capacity is **C2.ENG [62]+stock** (`[60]+109…+116`). Limiter is `[60]+48…+58` or `+90` (no road at stock 0):
+
+| Skip | When |
+|---:|---|
+| 48 | stock ≥ 7 |
+| 49 | supplied % is the 41b33 cap for that stock (or supplied ≤ 0 at stock 0) |
+| 56 | workforce/stage too low (`[0x117a62]`, occupancy-bumped +9 bits 0–1) |
+| 55 | stock 4 and `province_links==0` (City Only cap) |
+| 53 | stock 0/1 and raw `+28` is the cap |
+| 90 | stock 0 and `0x44deb` ECX=1 road fail |
+| 50–52, 54, 57–58 | `0x63235` (tax labor&lt;0 / no market +9&0x0C / no export / demand / competition) |
+
+Body also blits `[62]+8` **Producing** *N* `[62]+9` **of 7 jars.** and surplus `[62]+10…+12` + `[15]+(nibble+1)` (Wheat…). SAV: stock `+9` hi, goods nibble `+19` lo, workers via occupancy/`[0x102B08]`.
 
 ### City Only / farms
 
 Farms are province. `init_new_city` **does** call `province_goods_setup` `0x577E4` (pid 0 locals + `goods[+0]=1`) and `0x43DD4`. `0x43F05` **zeros** all 16 records’ `+24`/`+28`. Campaign (`[0x9CE81]≠0`) then reseeds supplied % from `0x96927`; City Only skips that. Raw `+28` is later `pop / farm-counter` (`0x4453D`) — no farms → **0**. `41b33` with raw≤0 or supplied≤0 writes stock **0**. D.SAV chunk 339 has supplied % but `+28=0` and factory `+9=0`. Career SAVs already stock `+28` in the thousands.
 
-Host City Only **sandbox-seeds** chunk 339 (`+0=1`, supplied 100, raw 500) and `factory_labor=4`, and treats empty occupancy as stage 1 so a placed Bakery/Winery/… is not stuck at stock 0 with no label. `province_links=0` still caps prod at 4 (EXE). Career load keeps the file table — do not overwrite.
+Host City Only **sandbox-seeds** chunk 339 (`+0=1`, supplied 100, raw 500) and `factory_labor=4` on place, and treats empty occupancy as stage 1 on the **emit** so the workshop is not stuck at stock 0 forever. Month 1 Query stays at `[62]+0`. `province_links=0` still caps prod at 4 (EXE). Career load keeps the file table — do not overwrite.

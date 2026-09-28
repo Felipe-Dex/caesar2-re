@@ -250,6 +250,7 @@ def count_taxed_factories(tiles: bytearray) -> int:
 # goods_16x48 0xD2B6C / SavChunk 339. 41b33 reads +24 (supplied %) and +28 (raw).
 GOODS_RECORD = 48
 GOODS_COUNT = 16
+GOODS_SURPLUS = 4
 GOODS_SUPPLIED = 24
 GOODS_RAW = 28
 FACTORY_OCC_R = 2
@@ -266,20 +267,21 @@ CITY_ONLY_LABOR = 4
 FACTORY_LABEL_FRAME_BASE = 9
 FACTORY_JUG_FRAME_BASE = 0x18
 # EXE debug strings 0x90FB5 + UI names from factory.md.
+# C2.ENG [61]+0…+15 (Query title). Leftover goods 4/6/8/10/12 still have names.
 FACTORY_TYPE_NAMES: tuple[str, ...] = (
     "Bakery",
     "Winery",
     "Butcher",
     "Tailor",
-    "Gems",
+    "Jeweler",
     "Lead Works",
-    "Iron",
+    "Iron Works",
     "Copper Works",
-    "Clay",
+    "Pottery Works",
     "Glass Works",
-    "Marble",
+    "Marble Works",
     "Stone Works",
-    "Silk",
+    "Silk Dealer",
     "Spice Dealer",
     "Ivory Dealer",
     "Fish Monger",

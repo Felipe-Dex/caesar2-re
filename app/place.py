@@ -2732,17 +2732,10 @@ def try_place(
             paint_security_emitter(city.tiles, x, y)
         if spec.tool == TOOL_FACTORY:
             paint_factory_emitter(city.tiles, x, y)
+            # 0x30407 writes +19 / flag80 only. 41b33 runs on the next
+            # 0x9A–0x9D emit, so month-1 stock stays 0.
             if sim is not None and getattr(sim, "city_only", 0):
                 seed_city_only_industry(sim, nibble=factory_goods())
-                factory_produce(
-                    city.tiles,
-                    x,
-                    y,
-                    goods=sim.goods,
-                    labor=sim.factory_labor,
-                    province_links=0,
-                    city_only=True,
-                )
         if spec.tool == TOOL_MARKET:
             from app.walker_tick import (
                 restage_market_origin,
@@ -5665,13 +5658,27 @@ def selftest() -> list[str]:
     set_factory_goods(1)
     r = try_place(city, 40, 2, TOOL_FACTORY, sim)
     winery = city.tiles[city.offset(40, 2) + 19]
-    stock = (city.tiles[city.offset(40, 2) + 9] & 0xF0) >> 4
+    stock0 = (city.tiles[city.offset(40, 2) + 9] & 0xF0) >> 4
     if not r.ok or winery != 1:
         lines.append(f"FAIL  winery +19={winery} {r.message}")
-    elif stock == 0:
-        lines.append(f"FAIL  winery City Only stock {stock} {r.message}")
+    elif stock0 != 0:
+        lines.append(f"FAIL  winery month-1 stock {stock0} {r.message}")
     else:
-        lines.append(f"ok    Factory type Winery +19=1 stock={stock}")
+        lines.append("ok    Factory type Winery +19=1 month-1 stock 0")
+    factory_produce(
+        city.tiles,
+        40,
+        2,
+        goods=sim.goods,
+        labor=sim.factory_labor,
+        province_links=0,
+        city_only=True,
+    )
+    stock1 = (city.tiles[city.offset(40, 2) + 9] & 0xF0) >> 4
+    if stock1 == 0:
+        lines.append(f"FAIL  winery month-2 stock {stock1}")
+    else:
+        lines.append(f"ok    Winery 41b33 emit stock={stock1}")
     set_factory_goods(0)
 
     _grass_block(48, 2, 2, 2)

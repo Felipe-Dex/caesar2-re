@@ -47,6 +47,11 @@ DISASTER_KEYS = frozenset({"disease", "fire", "attack", "riot", "theft"})
 NEED_PLEBS_HUD = "Plebs are needed!"
 # Shrine / Temple / Basilica origins — Hail / Stolen copy.
 TEMPLE_LO, TEMPLE_HI = 0xA2, 0xAC
+# FUN_00054dc5: treasury<0 and [0x102A6C]==0 → [97] then 0x18 months.
+# [97]+1 “some time” is those 24 monthly ticks, not days. [98] at 12 left
+# is Career (EAX=0x63). Countdown 0 still negative → [0x102AA4]=1.
+BROKE_MONTHS = 0x18
+BROKE_STERN_LEFT = 0x0C
 
 # Peak pop → flyout name (unlocks.py). Shown after [114]+1.
 UNLOCK_LABEL: dict[int, str] = {
@@ -389,6 +394,10 @@ def seed_watch_from_city(sim, tiles: bytearray) -> MessageWatch:
     watch.broke = treas < 0
     if treas < 0:
         watch.seen.add("broke")
+        # F4 must not dump [97]. Chunk 251 is the live countdown; 0 means
+        # the Emperor just started covering — not “lose next month”.
+        if int(getattr(sim, "broke_left", 0)) <= 0:
+            sim.broke_left = BROKE_MONTHS
     from app.forum import city_only_won
 
     if city_only_won(sim):
@@ -697,23 +706,30 @@ def scan_city_messages(
         if enqueue(sim, _make(eng, "theft", 88)):
             fired.append("theft")
 
+    # 0x54dc5 monthly: broke_left==0 posts [97] and writes 0x18; else --.
+    # Host used watch.broke as that gate, so a seeded/zero counter lost
+    # on the next wrap (F4 of a red city, or chunk 251 not restored).
     broke = treas < 0
-    if broke and not watch.broke:
-        watch.seen.discard("broke")
-        if enqueue(sim, _make(eng, "broke", 97)):
-            fired.append("broke")
-        sim.broke_left = 0x18
-    elif broke and month_wrapped:
-        left = max(0, int(getattr(sim, "broke_left", 0)) - 1)
-        sim.broke_left = left
-        # 0x54e2e: countdown 0 → session report. [98] Stern Warning is Career.
-        if left <= 0 and not watch.lost:
-            watch.lost = True
-            watch.outcome = "lose"
-            fired.append("lose")
-    elif not broke:
+    if not broke:
         sim.broke_left = 0
-    watch.broke = broke
+        watch.broke = False
+    else:
+        left = int(getattr(sim, "broke_left", 0))
+        if left <= 0:
+            watch.seen.discard("broke")
+            if enqueue(sim, _make(eng, "broke", 97)):
+                fired.append("broke")
+            sim.broke_left = BROKE_MONTHS
+        elif month_wrapped:
+            left -= 1
+            sim.broke_left = left
+            # 0x54e14 [98] Stern Warning at 12 left is Career — skip.
+            if left <= 0 and not watch.lost:
+                watch.lost = True
+                watch.outcome = "lose"
+                sim.game_over = True
+                fired.append("lose")
+        watch.broke = True
 
     from app.forum import city_only_won
 
@@ -1217,15 +1233,56 @@ def selftest() -> list[str]:
     else:
         lines.append("ok    City Only win is P+C Need (not pop 50), no [115]+")
 
+    seeded = SimState(city_only=1, treasury=-10, broke_left=0)
+    init_city_only_labor(seeded)
+    seed_watch_from_city(seeded, tiles3)
+    got = scan_city_messages(seeded, tiles3, month_wrapped=True)
+    if "lose" in got or take_outcome(seeded) == "lose":
+        lines.append(f"FAIL  seeded red city lost on first wrap {got}")
+    elif int(getattr(seeded, "broke_left", 0)) != BROKE_MONTHS - 1:
+        lines.append(f"FAIL  seeded cover {seeded.broke_left}")
+    else:
+        lines.append("ok    load seed keeps 24-month cover; no instant GAME OVER")
+
+    again = SimState(city_only=1, treasury=-4, broke_left=0)
+    init_city_only_labor(again)
+    ensure_watch(again).broke = True
+    ensure_watch(again).seen.add("broke")
+    got = scan_city_messages(again, tiles3, month_wrapped=True)
+    if "lose" in got:
+        lines.append(f"FAIL  broke_left 0 must re-post [97], not lose {got}")
+    elif "broke" not in got or again.broke_left != BROKE_MONTHS:
+        lines.append(f"FAIL  EXE 0x54dc5 re-cover {got} left={again.broke_left}")
+    else:
+        lines.append("ok    broke_left==0 still negative → [97] + 0x18, not lose")
+
+    cover = SimState(city_only=1, treasury=-3)
+    init_city_only_labor(cover)
+    got = scan_city_messages(cover, tiles3)
+    if "broke" not in got or cover.broke_left != BROKE_MONTHS or "lose" in got:
+        lines.append(f"FAIL  [97] must not end the city {got} left={cover.broke_left}")
+    else:
+        lines.append("ok    [97] starts 24-month Emperor cover")
+    lost = False
+    for _n in range(BROKE_MONTHS):
+        got = scan_city_messages(cover, tiles3, month_wrapped=True)
+        if "lose" in got:
+            lost = True
+            break
+    if not lost or take_outcome(cover) != "lose" or not getattr(cover, "game_over", False):
+        lines.append(f"FAIL  24-month countdown lose {got} left={cover.broke_left}")
+    else:
+        lines.append("ok    GAME OVER after 24 monthly 0x54dc5 ticks, not Stern Warning")
+
     lose_sim = SimState(city_only=1, treasury=-10, broke_left=1)
     init_city_only_labor(lose_sim)
     lose_sim.broke_left = 1
     ensure_watch(lose_sim).broke = True
     got = scan_city_messages(lose_sim, tiles3, month_wrapped=True)
     if "lose" not in got or take_outcome(lose_sim) != "lose":
-        lines.append(f"FAIL  broke countdown lose {got}")
+        lines.append(f"FAIL  last-month countdown lose {got}")
     else:
-        lines.append("ok    GAME OVER after 0x54dc5 countdown, not Stern Warning")
+        lines.append("ok    countdown 1→0 still negative ends City Only")
     try:
         from app.assets import load_eng
         from app.config import resolve_game_dir

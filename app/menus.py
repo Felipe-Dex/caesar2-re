@@ -335,6 +335,20 @@ def is_turbo_report(report: MenuReport | None, *, eng=None) -> bool:
     return report.title == _eng(eng, 75, 0, "Accelerated Time")
 
 
+def is_annual_summary_report(report: MenuReport | None, *, eng=None) -> bool:
+    """C2.ENG [72] score card. sav_year_end holds time; not P-pause."""
+    if report is None:
+        return False
+    return report.title == _eng(eng, 72, 0, "Annual Summary")
+
+
+def is_game_over_report(report: MenuReport | None, *, eng=None) -> bool:
+    """C2.ENG [45] GAME OVER — 0x59aa7. Dismiss returns to title."""
+    if report is None:
+        return False
+    return report.title == _eng(eng, 45, 0, "GAME OVER")
+
+
 def about_report(eng) -> MenuReport:
     title = _eng(eng, 10, 0, "Caesar II - Version 1.1")
     date = _eng(eng, 10, 1, "October 5, 1995")
@@ -616,6 +630,10 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  annual tax {summary.lines!r}")
     else:
         lines.append("ok    Annual Summary first year pop/treas/tax (UP from 0)")
+    if not is_annual_summary_report(summary):
+        lines.append("FAIL  is_annual_summary_report")
+    else:
+        lines.append("ok    is_annual_summary_report matches [72] title")
     second = SimState(
         city_only=1,
         population=100,
@@ -639,6 +657,8 @@ def selftest() -> list[str]:
         lines.append(f"FAIL  win report {won.lines!r}")
     elif lose.title != "GAME OVER":
         lines.append(f"FAIL  lose title {lose.title!r}")
+    elif not is_game_over_report(lose):
+        lines.append("FAIL  is_game_over_report")
     else:
         lines.append("ok    City Only win/lose reports use [76]+20 / [45]")
     opt = decorate_item(
